@@ -335,6 +335,8 @@ def main():
                 _symbol_counts[_pname] = "?"
         elif isinstance(_pvalue, str) and _pvalue.startswith("norgate:"):
             _symbol_counts[_pname] = "? (Norgate)"
+        elif isinstance(_pvalue, str) and _pvalue.startswith("pit:"):
+            _symbol_counts[_pname] = f"? ({_pvalue} - resolved at runtime)"
         else:
             _symbol_counts[_pname] = "?"
 
@@ -494,6 +496,16 @@ def main():
              file_path = os.path.join("tickers_to_scan", value)
              with open(file_path, 'rb') as f:
                  symbols = orjson.loads(f.read())
+        elif isinstance(value, str) and value.startswith("pit:"):
+            from helpers.point_in_time import resolve_pit_portfolio
+            try:
+                symbols = resolve_pit_portfolio(value, CONFIG) or []
+            except Exception as e:
+                logger.error(f"  -> ERROR resolving PIT portfolio '{value}' for '{portfolio_name}': {e}")
+                continue
+            logger.info(
+                f"  -> {value} universe as of {CONFIG['start_date']}: {len(symbols)} tickers"
+            )
         
         if not symbols:
             logger.warning(f"No symbols found for '{portfolio_name}'. Skipping.")
