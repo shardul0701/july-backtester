@@ -6,6 +6,7 @@ tqdm
 boto3  # used for S3 report uploads only, not auth
 requests
 python-dotenv
+PyYAML  # required for PIT ticker-history YAML parsing (helpers/point_in_time.py)
 pandas-ta
 orjson
 pyarrow
