@@ -224,8 +224,10 @@ def get_price_data(symbol: str, start_date: str, end_date: str, config: dict):
     # --- Keep only canonical columns, coerce to numeric ---
     df = df[_CANONICAL_COLS].copy()
     for col in _CANONICAL_COLS:
-        # Strip currency formatting ($1,234.56 → 1234.56) before numeric coercion
-        if df[col].dtype == object:
+        # Strip currency formatting ($1,234.56 → 1234.56) before numeric coercion.
+        # Use is_numeric_dtype rather than dtype == object so this works on both
+        # pandas 2.x (object dtype) and pandas 3.x (StringDtype).
+        if not pd.api.types.is_numeric_dtype(df[col]):
             df[col] = df[col].astype(str).str.replace(r"[$,]", "", regex=True).str.strip()
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
