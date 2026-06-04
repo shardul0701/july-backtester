@@ -214,9 +214,19 @@ def load_strategies(directory: str) -> int:
             spec.loader.exec_module(module)
         except Exception as exc:
             sys.modules.pop(module_name, None)
-            raise ImportError(
-                f"load_strategies: failed to import '{module_path}': {exc}"
-            ) from exc
+            _is_private = os.path.basename(os.path.abspath(directory)) == "private"
+            if _is_private:
+                import logging as _logging
+                _logging.getLogger(__name__).warning(
+                    "load_strategies: skipping private module '%s': %s — "
+                    "check private submodule state or run "
+                    "'git submodule update --init'.",
+                    module_path, exc,
+                )
+            else:
+                raise ImportError(
+                    f"load_strategies: failed to import '{module_path}': {exc}"
+                ) from exc
 
         loaded += 1
 
