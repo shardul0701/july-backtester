@@ -40,9 +40,14 @@ PIT_TICKER_NORMALISATION = {
     # Common historical/modern symbol aliases seen in the public PIT repos and
     # price-provider stores. These are deliberately conservative; provider-level
     # ticker mapping remains a separate concern for deeper Norgate work.
+    #
+    # GOOG / GOOGL note: Google split into two share classes in April 2014.
+    # Post-split NQ100 YAML files list BOTH GOOG (Class C) and GOOGL (Class A)
+    # as distinct members. Mapping GOOG -> GOOGL would silently collapse them,
+    # dropping one position with no warning. The mapping is intentionally absent
+    # here; both symbols pass through unchanged.
     "PCLN": "BKNG",
     "HANS": "MNST",
-    "GOOG": "GOOGL",
 }
 
 
@@ -84,8 +89,6 @@ def _candidate_roots(index: str, config: dict | None = None) -> list[Path]:
     for name in INDEX_DIR_NAMES[index]:
         roots.append(pit_base / name)
 
-    if index == "nq100":
-        roots.append(ROOT / "NQ-SB" / "nasdaq100_point_in_time_universe_repo")
     roots.append(ROOT)
 
     seen: set[Path] = set()

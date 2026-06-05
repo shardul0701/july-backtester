@@ -39,7 +39,8 @@ changes:
 
     jan_members = tickers_as_of("sp500", "2020-01-15", config)
     assert "BKNG" in jan_members
-    assert "GOOGL" in jan_members
+    assert "GOOG" in jan_members   # GOOG is NOT remapped — both share classes stay distinct
+    assert "GOOGL" not in jan_members
     assert "BRK-B" in jan_members
     assert "PCLN" not in jan_members
 
