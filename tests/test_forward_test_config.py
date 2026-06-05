@@ -94,3 +94,38 @@ class TestForwardTestConfigValidation:
             "strategy_capital_allocation": {"RSI": -100},
         })
         assert len(errors) == 2
+
+    def test_unknown_strategy_name_is_not_an_error(self):
+        # Unknown strategy names cannot be validated at config-load time because
+        # the strategy registry is discovered lazily (requires loading all plugins).
+        # They pass validation silently; a future enhancement could cross-check
+        # against the loaded registry.
+        errors = validate_forward_test_mode({
+            "capital_model": "isolated",
+            "strategy_capital_allocation": {"NonExistentStrategy XYZ": 10000},
+        })
+        assert errors == []
+
+
+class TestAllocationSumWarning:
+    """The sum-vs-initial_capital check lives in main.py (needs both config values).
+    We test the pure validation function behaviour here and trust the integration
+    path via manual smoke-test (subprocess approach is broken in CI's Python 3.9).
+    """
+
+    def test_positive_allocation_values_pass_validation(self):
+        # Sums not matching initial_capital is a WARNING (not an error from
+        # validate_forward_test_mode). The function only checks for invalid model
+        # names and negative values.
+        errors = validate_forward_test_mode({
+            "capital_model": "isolated",
+            "strategy_capital_allocation": {"A": 40000, "B": 30000},
+        })
+        assert errors == []
+
+    def test_large_positive_allocation_is_not_a_validation_error(self):
+        errors = validate_forward_test_mode({
+            "capital_model": "isolated",
+            "strategy_capital_allocation": {"A": 999_999_999},
+        })
+        assert errors == []
