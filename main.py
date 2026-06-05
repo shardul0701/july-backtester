@@ -22,6 +22,7 @@ from multiprocessing import Pool, cpu_count
 import orjson
 from helpers.caching import CACHE_DIR
 from helpers.noise import inject_price_noise
+from helpers.config_validators import validate_forward_test_mode
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +94,8 @@ def run_single_simulation(args):
                 if dep_symbol and dep_symbol in comparison_dfs_global:
                     dep_df = comparison_dfs_global[dep_symbol]
                     kwargs[f'{dep_key}_df'] = dep_df.reindex(df.index, method='ffill')
+
+            kwargs['symbol'] = symbol
 
             if strategy_params:
                 kwargs.update(strategy_params)
@@ -215,6 +218,14 @@ def run_single_simulation(args):
         return None
 
 def main():
+    # Reconfigure stdout/stderr to UTF-8 on Windows so box-drawing characters
+    # in log messages don't raise UnicodeEncodeError with cp1252 consoles.
+    for _s in (sys.stdout, sys.stderr):
+        try:
+            _s.reconfigure(encoding='utf-8', errors='replace')
+        except AttributeError:
+            pass
+
     # --- ARGUMENT PARSING (full parser, applied before any CONFIG reads) ---
     from helpers.cli_config import build_parser, apply_overrides, print_help_config
     parser = build_parser()
@@ -273,6 +284,8 @@ def main():
 
     if not CONFIG.get("portfolios"):
         errors.append("  - portfolios is empty. Add at least one entry to run, e.g. \"My Symbols\": [\"AAPL\"].")
+
+    errors.extend(validate_forward_test_mode(CONFIG.get("forward_test_mode", {})))
 
     if errors:
         print("\n[ERROR] Invalid configuration in config.py:")
@@ -335,6 +348,12 @@ def main():
                 _symbol_counts[_pname] = "?"
         elif isinstance(_pvalue, str) and _pvalue.startswith("norgate:"):
             _symbol_counts[_pname] = "? (Norgate)"
+        elif isinstance(_pvalue, str) and _pvalue.startswith("pit:"):
+            _symbol_counts[_pname] = f"? ({_pvalue} - resolved at runtime)"
+        elif isinstance(_pvalue, str) and _pvalue == "sp500_pit":
+            _symbol_counts[_pname] = "? (S&P 500 PIT — resolved at runtime)"
+        elif isinstance(_pvalue, str) and _pvalue == "nq100_pit":
+            _symbol_counts[_pname] = "? (NQ100 PIT — resolved at runtime)"
         else:
             _symbol_counts[_pname] = "?"
 
@@ -494,7 +513,41 @@ def main():
              file_path = os.path.join("tickers_to_scan", value)
              with open(file_path, 'rb') as f:
                  symbols = orjson.loads(f.read())
-        
+        elif isinstance(value, str) and value.startswith("pit:"):
+            from helpers.point_in_time import resolve_pit_portfolio
+            try:
+                symbols = resolve_pit_portfolio(value, CONFIG) or []
+            except Exception as e:
+                logger.error(f"  -> ERROR resolving PIT portfolio '{value}' for '{portfolio_name}': {e}")
+                continue
+            logger.info(
+                f"  -> {value} universe as of {CONFIG['start_date']}: {len(symbols)} tickers"
+            )
+        elif isinstance(value, str) and value == "sp500_pit":
+            from helpers.pit_universe import get_sp500_tickers_in_period
+            _sp500_repo = CONFIG.get("sp500_pit_path") or os.environ.get("SP500_DATA_ROOT", "")
+            if not _sp500_repo:
+                logger.error(
+                    f"  -> SKIPPING '{portfolio_name}': sp500_pit requires "
+                    "'sp500_pit_path' in config or SP500_DATA_ROOT in .env"
+                )
+                continue
+            symbols = get_sp500_tickers_in_period(
+                CONFIG["start_date"], CONFIG["end_date"], _sp500_repo
+            )
+            logger.info(f"  -> S&P 500 PIT universe: {len(symbols)} tickers "
+                        f"({CONFIG['start_date']} -> {CONFIG['end_date']})")
+        elif isinstance(value, str) and value == "nq100_pit":
+            from helpers.pit_universe import get_nq100_tickers_in_period
+            _nq100_parquet = CONFIG.get("nq100_pit_path") or os.path.join(
+                "data", "nq100_membership.parquet"
+            )
+            symbols = get_nq100_tickers_in_period(
+                CONFIG["start_date"], CONFIG["end_date"], _nq100_parquet
+            )
+            logger.info(f"  -> NQ100 PIT universe: {len(symbols)} tickers "
+                        f"({CONFIG['start_date']} -> {CONFIG['end_date']})")
+
         if not symbols:
             logger.warning(f"No symbols found for '{portfolio_name}'. Skipping.")
             continue
