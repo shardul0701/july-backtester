@@ -27,6 +27,19 @@ from helpers.config_validators import validate_forward_test_mode
 logger = logging.getLogger(__name__)
 
 
+def _write_data_screen_audit(run_base_dir, portfolio_name, rows):
+    """Write merged-data keep/drop decisions for one portfolio."""
+    if not rows:
+        return None
+    safe_name = "".join(
+        c if c.isalnum() or c in ("-", "_") else "_"
+        for c in str(portfolio_name)
+    ).strip("_") or "portfolio"
+    path = os.path.join(run_base_dir, f"{safe_name}_data_screen.csv")
+    pd.DataFrame(rows).to_csv(path, index=False)
+    return path
+
+
 def _pick_reference_df(comparison_dfs: dict) -> pd.DataFrame:
     """Return the reference DataFrame used to derive the actual data period.
 
@@ -576,17 +589,25 @@ def main():
             logger.warning(f"No symbols found for '{portfolio_name}'. Skipping.")
             continue
 
-        # --- DAILY PIT ENFORCEMENT (opt-in, engine-safe) ---
+        # --- DAILY PIT ENFORCEMENT (required for PIT portfolios) ---
         # For PIT universes (sp500_pit/nq100_pit/pit:*), gate each symbol to its
         # index-membership era so a name cannot be traded years before it joined
-        # ("hold today's members back in 2010"). Off by default.
+        # ("hold today's members back in 2010").
         #   * _pit_intervals[sym] = [(join, leave), ...] contiguous spells
         #   * _pit_spans[sym]     = (first_join, last_leave) outer bound (data trim)
-        # A per-symbol boolean `_pit_member` column is attached below; the worker
-        # forces the signal flat on every False bar, so warm-up AND gap bars are
-        # never traded even though they stay in the frame for indicator warm-up.
+        # A per-symbol boolean `_pit_member` column is attached below. Signals are
+        # masked and the simulator also checks membership on the execution date.
         _pit_intervals, _pit_spans = {}, {}
-        if CONFIG.get("pit_enforce_daily") and isinstance(value, str):
+        _pit_requested = (
+            isinstance(value, str)
+            and (value.startswith("pit:") or value in ("sp500_pit", "nq100_pit"))
+        )
+        if _pit_requested and not CONFIG.get("pit_enforce_daily"):
+            logger.error(
+                f"  -> SKIPPING '{portfolio_name}': PIT portfolios require "
+                "pit_enforce_daily=True to prevent out-of-membership trades.")
+            continue
+        if CONFIG.get("pit_enforce_daily") and _pit_requested:
             from helpers.pit_enforcement import membership_intervals, membership_spans
             _pit_intervals = membership_intervals(value, CONFIG)
             _pit_spans = membership_spans(value, CONFIG)
@@ -597,10 +618,82 @@ def main():
                     f"gated to membership spells ({_n_gaps} with re-entry gaps; "
                     f"warmup {CONFIG.get('pit_warmup_days', 400)}d). Warm-up/gap bars "
                     f"kept for indicators but masked from trading.")
+            else:
+                logger.error(
+                    f"  -> SKIPPING '{portfolio_name}': PIT enforcement is enabled "
+                    "but no membership intervals could be loaded.")
+                continue
         _pit_warmup = CONFIG.get("pit_warmup_days", 400)
+        _pit_exit_buffer = CONFIG.get("pit_exit_buffer_days", 10)
         # --- END DAILY PIT ENFORCEMENT (setup) ---
 
         MIN_BARS = CONFIG.get("min_bars_required", 250)
+        _data_screen_rows = []
+        _is_merged = CONFIG.get("data_provider", "").lower() == "merged"
+        if _is_merged and CONFIG.get("merged_quality_filter_enabled", True):
+            from src.data.unified_market_data_provider import UnifiedMarketDataProvider
+            _merged_provider = UnifiedMarketDataProvider()
+            _excluded_statuses = tuple(CONFIG.get(
+                "merged_exclude_statuses",
+                ("insufficient_history", "review_no_patch",
+                 "identity_review", "flagged")))
+
+            if _pit_requested:
+                _screened_intervals = {}
+                for symbol in symbols:
+                    spells = _pit_intervals.get(symbol, [])
+                    if not spells:
+                        _data_screen_rows.append({
+                            "symbol": symbol, "action": "drop",
+                            "reason": "no_membership_intervals",
+                        })
+                        continue
+                    kept_spells, spell_rows = _merged_provider.filter_membership_intervals(
+                        symbol, spells,
+                        exclude_statuses=_excluded_statuses,
+                        tolerance_days=CONFIG.get(
+                            "pit_coverage_tolerance_days", 7))
+                    _data_screen_rows.extend(spell_rows)
+                    if kept_spells:
+                        _screened_intervals[symbol] = kept_spells
+                _pit_intervals = _screened_intervals
+                _pit_spans = {
+                    symbol: (
+                        min(start for start, _ in spells),
+                        max(end for _, end in spells),
+                    )
+                    for symbol, spells in _pit_intervals.items()
+                }
+                symbols = [symbol for symbol in symbols if symbol in _pit_intervals]
+            else:
+                kept_symbols, dropped_symbols = _merged_provider.filter_universe(
+                    symbols,
+                    exclude_statuses=_excluded_statuses,
+                    min_avg_dollar_volume=CONFIG.get(
+                        "merged_min_avg_dollar_volume", 0.0),
+                )
+                kept_set = set(kept_symbols)
+                _data_screen_rows.extend({
+                    "symbol": symbol,
+                    "action": "keep" if symbol in kept_set else "drop",
+                    "reason": "quality_pass" if symbol in kept_set
+                              else dropped_symbols.get(symbol, "filtered"),
+                } for symbol in symbols)
+                symbols = kept_symbols
+
+            dropped_count = sum(
+                row.get("action") == "drop" for row in _data_screen_rows)
+            logger.info(
+                f"  -> Merged data screen: {len(symbols)} symbols retained; "
+                f"{dropped_count} symbol/spell exclusions.")
+            if not symbols:
+                audit_path = _write_data_screen_audit(
+                    run_base_dir, portfolio_name, _data_screen_rows)
+                logger.error(
+                    f"  -> SKIPPING '{portfolio_name}': merged data screen "
+                    f"removed every symbol. Audit: {audit_path}")
+                continue
+
         skipped_symbols = []
         portfolio_data = {}
         for symbol in tqdm(symbols, desc="  -> Fetching & Preparing Data", unit=" symbols"):
@@ -608,18 +701,36 @@ def main():
             # range so the provider's date-aware resolution serves the correct era
             # of a recycled ticker (e.g. historical JAVA, not today's namesake).
             _fetch_start, _fetch_end = CONFIG["start_date"], CONFIG["end_date"]
-            if _pit_spans and symbol in _pit_spans:
+            if (_pit_intervals and symbol in _pit_intervals
+                    and CONFIG.get("data_provider", "").lower() == "merged"):
+                from src.data.unified_market_data_provider import get_price_data_for_intervals
+                df = get_price_data_for_intervals(
+                    symbol, _pit_intervals[symbol],
+                    warmup_days=_pit_warmup,
+                    exit_buffer_days=_pit_exit_buffer)
+            else:
+                df = None
+            if df is None and _pit_spans and symbol in _pit_spans:
                 _sp_first, _sp_last = _pit_spans[symbol]
                 _fetch_start = (pd.Timestamp(_sp_first)
                                 - pd.Timedelta(days=_pit_warmup)).strftime("%Y-%m-%d")
-                _fetch_end = pd.Timestamp(_sp_last).strftime("%Y-%m-%d")
-            df = data_fetcher(symbol, _fetch_start, _fetch_end, CONFIG)
+                _fetch_end = (
+                    pd.Timestamp(_sp_last) + pd.Timedelta(days=_pit_exit_buffer)
+                ).strftime("%Y-%m-%d")
+            if df is None:
+                df = data_fetcher(symbol, _fetch_start, _fetch_end, CONFIG)
             if _pit_spans and df is not None and not df.empty and symbol in _pit_spans:
                 from helpers.pit_enforcement import trim_to_membership
-                df = trim_to_membership(df, _pit_spans[symbol], warmup_days=_pit_warmup)
+                df = trim_to_membership(
+                    df, _pit_spans[symbol], warmup_days=_pit_warmup,
+                    exit_buffer_days=_pit_exit_buffer)
             if df is not None and not df.empty:
                 if len(df) < MIN_BARS:
                     skipped_symbols.append((symbol, len(df)))
+                    _data_screen_rows.append({
+                        "symbol": symbol, "action": "drop",
+                        "reason": f"bars={len(df)}<{MIN_BARS}",
+                    })
                     continue
                 # --- NOISE INJECTION (stress test) ---
                 _noise_pct = CONFIG.get("noise_injection_pct", 0.0)
@@ -669,8 +780,14 @@ def main():
                 # True only on actual member days; warm-up + gap bars are False.
                 # run_single_simulation forces the signal flat where this is False.
                 if _pit_intervals and symbol in _pit_intervals:
-                    from helpers.pit_enforcement import build_member_mask
+                    from helpers.pit_enforcement import (
+                        build_forced_exit_mask,
+                        build_member_mask,
+                    )
                     df['_pit_member'] = build_member_mask(df.index, _pit_intervals[symbol])
+                    df['_pit_force_exit'] = build_forced_exit_mask(
+                        df.index, _pit_intervals[symbol], CONFIG["end_date"],
+                        exit_buffer_days=_pit_exit_buffer)
                 # --- END PIT membership mask ---
                 portfolio_data[symbol] = df
 
@@ -679,6 +796,11 @@ def main():
                 f"  -> Skipped {len(skipped_symbols)} symbol(s) with fewer than {MIN_BARS} bars: "
                 + ", ".join(f"{s} ({n} bars)" for s, n in skipped_symbols)
             )
+        if _is_merged:
+            audit_path = _write_data_screen_audit(
+                run_base_dir, portfolio_name, _data_screen_rows)
+            if audit_path:
+                logger.info(f"  -> Data-screen audit: {audit_path}")
 
         if not portfolio_data:
             logger.warning(f"Could not fetch data for any symbols in '{portfolio_name}'. Skipping.")

@@ -130,6 +130,40 @@ class UnifiedMarketDataProvider:
         out.index.name = "Datetime"
         return out
 
+    def get_price_data_for_intervals(self, symbol, intervals, warmup_days=400,
+                                     exit_buffer_days=10):
+        """Resolve and combine the correct parquet file for each PIT spell."""
+        frames = []
+        warmup = pd.Timedelta(days=warmup_days)
+        exit_buffer = pd.Timedelta(days=exit_buffer_days)
+        for start, end in intervals or ():
+            start = pd.Timestamp(start)
+            end = pd.Timestamp(end)
+            lo = start - warmup
+            hi = end + exit_buffer
+            df = self._read(symbol, lo, hi)
+            if df is None or df.empty:
+                continue
+            piece = self._slice(df, lo, hi).copy()
+            if not piece.empty:
+                piece["_pit_era_priority"] = 0
+                piece.loc[(piece.index >= start) & (piece.index <= end),
+                          "_pit_era_priority"] = 2
+                piece.loc[(piece.index > end) & (piece.index <= hi),
+                          "_pit_era_priority"] = 1
+                frames.append(piece)
+        if not frames:
+            return None
+        df = pd.concat(frames)
+        df["_pit_sort_index"] = df.index
+        df = df.sort_values(["_pit_sort_index", "_pit_era_priority"])
+        df = df[~df.index.duplicated(keep="last")]
+        df = df.drop(columns=["_pit_sort_index", "_pit_era_priority"])
+        out = df[_CANON].rename(columns=_RENAME).copy()
+        out.index = pd.DatetimeIndex(out.index).normalize()
+        out.index.name = "Datetime"
+        return out
+
     def load_prices(self, symbols, start_date=None, end_date=None):
         """Return {symbol: OHLCV DataFrame} for the symbols that exist."""
         out = {}
@@ -289,6 +323,75 @@ class UnifiedMarketDataProvider:
             kept.append(s)
         return kept, dropped
 
+    def filter_membership_intervals(
+            self, symbol, intervals,
+            exclude_statuses=("insufficient_history", "review_no_patch",
+                              "identity_review", "flagged"),
+            tolerance_days=7):
+        """Return complete, non-quarantined PIT spells plus an audit row per spell."""
+        exclude_statuses = set(exclude_statuses or ())
+        tolerance = pd.Timedelta(days=tolerance_days)
+        kept, audit_rows = [], []
+
+        for start, end in intervals or ():
+            start, end = pd.Timestamp(start), pd.Timestamp(end)
+            path = self._resolve(symbol, start, end)
+            row = {
+                "symbol": symbol,
+                "spell_start": start.date().isoformat(),
+                "spell_end": end.date().isoformat(),
+                "path": os.path.basename(path) if path else "",
+            }
+            if path is None:
+                row.update(action="drop", reason="no_file")
+                audit_rows.append(row)
+                continue
+
+            lo, hi = self._index_range(path)
+            if lo is None or hi is None:
+                row.update(action="drop", reason="unreadable_file")
+                audit_rows.append(row)
+                continue
+            row["data_start"] = lo.date().isoformat()
+            row["data_end"] = hi.date().isoformat()
+
+            missing_start = lo > start + tolerance
+            missing_end = hi < end - tolerance
+            if missing_start or missing_end:
+                gaps = []
+                if missing_start:
+                    gaps.append("starts_after_join")
+                if missing_end:
+                    gaps.append("ends_before_leave")
+                row.update(action="drop", reason="+".join(gaps))
+                audit_rows.append(row)
+                continue
+
+            try:
+                prov = pd.read_parquet(path, columns=["data_quality_status"])
+            except Exception:
+                prov = None
+            statuses = set()
+            if prov is not None and "data_quality_status" in prov.columns:
+                relevant = prov[(prov.index >= start) & (prov.index <= end)]
+                if relevant.empty:
+                    relevant = prov
+                statuses = {
+                    str(v) for v in relevant["data_quality_status"].dropna().unique()
+                }
+            blocked = sorted(statuses & exclude_statuses)
+            row["quality_statuses"] = ",".join(sorted(statuses))
+            if blocked:
+                row.update(action="drop", reason=f"status={','.join(blocked)}")
+                audit_rows.append(row)
+                continue
+
+            kept.append((start, end))
+            row.update(action="keep", reason="complete")
+            audit_rows.append(row)
+
+        return kept, audit_rows
+
 
 # module-level singleton for drop-in use as a data provider
 _PROVIDER = None
@@ -304,3 +407,11 @@ def _provider():
 def get_price_data(symbol, start_date=None, end_date=None, config=None):
     """Module-level fetcher matching services.* signature."""
     return _provider().get_price_data(symbol, start_date, end_date, config)
+
+
+def get_price_data_for_intervals(symbol, intervals, warmup_days=400,
+                                 exit_buffer_days=10):
+    """Module-level PIT spell fetcher for the merged provider."""
+    return _provider().get_price_data_for_intervals(
+        symbol, intervals, warmup_days=warmup_days,
+        exit_buffer_days=exit_buffer_days)

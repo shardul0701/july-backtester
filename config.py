@@ -166,11 +166,19 @@ CONFIG = {
     # Only relevant for PIT portfolios ("sp500_pit" / "nq100_pit" / "pit:*").
     # When True, each symbol is gated to its index-membership spells: warm-up
     # bars (kept for indicator continuity) and gap bars (while it was out of the
-    # index) stay in the frame but are NEVER traded — the engine signal is forced
-    # flat there. Prevents "holding today's members back in 2010". Engine-safe.
-    # Off by default (no effect on non-PIT portfolios either way).
-    "pit_enforce_daily": False,
+    # index) stay in the frame but are NEVER traded. The simulator checks the
+    # membership flag on the actual execution date.
+    # Required for PIT portfolios; has no effect on ordinary static portfolios.
+    "pit_enforce_daily": True,
     "pit_warmup_days": 400,             # calendar days of pre-join data for indicators
+    "pit_exit_buffer_days": 10,          # post-leave bars for next-open liquidation
+    "pit_coverage_tolerance_days": 7,
+    "merged_quality_filter_enabled": True,
+    "merged_exclude_statuses": [
+        "insufficient_history", "review_no_patch", "identity_review", "flagged",
+    ],
+    "merged_min_avg_dollar_volume": 0.0,  # opt-in liquidity floor
+    "exclude_open_positions": False,
     # "sp500_pit_path": "",            # else read from SP500_DATA_ROOT in .env
     # "nq100_pit_path": "data/nq100_membership.parquet",
 

@@ -91,6 +91,19 @@ KNOWN_KEYS: set[str] = {
     "verbose_output",
     # SECTION 22: Realized-Only Reporting
     "exclude_open_positions",
+    # PIT and merged-data screening
+    "pit_enforce_daily",
+    "pit_warmup_days",
+    "pit_exit_buffer_days",
+    "pit_coverage_tolerance_days",
+    "sp500_pit_path",
+    "nq100_pit_path",
+    "merged_quality_filter_enabled",
+    "merged_exclude_statuses",
+    "merged_min_avg_dollar_volume",
+    # Forward testing and broker adapter
+    "forward_test_mode",
+    "alpaca",
     # S3
     "s3_reports_bucket",
     "upload_to_s3",

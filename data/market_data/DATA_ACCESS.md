@@ -114,9 +114,9 @@ Set the portfolio *value* (in `config.py → portfolios`) to one of:
 
   | Metric | S&P 500 | NQ100 | What it means |
   |---|---|---|---|
-  | `exists` | 99.2% | 98.6% | a merged file *resolves* for the (normalised) ticker |
-  | `covers_start` | 97.2% | 95.7% | that file's data *begins by* the membership join date |
-  | `covers_span` | **94.5%** | **94.0%** | file covers BOTH ends of the membership window — **use this** |
+  | `exists` | 99.2% | 98.6% | every membership spell resolves to a merged file |
+  | `covers_start` | 98.0% | 95.7% | every resolved era begins by its spell's join date |
+  | `covers_span` | **96.0%** | **94.3%** | every spell is covered at both ends — **use this** |
 
   ⚠ Do **not** quote the 99% `exists` figure as "coverage": a file resolving is not the
   same as it covering the right *period*. ~5% of members have a file that starts after they
@@ -129,24 +129,26 @@ Set the portfolio *value* (in `config.py → portfolios`) to one of:
   merged file at all** (ENDP, JCP, SIVB, TUP, WIN, MMC, ATGE, PARA, MERQE, QRTEA, RHAT) cannot
   be recovered by any alias.
 
-### Daily PIT enforcement (opt-in) — avoid "holding today's members back in 2010"
+### Daily PIT enforcement — avoid "holding today's members back in 2010"
 
 The union/as-of universe lists tell the engine *which* tickers to run, not *when* each was a
-member. A naive cross-sectional strategy could pick a future constituent too early. Set
-`pit_enforce_daily: True` (config) and main.py gates each symbol to its membership **spells**:
+member. A naive cross-sectional strategy could pick a future constituent too early.
+`pit_enforce_daily` defaults to `True`, and main.py refuses to run a PIT portfolio when it is
+disabled or when membership intervals cannot be loaded:
 
 - `helpers.pit_enforcement.membership_intervals(value, config)` → `{ticker: [(join, leave), …]}`
   contiguous spells, so a name that left and rejoined the index is two intervals (the gap is
   **not** silently filled).
-- Each symbol gets a boolean `_pit_member` column (`build_member_mask`); the worker forces the
-  signal flat (`mask_signal`) on every bar where it's `False`. So **warm-up bars** (kept for
-  indicator continuity, `pit_warmup_days`, default 400) AND **gap bars** (out of the index) are
-  present in the frame but **never traded** — TSLA can't trade before 2020-12, and a name dropped
-  for two years can't trade during that gap.
-- Bars are also trimmed to the outer `[first_join − warmup, last_leave]` window to bound data,
-  and the fetch is span-bounded so a recycled ticker resolves to the correct era.
+- Each symbol gets a boolean `_pit_member` column (`build_member_mask`). The simulator checks it
+  on the actual execution date, blocks entries outside membership, and liquidates an existing
+  position at the first non-member open.
+- Warm-up bars (`pit_warmup_days`, default 400) and a post-leave liquidation buffer
+  (`pit_exit_buffer_days`, default 10) remain available. If no timely post-leave bar exists,
+  `_pit_force_exit` closes the position on the last available member-day close.
+- With `data_provider: "merged"`, each membership spell resolves independently and the selected
+  parquet eras are combined. Recycled names such as SNDK, CEG, and DELL retain both eras.
 
-Engine-safe — no simulation-engine change. For raw per-day membership sets use
+For raw per-day membership sets use
 `helpers.pit_enforcement.daily_membership_mask(value, config)` → `{date: frozenset}`.
 
 ### Execution-safe RAW prices (broker orders / fill reconciliation)
@@ -163,9 +165,15 @@ p.get_execution_price("CVNA", "2026-06-05")               # scalar raw close (e.
 
 ```python
 kept, dropped = p.filter_universe(universe, min_bars=250, min_avg_dollar_volume=5_000_000)
-# drops insufficient_history / review_no_patch / identity_review (fail-closed quarantine),
+# drops insufficient_history / review_no_patch / identity_review / flagged,
 # short series, and illiquid micro-caps. p.quality_status(sym) returns the per-symbol flag.
 ```
+
+With `data_provider: "merged"`, main.py applies this fail-closed screen automatically.
+For PIT portfolios it screens each membership spell independently: incomplete or quarantined
+spells are excluded while other valid eras of the same ticker remain usable. Every run writes
+`<portfolio>_data_screen.csv` in its run directory with the selected file, coverage dates,
+quality statuses, and the keep/drop reason.
 
 ### Authoritative counts — `metadata/dataset_manifest.json`
 

@@ -15,10 +15,8 @@ This module fixes that without touching the simulation engine, three ways:
 2. ``build_member_mask(index, intervals)`` -> boolean Series, ``True`` only on days
    that fall inside a membership spell. Warm-up bars (before the first join) and gap
    bars (between spells) are ``False``. main.py attaches this as a ``_pit_member``
-   column; run_single_simulation forces the signal flat (-1) wherever it is False, so
-   the engine NEVER trades a warm-up or gap bar even though those bars are kept in the
-   frame for indicator continuity. This is the exact daily gating the span approach
-   could not give.
+   column; the simulator checks it on the actual execution date, blocks entries,
+   and liquidates positions at the first non-member bar.
 
 3. ``trim_to_membership(df, span, warmup_days)`` slices a frame to the outer bound
    ``[first_join - warmup, last_leave]`` to bound data size; the ``_pit_member`` mask
@@ -202,6 +200,30 @@ def build_member_mask(index, intervals_for_symbol):
     return mask
 
 
+def build_forced_exit_mask(index, intervals_for_symbol, backtest_end,
+                           exit_buffer_days: int = 10):
+    """Mark the last member bar when no timely post-leave bar is available."""
+    import pandas as pd
+    idx = pd.DatetimeIndex(index)
+    forced = pd.Series(False, index=index)
+    if not intervals_for_symbol or idx.empty:
+        return forced
+
+    backtest_end = pd.Timestamp(backtest_end)
+    grace = pd.Timedelta(days=exit_buffer_days)
+    for _start, end in intervals_for_symbol:
+        end = pd.Timestamp(end)
+        if end >= backtest_end:
+            continue
+        timely_post_bars = idx[(idx > end) & (idx <= end + grace)]
+        if len(timely_post_bars):
+            continue
+        member_bars = idx[idx <= end]
+        if len(member_bars):
+            forced.loc[member_bars[-1]] = True
+    return forced
+
+
 def mask_signal(signal, member_mask):
     """Force the signal flat (-1 = exit/stay-flat) on every bar where the symbol
     is NOT an index member, so warm-up and gap bars are never traded. The engine
@@ -213,7 +235,8 @@ def mask_signal(signal, member_mask):
     return signal.where(m, -1)
 
 
-def trim_to_membership(df, span, warmup_days: int = 400):
+def trim_to_membership(df, span, warmup_days: int = 400,
+                       exit_buffer_days: int = 0):
     """Slice ``df`` (DatetimeIndex) to ``[first - warmup_days, last]`` of a
     ``(first, last)`` outer span — bounds data size only. The per-day gating that
     actually keeps warm-up/gap bars un-traded is build_member_mask + mask_signal.
@@ -223,7 +246,7 @@ def trim_to_membership(df, span, warmup_days: int = 400):
     import pandas as pd
     first, last = span
     lo = pd.Timestamp(first) - pd.Timedelta(days=warmup_days)
-    hi = pd.Timestamp(last)
+    hi = pd.Timestamp(last) + pd.Timedelta(days=exit_buffer_days)
     return df[(df.index >= lo) & (df.index <= hi)]
 
 

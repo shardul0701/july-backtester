@@ -12,6 +12,7 @@ All synthetic (tmp_path / monkeypatch) — no dependency on the 2.8GB merged sto
 import json
 import os
 import sys
+from unittest.mock import patch
 
 import pandas as pd
 import pytest
@@ -25,14 +26,14 @@ from src.data.unified_market_data_provider import UnifiedMarketDataProvider
 
 
 def _write_merged(d, name, last_close, factor=1.0, source="polygon",
-                  sec_type="CS", n=10, start="2026-01-01"):
+                  sec_type="CS", n=10, start="2026-01-01", status="ok"):
     idx = pd.date_range(start, periods=n, freq="D")
     df = pd.DataFrame({
         "open": last_close, "high": last_close, "low": last_close,
         "close": [last_close] * n, "volume": 1000.0, "vwap": float("nan"),
         "source": source, "security_type": sec_type,
         "adjustment_factor": factor, "adjustment_method": "none",
-        "data_quality_status": "ok",
+        "data_quality_status": status,
     }, index=idx)
     df.to_parquet(os.path.join(d, f"{name}.parquet"))
     return df
@@ -209,6 +210,18 @@ class TestMemberMask:
         idx = pd.date_range("2010-01-01", periods=5, freq="D")
         assert not build_member_mask(idx, []).any()
 
+    def test_missing_post_leave_bar_marks_last_member_close(self):
+        from helpers.pit_enforcement import build_forced_exit_mask
+        idx = pd.bdate_range("2020-01-01", "2020-01-07")
+        forced = build_forced_exit_mask(
+            idx,
+            [(pd.Timestamp("2020-01-01"), pd.Timestamp("2020-01-07"))],
+            backtest_end="2020-12-31",
+            exit_buffer_days=10,
+        )
+        assert forced.sum() == 1
+        assert forced.loc["2020-01-07"]
+
 
 class TestMembershipIntervals:
     def test_nq_gap_splits_into_two_spells(self, tmp_path):
@@ -262,6 +275,44 @@ class TestDateAwareResolution:
         hist = p.get_price_data("JAVA", "2005-01-05", "2005-01-15")
         assert hist["Close"].iloc[-1] == pytest.approx(5.0)   # Sun-era, not 99
 
+    def test_interval_loader_combines_old_and_new_eras(self, tmp_path):
+        _write_merged(tmp_path, "SNDK-201605", 5.0, start="2016-04-01", n=20)
+        _write_merged(tmp_path, "SNDK", 90.0, start="2025-02-01", n=20)
+        p = UnifiedMarketDataProvider(merged_dir=str(tmp_path))
+        intervals = [
+            (pd.Timestamp("2016-04-05"), pd.Timestamp("2016-04-15")),
+            (pd.Timestamp("2025-02-05"), pd.Timestamp("2025-02-15")),
+        ]
+        out = p.get_price_data_for_intervals(
+            "SNDK", intervals, warmup_days=0, exit_buffer_days=0)
+        assert set(out["Close"].unique()) == {5.0, 90.0}
+        assert out.index.min() == pd.Timestamp("2016-04-05")
+        assert out.index.max() == pd.Timestamp("2025-02-15")
+
+    def test_interval_screen_keeps_good_spell_and_drops_incomplete_spell(self, tmp_path):
+        _write_merged(tmp_path, "DUAL-201605", 5.0, start="2016-04-01", n=30)
+        _write_merged(tmp_path, "DUAL", 90.0, start="2025-03-01", n=10)
+        p = UnifiedMarketDataProvider(merged_dir=str(tmp_path))
+        spells = [
+            (pd.Timestamp("2016-04-05"), pd.Timestamp("2016-04-20")),
+            (pd.Timestamp("2025-02-01"), pd.Timestamp("2025-03-05")),
+        ]
+        kept, audit = p.filter_membership_intervals(
+            "DUAL", spells, tolerance_days=2)
+        assert kept == [spells[0]]
+        assert [row["action"] for row in audit] == ["keep", "drop"]
+        assert "starts_after_join" in audit[1]["reason"]
+
+    def test_interval_screen_drops_quarantined_spell(self, tmp_path):
+        _write_merged(
+            tmp_path, "BAD", 5.0, start="2020-01-01", n=30,
+            status="flagged")
+        p = UnifiedMarketDataProvider(merged_dir=str(tmp_path))
+        spells = [(pd.Timestamp("2020-01-05"), pd.Timestamp("2020-01-20"))]
+        kept, audit = p.filter_membership_intervals("BAD", spells)
+        assert kept == []
+        assert audit[0]["reason"] == "status=flagged"
+
 
 class TestFilterUniverseFlagged:
     def test_flagged_excluded_by_default(self, tmp_path):
@@ -282,6 +333,19 @@ class TestFilterUniverseFlagged:
         assert kept == ["FL"]
 
 
+class TestMergedProviderWiring:
+    def test_service_factory_exposes_merged_provider(self):
+        from services import get_data_service
+        with patch.dict("config.CONFIG", {"data_provider": "merged"}):
+            fetcher = get_data_service()
+        assert fetcher.__module__ == "src.data.unified_market_data_provider"
+
+    def test_merged_indices_use_bare_names(self):
+        from helpers.ticker_normalizer import normalize_ticker
+        assert normalize_ticker("I:VIX", "merged") == "VIX"
+        assert normalize_ticker("^GSPC", "merged") == "SPX"
+
+
 class TestAtomicManifest:
     def test_write_atomic_no_temp_leftover(self, monkeypatch, tmp_path):
         from src.data.pipeline import manifest, paths
@@ -300,3 +364,86 @@ class TestAtomicManifest:
         data = json.loads(out.read_text())
         assert data["merged_files_total"] == 1
         assert not list(meta.glob("*.tmp*"))   # temp swapped away
+
+
+class TestPitSimulationExecution:
+    @staticmethod
+    def _frame(index):
+        df = pd.DataFrame(index=index)
+        for col in ("Open", "High", "Low", "Close"):
+            df[col] = 100.0
+        df["Volume"] = 1_000_000.0
+        df["ATR_14"] = 1.0
+        df["ATR_14_pct"] = 0.01
+        df["RSI_14"] = 50.0
+        df["SMA200_dist_pct"] = 0.0
+        df["Volume_Spike"] = 1.0
+        return df
+
+    @staticmethod
+    def _config():
+        return {
+            "execution_time": "open",
+            "slippage_pct": 0.0,
+            "commission_per_share": 0.0,
+            "max_pct_adv": 0.0,
+            "volume_impact_coeff": 0.0,
+            "htb_rate_annual": 0.0,
+            "exclude_open_positions": False,
+            "risk_free_rate": 0.0,
+        }
+
+    def test_first_nonmember_open_exits_and_cannot_reenter(self):
+        from helpers.portfolio_simulations import run_portfolio_simulation
+        idx = pd.bdate_range("2020-01-01", "2020-01-10")
+        df = self._frame(idx)
+        df["_pit_member"] = idx <= pd.Timestamp("2020-01-07")
+        df["_pit_force_exit"] = False
+        signals = pd.Series(1, index=idx)
+
+        with patch.dict("config.CONFIG", self._config()):
+            result = run_portfolio_simulation(
+                {"AAA": df}, {"AAA": signals}, 10_000.0, 0.5,
+                None, None, None, {"type": "none"})
+
+        assert result["Trades"] == 1
+        trade = result["trade_log"][0]
+        assert trade["ExitDate"][:10] == "2020-01-08"
+        assert trade["ExitReason"] == "PIT Membership Exit"
+
+    def test_no_post_leave_bar_forces_last_close_exit(self):
+        from helpers.portfolio_simulations import run_portfolio_simulation
+        idx = pd.bdate_range("2020-01-01", "2020-01-07")
+        df = self._frame(idx)
+        df["_pit_member"] = True
+        df["_pit_force_exit"] = False
+        df.loc[idx[-1], "_pit_force_exit"] = True
+        signals = pd.Series(1, index=idx)
+
+        with patch.dict("config.CONFIG", self._config()):
+            result = run_portfolio_simulation(
+                {"AAA": df}, {"AAA": signals}, 10_000.0, 0.5,
+                None, None, None, {"type": "none"})
+
+        trade = result["trade_log"][0]
+        assert trade["ExitDate"][:10] == "2020-01-07"
+        assert trade["ExitReason"] == "PIT Membership Exit (last available close)"
+
+    def test_short_is_covered_on_first_nonmember_open(self):
+        from helpers.portfolio_simulations import run_portfolio_simulation
+        idx = pd.bdate_range("2020-01-01", "2020-01-10")
+        df = self._frame(idx)
+        df["_pit_member"] = idx <= pd.Timestamp("2020-01-07")
+        df["_pit_force_exit"] = False
+        signals = pd.Series(0, index=idx)
+        signals.iloc[0] = -2
+
+        with patch.dict("config.CONFIG", self._config()):
+            result = run_portfolio_simulation(
+                {"AAA": df}, {"AAA": signals}, 10_000.0, 0.5,
+                None, None, None, {"type": "none"})
+
+        trade = result["trade_log"][0]
+        assert trade["Trade"].startswith("Short")
+        assert trade["ExitDate"][:10] == "2020-01-08"
+        assert trade["ExitReason"] == "PIT Membership Exit"

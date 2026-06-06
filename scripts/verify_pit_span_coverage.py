@@ -60,32 +60,43 @@ def _check(value, label, prov):
     exists = covers_start = covers_span = 0
     missing, short = [], []
     for ticker, spells in sorted(intervals.items()):
-        span_lo = min(s for s, _ in spells)
-        span_hi = max(e for _, e in spells)
-        path = prov._resolve(ticker, span_lo.strftime("%Y-%m-%d"),
-                             span_hi.strftime("%Y-%m-%d"))
-        if path is None:
+        spell_checks = []
+        for span_lo, span_hi in spells:
+            path = prov._resolve(ticker, span_lo.strftime("%Y-%m-%d"),
+                                 span_hi.strftime("%Y-%m-%d"))
+            if path is None:
+                spell_checks.append((False, False, False, span_lo, span_hi, None, None))
+                continue
+            lo, hi = prov._index_range(path)
+            if lo is None:
+                spell_checks.append((False, False, False, span_lo, span_hi, None, None))
+                continue
+            ok_start = lo <= span_lo + TOL
+            ok_end = hi >= span_hi - TOL
+            spell_checks.append((True, ok_start, ok_start and ok_end,
+                                 span_lo, span_hi, lo, hi))
+
+        if spell_checks and all(c[0] for c in spell_checks):
+            exists += 1
+        else:
             missing.append(ticker)
-            continue
-        exists += 1
-        lo, hi = prov._index_range(path)
-        if lo is None:
-            missing.append(ticker)
-            continue
-        ok_start = lo <= span_lo + TOL
-        ok_end = hi >= span_hi - TOL
-        if ok_start:
+        if spell_checks and all(c[1] for c in spell_checks):
             covers_start += 1
-        if ok_start and ok_end:
+        if spell_checks and all(c[2] for c in spell_checks):
             covers_span += 1
         else:
-            short.append((ticker, str(span_lo.date()), str(span_hi.date()),
-                          str(lo.date()), str(hi.date())))
+            for _exists, _start_ok, span_ok, span_lo, span_hi, lo, hi in spell_checks:
+                if not span_ok:
+                    short.append((
+                        ticker, str(span_lo.date()), str(span_hi.date()),
+                        "missing" if lo is None else str(lo.date()),
+                        "missing" if hi is None else str(hi.date()),
+                    ))
 
     print(f"\n{'='*70}\n{label}  (members in {START}..{END}: {n})\n{'='*70}")
-    print(f"  exists        {exists:>4}/{n}  ({exists/n:6.1%})  file resolves")
-    print(f"  covers_start  {covers_start:>4}/{n}  ({covers_start/n:6.1%})  data begins by join date")
-    print(f"  covers_span   {covers_span:>4}/{n}  ({covers_span/n:6.1%})  *** HONEST coverage ***")
+    print(f"  exists        {exists:>4}/{n}  ({exists/n:6.1%})  every spell resolves")
+    print(f"  covers_start  {covers_start:>4}/{n}  ({covers_start/n:6.1%})  every spell begins by join date")
+    print(f"  covers_span   {covers_span:>4}/{n}  ({covers_span/n:6.1%})  *** HONEST per-spell coverage ***")
     if missing:
         print(f"\n  no file ({len(missing)}): {', '.join(missing[:40])}"
               + (" ..." if len(missing) > 40 else ""))
