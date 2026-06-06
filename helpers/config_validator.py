@@ -87,6 +87,11 @@ KNOWN_KEYS: set[str] = {
     "volume_impact_coeff",
     # SECTION 20: ML Export
     "export_ml_features",
+    # SECTION 24: Deterministic Entry Queue
+    "entry_priority",
+    "entry_random_seed",
+    # SECTION 25: Order Manifest
+    "export_order_manifest",
     # SECTION 21: Verbose Summary Table
     "verbose_output",
     # SECTION 22: Realized-Only Reporting

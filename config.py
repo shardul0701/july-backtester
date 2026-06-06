@@ -339,9 +339,6 @@ CONFIG = {
     "export_ml_features": False,
 
     # ============================================================
-<<<<<<< Updated upstream
-    # SECTION 21: VERBOSE SUMMARY TABLE
-=======
     # SECTION 24: DETERMINISTIC ENTRY QUEUE (#160)
     # ============================================================
     # Controls the order in which symbols are evaluated for entry when multiple
@@ -353,8 +350,15 @@ CONFIG = {
     "entry_random_seed": 42,
 
     # ============================================================
-    # SECTION 21: POINT-IN-TIME (PIT) MEMBERSHIP ENFORCEMENT
->>>>>>> Stashed changes
+    # SECTION 25: ORDER MANIFEST OUTPUT (#161)
+    # ============================================================
+    # When True, writes order_manifest.csv to the run output directory after
+    # simulation. Records every intended order (BUY/SELL/SELL_SHORT/BUY_TO_COVER)
+    # and signals skipped due to insufficient cash. Zero performance impact when False.
+    "export_order_manifest": False,
+
+    # ============================================================
+    # SECTION 21: VERBOSE SUMMARY TABLE
     # ============================================================
     # When False (default), terminal summary tables show a compact
     # 7-column view: Strategy, P&L (%), vs. SPY (B&H), Sharpe,

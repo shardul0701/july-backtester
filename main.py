@@ -121,7 +121,11 @@ def run_single_simulation(args):
         if result and result.get('trade_pnl_list'):
             result['Strategy'] = strat_name
             result['Portfolio'] = portfolio_name
-            
+            if result.get("order_manifest"):
+                for _row in result["order_manifest"]:
+                    _row["Strategy"] = strat_name
+                    _row["Portfolio"] = portfolio_name
+
             if result.get('Trades', 0) > 0:
                 if result['Trades'] >= CONFIG.get("min_trades_for_mc", 10):
                     mc_sim_results = run_monte_carlo_simulation(
@@ -676,6 +680,20 @@ def main():
         _n_rows = _ml_export(all_portfolio_results, _ml_path)
         if _n_rows > 0:
             logger.info(f"  ML feature export: {_n_rows} trades -> {_ml_path}")
+
+    if CONFIG.get("export_order_manifest", False):
+        _manifest_rows_all = []
+        for _res in all_portfolio_results:
+            _manifest_rows_all.extend(_res.get("order_manifest") or [])
+        if _manifest_rows_all:
+            import pandas as _pd_manifest
+            _manifest_df = _pd_manifest.DataFrame(_manifest_rows_all, columns=[
+                "Date", "Symbol", "Direction", "Shares", "Target_Price",
+                "Strategy", "Portfolio", "Capital_Allocated", "Reason",
+            ])
+            _manifest_path = os.path.join("output", "runs", run_folder_name, "order_manifest.csv")
+            _manifest_df.to_csv(_manifest_path, index=False)
+            logger.info(f"  Order manifest: {len(_manifest_rows_all)} rows -> {_manifest_path}")
 
     mins, secs = divmod(duration_seconds, 60)
     logger.info(f"All portfolio simulations complete in {int(mins)}m {secs:.2f}s.")

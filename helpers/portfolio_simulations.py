@@ -13,6 +13,8 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
 
     execution_time = CONFIG.get("execution_time", "open").lower()
     htb_rate_annual = CONFIG.get("htb_rate_annual", 0.0)
+    _export_manifest = CONFIG.get("export_order_manifest", False)
+    _manifest_rows = []  # populated only when _export_manifest is True
 
     # Dynamic HTB rate compounding based on timeframe (fixes issue #55)
     bars_per_year = get_bars_per_year(CONFIG)
@@ -148,6 +150,15 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
             }
             log_entry.update(pos.get('features', {}))
             trade_log.append(log_entry)
+            if _export_manifest:
+                _manifest_rows.append({
+                    "Date": exit_date.date().isoformat(),
+                    "Symbol": symbol, "Direction": "SELL",
+                    "Shares": round(pos['shares'], 6),
+                    "Target_Price": round(exit_price, 4),
+                    "Capital_Allocated": 0.0,
+                    "Reason": exit_reason,
+                })
             exited_symbols.append(symbol)
 
         for symbol in exited_symbols: del positions[symbol]
@@ -189,18 +200,23 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     'Profit': net_pnl, 'ProfitPct': net_pnl / spos['notional'] if spos['notional'] > 0 else 0,
                     'Shares': spos['shares'], 'is_win': 1 if net_pnl > 0 else 0,
                     'HoldDuration': (date - spos['entry_date']).days,
-<<<<<<< Updated upstream
-                    'MAE_pct': 0.0, 'MFE_pct': 0.0, 'ExitReason': 'Short Cover',
-=======
                     'MAE_pct': short_mae, 'MFE_pct': short_mfe,
                     'ExitReason': (
                         'PIT Membership Exit (last available close)' if pit_force_exit
                         else 'PIT Membership Exit' if not pit_member
                         else 'Short Cover'
                     ),
->>>>>>> Stashed changes
                     'InitialRisk': 0.0, 'RMultiple': None,
                 })
+                if _export_manifest:
+                    _manifest_rows.append({
+                        "Date": date.date().isoformat(),
+                        "Symbol": symbol, "Direction": "BUY_TO_COVER",
+                        "Shares": round(spos['shares'], 6),
+                        "Target_Price": round(cover_slip, 4),
+                        "Capital_Allocated": 0.0,
+                        "Reason": "Short Cover",
+                    })
                 short_exited.append(symbol)
         for symbol in short_exited:
             del short_positions[symbol]
@@ -243,6 +259,15 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     'entry_date': date, 'entry_price': ep,
                     'shares': shares, 'notional': shares * ep, 'total_borrow_cost': 0.0,
                 }
+                if _export_manifest:
+                    _manifest_rows.append({
+                        "Date": date.date().isoformat(),
+                        "Symbol": symbol, "Direction": "SELL_SHORT",
+                        "Shares": round(shares, 6),
+                        "Target_Price": round(ep, 4),
+                        "Capital_Allocated": round(alloc, 2),
+                        "Reason": "Strategy Short Entry",
+                    })
 
         # --- POSITION ENTRY LOGIC ---
         if _priority == "signal_date":
@@ -407,7 +432,35 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         'size_mult': _size_mult,
                     }
                     cash -= total_cost
-    
+                    if _export_manifest:
+                        _manifest_rows.append({
+                            "Date": entry_exec_date.date().isoformat(),
+                            "Symbol": symbol, "Direction": "BUY",
+                            "Shares": round(shares, 6),
+                            "Target_Price": round(entry_price, 4),
+                            "Capital_Allocated": round(total_cost, 2),
+                            "Reason": "Strategy Entry",
+                        })
+                elif _export_manifest:
+                    _manifest_rows.append({
+                        "Date": entry_exec_date.date().isoformat() if pd.notna(entry_exec_date) else date.date().isoformat(),
+                        "Symbol": symbol, "Direction": "BUY",
+                        "Shares": 0.0,
+                        "Target_Price": round(entry_price, 4),
+                        "Capital_Allocated": 0.0,
+                        "Reason": "Skipped — insufficient cash",
+                    })
+            elif _export_manifest and entry_price > 0:
+                # capital_to_allocate == 0: signal fired but we have no cash at all
+                _manifest_rows.append({
+                    "Date": entry_exec_date.date().isoformat() if pd.notna(entry_exec_date) else date.date().isoformat(),
+                    "Symbol": symbol, "Direction": "BUY",
+                    "Shares": 0.0,
+                    "Target_Price": round(entry_price, 4),
+                    "Capital_Allocated": 0.0,
+                    "Reason": "Skipped — insufficient cash",
+                })
+
     exclude_open = CONFIG.get('exclude_open_positions', False)
 
     # --- START: MARK-TO-MARKET LOGIC ---
@@ -456,6 +509,9 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
         final_pnl_percent = (portfolio_timeline.dropna().iloc[-1] / initial_capital) - 1
     metrics = calculate_advanced_metrics(pnl_list, portfolio_timeline.dropna(), duration_list)
 
-    return {**metrics, "pnl_percent": final_pnl_percent, "Trades": len(pnl_list),
-            "trade_pnl_list": pnl_list, "trade_log": trade_log, "initial_capital": initial_capital,
-            "portfolio_timeline": portfolio_timeline.dropna()}
+    result = {**metrics, "pnl_percent": final_pnl_percent, "Trades": len(pnl_list),
+              "trade_pnl_list": pnl_list, "trade_log": trade_log, "initial_capital": initial_capital,
+              "portfolio_timeline": portfolio_timeline.dropna()}
+    if _export_manifest:
+        result["order_manifest"] = _manifest_rows
+    return result
