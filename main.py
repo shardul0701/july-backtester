@@ -111,7 +111,19 @@ def run_single_simulation(args):
             base_signals_with_dfs[symbol] = logic_func(df.copy(), **kwargs)
 
         # The simulator now handles stop-loss logic internally.
-        final_signals = {symbol: df['Signal'] for symbol, df in base_signals_with_dfs.items()}
+        # PIT daily gating (engine-safe): where a symbol is NOT an index member
+        # (warm-up bars before it joined, or gap bars while it was out), force the
+        # signal flat so the engine never trades it. The `_pit_member` column is
+        # attached during data-prep only when pit_enforce_daily is set; otherwise
+        # this is a no-op and signals pass through unchanged.
+        final_signals = {}
+        for symbol, sdf in base_signals_with_dfs.items():
+            sig = sdf['Signal']
+            member = portfolio_data.get(symbol)
+            if member is not None and '_pit_member' in member.columns:
+                from helpers.pit_enforcement import mask_signal
+                sig = mask_signal(sig, member['_pit_member'])
+            final_signals[symbol] = sig
 
         # Call the simulation, passing the stop_config and using the global dataframes.
         result = run_portfolio_simulation(
@@ -564,11 +576,47 @@ def main():
             logger.warning(f"No symbols found for '{portfolio_name}'. Skipping.")
             continue
 
+        # --- DAILY PIT ENFORCEMENT (opt-in, engine-safe) ---
+        # For PIT universes (sp500_pit/nq100_pit/pit:*), gate each symbol to its
+        # index-membership era so a name cannot be traded years before it joined
+        # ("hold today's members back in 2010"). Off by default.
+        #   * _pit_intervals[sym] = [(join, leave), ...] contiguous spells
+        #   * _pit_spans[sym]     = (first_join, last_leave) outer bound (data trim)
+        # A per-symbol boolean `_pit_member` column is attached below; the worker
+        # forces the signal flat on every False bar, so warm-up AND gap bars are
+        # never traded even though they stay in the frame for indicator warm-up.
+        _pit_intervals, _pit_spans = {}, {}
+        if CONFIG.get("pit_enforce_daily") and isinstance(value, str):
+            from helpers.pit_enforcement import membership_intervals, membership_spans
+            _pit_intervals = membership_intervals(value, CONFIG)
+            _pit_spans = membership_spans(value, CONFIG)
+            if _pit_intervals:
+                _n_gaps = sum(1 for sp in _pit_intervals.values() if len(sp) > 1)
+                logger.info(
+                    f"  -> PIT daily enforcement ON: {len(_pit_intervals)} tickers "
+                    f"gated to membership spells ({_n_gaps} with re-entry gaps; "
+                    f"warmup {CONFIG.get('pit_warmup_days', 400)}d). Warm-up/gap bars "
+                    f"kept for indicators but masked from trading.")
+        _pit_warmup = CONFIG.get("pit_warmup_days", 400)
+        # --- END DAILY PIT ENFORCEMENT (setup) ---
+
         MIN_BARS = CONFIG.get("min_bars_required", 250)
         skipped_symbols = []
         portfolio_data = {}
         for symbol in tqdm(symbols, desc="  -> Fetching & Preparing Data", unit=" symbols"):
-            df = data_fetcher(symbol, CONFIG["start_date"], CONFIG["end_date"], CONFIG)
+            # Span-bounded fetch under PIT: pass the membership window as the date
+            # range so the provider's date-aware resolution serves the correct era
+            # of a recycled ticker (e.g. historical JAVA, not today's namesake).
+            _fetch_start, _fetch_end = CONFIG["start_date"], CONFIG["end_date"]
+            if _pit_spans and symbol in _pit_spans:
+                _sp_first, _sp_last = _pit_spans[symbol]
+                _fetch_start = (pd.Timestamp(_sp_first)
+                                - pd.Timedelta(days=_pit_warmup)).strftime("%Y-%m-%d")
+                _fetch_end = pd.Timestamp(_sp_last).strftime("%Y-%m-%d")
+            df = data_fetcher(symbol, _fetch_start, _fetch_end, CONFIG)
+            if _pit_spans and df is not None and not df.empty and symbol in _pit_spans:
+                from helpers.pit_enforcement import trim_to_membership
+                df = trim_to_membership(df, _pit_spans[symbol], warmup_days=_pit_warmup)
             if df is not None and not df.empty:
                 if len(df) < MIN_BARS:
                     skipped_symbols.append((symbol, len(df)))
@@ -616,6 +664,14 @@ def main():
                 df['Volume_Spike'] = df['Volume'] / df['Volume'].rolling(20).mean()
 
                 # --- END FEATURE ENGINEERING ---
+
+                # --- PIT membership mask (engine-safe daily gating) ---
+                # True only on actual member days; warm-up + gap bars are False.
+                # run_single_simulation forces the signal flat where this is False.
+                if _pit_intervals and symbol in _pit_intervals:
+                    from helpers.pit_enforcement import build_member_mask
+                    df['_pit_member'] = build_member_mask(df.index, _pit_intervals[symbol])
+                # --- END PIT membership mask ---
                 portfolio_data[symbol] = df
 
         if skipped_symbols:

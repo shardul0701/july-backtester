@@ -29,36 +29,81 @@ class UnifiedMarketDataProvider:
         self.merged_dir = merged_dir or paths.MERGED
         self.metadata_dir = metadata_dir or paths.METADATA
         self._class = None
+        self._range_cache = {}
 
     # ------------------------------------------------------------- internals ---
-    def _resolve(self, symbol):
-        """Return the merged parquet path for a requested symbol, or None.
-
-        Tries (1) exact / upper / slash->dash variants, then (2) a date-suffixed
-        delisted file (`{SYMBOL}-YYYYMM.parquet`), picking the most recent suffix.
-        Step 2 lets PIT members that delisted (e.g. AABA->AABA-201910,
-        DAY->DAY-202602) resolve to their real history.
-        """
+    def _candidate_paths(self, symbol):
+        """All existing merged files that could be this symbol: bare/share-class
+        variants first, then date-suffixed delisted files. Returns
+        ``[(path, is_suffixed), ...]`` de-duplicated, order-preserving."""
         cands = []
         for c in (symbol, symbol.upper(), symbol.replace("/", "-"),
                   symbol.upper().replace(".", "-"), symbol.upper().replace("-", ".")):
             if c not in cands:
                 cands.append(c)
-        for cand in cands:
-            p = os.path.join(self.merged_dir, f"{cand}.parquet")
-            if os.path.exists(p):
-                return p
-        # delisted fallback: most recent -YYYYMM suffix for this base ticker
-        for cand in cands:
-            hits = glob.glob(os.path.join(self.merged_dir, f"{cand}-*.parquet"))
-            hits = [h for h in hits
-                    if _SUFFIX_RE.search(os.path.splitext(os.path.basename(h))[0])]
-            if hits:
-                return sorted(hits)[-1]
-        return None
+        out, seen = [], set()
+        for c in cands:
+            p = os.path.join(self.merged_dir, f"{c}.parquet")
+            if os.path.exists(p) and p not in seen:
+                out.append((p, False)); seen.add(p)
+        for c in cands:
+            for h in glob.glob(os.path.join(self.merged_dir, f"{c}-*.parquet")):
+                stem = os.path.splitext(os.path.basename(h))[0]
+                if _SUFFIX_RE.search(stem) and h not in seen:
+                    out.append((h, True)); seen.add(h)
+        return out
 
-    def _read(self, symbol):
-        p = self._resolve(symbol)
+    def _index_range(self, path):
+        """(min_ts, max_ts) of a parquet's index, cached. (None, None) on error."""
+        if path not in self._range_cache:
+            try:
+                idx = pd.read_parquet(path, columns=["close"]).index
+                self._range_cache[path] = ((idx.min(), idx.max()) if len(idx)
+                                           else (None, None))
+            except Exception:
+                self._range_cache[path] = (None, None)
+        return self._range_cache[path]
+
+    def _resolve(self, symbol, start_date=None, end_date=None):
+        """Return the merged parquet path for a requested symbol, or None.
+
+        DATE-AWARE: when a [start, end] window is given and several files share a
+        base ticker (a recycled ticker — the delisted original AND a live namesake,
+        e.g. historical JAVA/SNDK/LIFE vs today's company), pick the file whose data
+        actually covers the requested window, NOT just whichever file matches the
+        name. Without a window, falls back to the legacy preference: a bare
+        (non-suffixed) exact file, else the most recent ``-YYYYMM`` delisted file.
+        """
+        paths_ = self._candidate_paths(symbol)
+        if not paths_:
+            return None
+        if start_date is None and end_date is None:
+            bare = [p for p, suf in paths_ if not suf]
+            if bare:
+                return bare[0]
+            suff = sorted(p for p, suf in paths_ if suf)
+            return suff[-1] if suff else None
+        # date-aware scoring: most calendar-day overlap with [start, end],
+        # tie-broken by "contains the start date", then by recency (later end).
+        s = pd.Timestamp(start_date) if start_date is not None else pd.Timestamp.min
+        e = pd.Timestamp(end_date) if end_date is not None else pd.Timestamp.max
+        best, best_key = None, None
+        for p, _suf in paths_:
+            lo, hi = self._index_range(p)
+            if lo is None:
+                continue
+            overlap = min(hi, e) - max(lo, s)
+            overlap_days = overlap.days if overlap > pd.Timedelta(0) else -1
+            key = (overlap_days, bool(lo <= s <= hi), hi)
+            if best_key is None or key > best_key:
+                best_key, best = key, p
+        if best is not None:
+            return best
+        bare = [p for p, suf in paths_ if not suf]
+        return bare[0] if bare else sorted(p for p, _ in paths_)[-1]
+
+    def _read(self, symbol, start_date=None, end_date=None):
+        p = self._resolve(symbol, start_date, end_date)
         if p is None:
             return None
         return pd.read_parquet(p)
@@ -74,7 +119,7 @@ class UnifiedMarketDataProvider:
     # ------------------------------------------------------------- public API ---
     def get_price_data(self, symbol, start_date=None, end_date=None, config=None):
         """Engine-compatible OHLCV (Open/High/Low/Close/Volume, Datetime index)."""
-        df = self._read(symbol)
+        df = self._read(symbol, start_date, end_date)
         if df is None or df.empty:
             return None
         df = self._slice(df, start_date, end_date)
@@ -100,7 +145,7 @@ class UnifiedMarketDataProvider:
 
     def get_with_provenance(self, symbol, start_date=None, end_date=None):
         """Full canonical schema including source / adjustment_factor / method / status."""
-        df = self._read(symbol)
+        df = self._read(symbol, start_date, end_date)
         if df is None or df.empty:
             return None
         return self._slice(df, start_date, end_date)
@@ -116,7 +161,7 @@ class UnifiedMarketDataProvider:
         passed through unchanged (price factor does not reconstruct raw volume).
         Returns Open/High/Low/Close/Volume with a Datetime index, or None.
         """
-        df = self._read(symbol)
+        df = self._read(symbol, start_date, end_date)
         if df is None or df.empty:
             return None
         df = self._slice(df, start_date, end_date)
@@ -138,7 +183,7 @@ class UnifiedMarketDataProvider:
         Convenience for the Alpaca runner / fill reconciliation. Returns a float
         (broker-comparable) or None if no bar exists on/before the date.
         """
-        df = self._read(symbol)
+        df = self._read(symbol, date, date)
         if df is None or df.empty:
             return None
         df = df[df.index <= pd.Timestamp(date)]
@@ -205,15 +250,17 @@ class UnifiedMarketDataProvider:
 
     def filter_universe(self, symbols,
                         exclude_statuses=("insufficient_history", "review_no_patch",
-                                          "identity_review"),
+                                          "identity_review", "flagged"),
                         min_bars=0, min_avg_dollar_volume=0.0, lookback=60):
         """Screen a symbol list for backtest fitness. Returns (kept, dropped) where
         dropped is ``{symbol: reason}``.
 
-        - exclude_statuses: drop quarantined data. Defaults exclude new listings
-          with too little history (#8), active Norgate names with no Polygon patch
-          / stale at the anchor (#6), and identity-flagged fail-closed names (#7).
-          Pass () to keep everything.
+        - exclude_statuses: drop quarantined data. Defaults are FAIL-CLOSED and
+          exclude new listings with too little history (#8), active Norgate names
+          with no Polygon patch / stale at the anchor (#6), identity-flagged
+          fail-closed names (#7), and seam/identity ``flagged`` rows held to
+          history-only. Pass ``exclude_statuses=()`` to keep everything, or a
+          narrower tuple (e.g. drop only ``insufficient_history``) to opt back in.
         - min_bars: drop series shorter than this (long-lookback strategies).
         - min_avg_dollar_volume: drop illiquid names (mean close*volume over the
           last `lookback` bars) — mitigates micro-cap anomalies (#12).

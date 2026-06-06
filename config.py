@@ -161,6 +161,20 @@ CONFIG = {
     "s3_reports_bucket": "",
 
     # ============================================================
+    # SECTION 21: POINT-IN-TIME (PIT) MEMBERSHIP ENFORCEMENT
+    # ============================================================
+    # Only relevant for PIT portfolios ("sp500_pit" / "nq100_pit" / "pit:*").
+    # When True, each symbol is gated to its index-membership spells: warm-up
+    # bars (kept for indicator continuity) and gap bars (while it was out of the
+    # index) stay in the frame but are NEVER traded — the engine signal is forced
+    # flat there. Prevents "holding today's members back in 2010". Engine-safe.
+    # Off by default (no effect on non-PIT portfolios either way).
+    "pit_enforce_daily": False,
+    "pit_warmup_days": 400,             # calendar days of pre-join data for indicators
+    # "sp500_pit_path": "",            # else read from SP500_DATA_ROOT in .env
+    # "nq100_pit_path": "data/nq100_membership.parquet",
+
+    # ============================================================
     # SECTION 22: FORWARD TESTING — Capital isolation model
     # ============================================================
     # "isolated" (default): each strategy gets its own fixed dollar slice.

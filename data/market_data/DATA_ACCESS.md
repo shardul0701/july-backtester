@@ -109,10 +109,71 @@ Set the portfolio *value* (in `config.py → portfolios`) to one of:
 
 - S&P union 2004→2026 = **978** names; real changes through **2026-01-14** (not frozen).
 - NQ100 union 2004→2026 = **287** names; daily snapshots through **2026-04-30**.
-- **Price coverage of those members in `merged/`: 95.8% S&P, 96.2% NQ100.** The ~4% gap is
-  mostly ticker renames where the data **is present under the new ticker** (UTX→RTX, ANTM→ELV,
-  ABC→COR, KORS→CPRI, MYL→VTRS, …) plus a few names absent from the Norgate snapshot (e.g. MMC).
-  Add an alias map to reach ~99%.
+- **Price coverage of those members — two honest numbers** (verify with
+  `python scripts/verify_pit_span_coverage.py`):
+
+  | Metric | S&P 500 | NQ100 | What it means |
+  |---|---|---|---|
+  | `exists` | 99.2% | 98.6% | a merged file *resolves* for the (normalised) ticker |
+  | `covers_start` | 97.2% | 95.7% | that file's data *begins by* the membership join date |
+  | `covers_span` | **94.5%** | **94.0%** | file covers BOTH ends of the membership window — **use this** |
+
+  ⚠ Do **not** quote the 99% `exists` figure as "coverage": a file resolving is not the
+  same as it covering the right *period*. ~5% of members have a file that starts after they
+  joined or is a recycled-ticker second era (e.g. SanDisk SNDK 2004–16 then 2025–, Crane CR).
+  An old→new alias map (`helpers/point_in_time.py::PIT_TICKER_NORMALISATION`, e.g. UTX→RTX,
+  ANTM→ELV, FB→META, YHOO→AABA) is applied in BOTH the snapshot and union paths
+  (`helpers/pit_universe.py`); the provider resolves date-suffixed delisted files
+  (`AABA-201910`), share-class dash/dot (`BRK-B`↔`BRK.B`), AND **picks the era whose data
+  covers the requested window** for recycled tickers (date-aware `_resolve`). Names with **no
+  merged file at all** (ENDP, JCP, SIVB, TUP, WIN, MMC, ATGE, PARA, MERQE, QRTEA, RHAT) cannot
+  be recovered by any alias.
+
+### Daily PIT enforcement (opt-in) — avoid "holding today's members back in 2010"
+
+The union/as-of universe lists tell the engine *which* tickers to run, not *when* each was a
+member. A naive cross-sectional strategy could pick a future constituent too early. Set
+`pit_enforce_daily: True` (config) and main.py gates each symbol to its membership **spells**:
+
+- `helpers.pit_enforcement.membership_intervals(value, config)` → `{ticker: [(join, leave), …]}`
+  contiguous spells, so a name that left and rejoined the index is two intervals (the gap is
+  **not** silently filled).
+- Each symbol gets a boolean `_pit_member` column (`build_member_mask`); the worker forces the
+  signal flat (`mask_signal`) on every bar where it's `False`. So **warm-up bars** (kept for
+  indicator continuity, `pit_warmup_days`, default 400) AND **gap bars** (out of the index) are
+  present in the frame but **never traded** — TSLA can't trade before 2020-12, and a name dropped
+  for two years can't trade during that gap.
+- Bars are also trimmed to the outer `[first_join − warmup, last_leave]` window to bound data,
+  and the fetch is span-bounded so a recycled ticker resolves to the correct era.
+
+Engine-safe — no simulation-engine change. For raw per-day membership sets use
+`helpers.pit_enforcement.daily_membership_mask(value, config)` → `{date: frozenset}`.
+
+### Execution-safe RAW prices (broker orders / fill reconciliation)
+
+`merged/` prices are total-return adjusted; after a post-anchor split/dividend they diverge from a
+broker quote. For order submission / reconciliation use the RAW interface, never `get_price_data`:
+
+```python
+p.get_raw_price_data("CVNA", "2026-05-01", "2026-06-05")  # = canonical / adjustment_factor
+p.get_execution_price("CVNA", "2026-06-05")               # scalar raw close (e.g. 66.51, not 332.55)
+```
+
+### Quality / liquidity screen (quarantined + micro-cap data)
+
+```python
+kept, dropped = p.filter_universe(universe, min_bars=250, min_avg_dollar_volume=5_000_000)
+# drops insufficient_history / review_no_patch / identity_review (fail-closed quarantine),
+# short series, and illiquid micro-caps. p.quality_status(sym) returns the per-symbol flag.
+```
+
+### Authoritative counts — `metadata/dataset_manifest.json`
+
+Use this (single ground-truth pass: timestamp + git commit) for any count. It supersedes
+`merge_summary.json` (write-time return counts) and the standalone insufficient-history CSVs,
+which came from different pipeline states and disagree. `classification_bucket_counts` = classified
+rows; `bucket_counts_materialized` = what actually landed in `merged/`. Regenerate with
+`python scripts/build_dataset_manifest.py` (or it's written atomically by the audit).
 
 ```python
 # survivorship-bias-free S&P 500 universe + its prices from merged/

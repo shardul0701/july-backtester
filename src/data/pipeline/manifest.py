@@ -97,8 +97,15 @@ def write_manifest(summary_df, index_rows=None, cls=None, logger=None):
     m = build_manifest(summary_df, index_rows=index_rows, cls=cls)
     paths.ensure_dirs()
     path = os.path.join(paths.METADATA, "dataset_manifest.json")
-    with open(path, "w", encoding="utf-8") as f:
+    # Atomic write: a reader never sees a half-written/empty manifest, and a
+    # crash mid-write leaves the previous good manifest intact. Write to a temp
+    # file in the same dir (same filesystem -> os.replace is atomic) then swap.
+    tmp = f"{path}.tmp.{os.getpid()}"
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(m, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
     if logger:
         logger.info(f"dataset manifest -> {path} "
                     f"({m['merged_files_total']:,} files, "

@@ -45,7 +45,7 @@ PIT_TICKER_NORMALISATION = {
     # ~99% S&P / ~99% NQ100. Names with NO surviving file (bankruptcies such as
     # ENDP/JCP/SIVB/TUP/WIN/MERQE/QRTEA/RHAT and Norgate-snapshot gaps
     # MMC/ATGE/PARA) are intentionally absent — no alias can recover them.
-    "PCLN": "BKNG", "HANS": "MNST", "GOOG": "GOOGL",
+    "PCLN": "BKNG", "HANS": "MNST", "GOOG": "GOOGL", "FB": "META",
     # --- S&P 500 renames / mergers (old -> surviving ticker) ---
     "ABC": "COR", "ADS": "BFH", "ANTM": "ELV", "BHGE": "BKR", "BLL": "BALL",
     "CCE": "CCEP", "CDAY": "DAY", "CHK": "EXE", "COG": "CTRA", "CTL": "LUMN",
