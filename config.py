@@ -364,6 +364,19 @@ CONFIG = {
     # False (default) = include EoB mark-to-market closes (original behaviour)
     # True            = realized trades only; EoB positions are dropped
     "exclude_open_positions": False,
+
+    # ============================================================
+    # SECTION 24: ALPACA PAPER TRADING
+    # ============================================================
+    # Keys resolved from env vars / .env (same pattern as aws_utils.py).
+    # Set APCA_API_KEY_ID and APCA_API_SECRET_KEY in .env for paper trading.
+    # Run: python scripts/alpaca_paper_runner.py --run-id <run_id> [--submit --i-understand-submit]
+    "alpaca": {
+        "api_key_env": "APCA_API_KEY_ID",
+        "secret_key_env": "APCA_API_SECRET_KEY",
+        "base_url": "https://paper-api.alpaca.markets",
+        "order_timeout_seconds": 300,
+    },
 }
 
 if CONFIG.get("data_provider") == "norgate":  # noqa: SIM102

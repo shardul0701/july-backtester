@@ -14,3 +14,5 @@ orjson==3.11.1
 pyarrow==21.0.0
 yfinance==0.2.65       # required only when data_provider = "yahoo"
 matplotlib==3.10.1     # candlestick charts and PDF plot generation
+# alpaca-py            # optional: pip install alpaca-py for typed Alpaca SDK
+                       # scripts/alpaca_paper_runner.py uses stdlib urllib — no install required
