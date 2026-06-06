@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-06-06 09:07:03",
-  "git_commit": "98b03f6",
+  "generated_at": "2026-06-06 10:01:41",
+  "git_commit": "7a79094",
   "anchor": "2026-04-22",
   "patch_start": "2026-04-23",
   "ground_truth": "merged/ directory + audit summary (single pass)",
