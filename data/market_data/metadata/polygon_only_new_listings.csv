@@ -1,0 +1,375 @@
+symbol,source_feed,bucket,required_asset,last_date,polygon_ticker,security_type,note
+AAAD,polygon,polygon_only_new_listing,False,,AAAD,ETF,PGIM AAA CLO Aggregate Duration ETF
+AACP,polygon,polygon_only_new_listing,False,,AACP,CS,Apogee Acquisition Corp Class A Ordinary Shares
+AADX,polygon,polygon_only_new_listing,False,,AADX,CS,"Applied Aerospace & Defense, Inc."
+AAOG,polygon,polygon_only_new_listing,False,,AAOG,ETF,Leverage Shares 2X Long AAOI Daily ETF
+ACGC,polygon,polygon_only_new_listing,False,,ACGC,CS,ACP Holdings Acquisition Corp. Class A Ordinary Shares
+ACGO,polygon,polygon_only_new_listing,False,,ACGO,ETF,Hartford Alpha Capture Growth ETF
+ACVU,polygon,polygon_only_new_listing,False,,ACVU,ETF,Hartford Alpha Capture Value ETF
+ACYS,polygon,polygon_only_new_listing,False,,ACYS,ETF,FT Vest Laddered Autocallable Barrier & Resilient Income ETF
+ADDS,polygon,polygon_only_new_listing,False,,ADDS,ETF,Hedgeye Index Adds ETF
+AGNT,polygon,polygon_only_new_listing,False,,AGNT,CS,"eXp World Holdings, Inc. Common Stock"
+AHD,polygon,polygon_only_new_listing,False,,AHD,ETF,GraniteShares Autocallable HOOD ETF
+AIAI,polygon,polygon_only_new_listing,False,,AIAI,CS,AIAI Holdings Corporation Class A Common Stock
+AIFA,polygon,polygon_only_new_listing,False,,AIFA,CS,"All In FutureTech Alliance, Inc. Common Stock"
+AIFC,polygon,polygon_only_new_listing,False,,AIFC,CS,AI Financial Corporation Common Stock
+AIIR,polygon,polygon_only_new_listing,False,,AIIR,CS,Air Global PLC Ordinary Shares
+AIQD,polygon,polygon_only_new_listing,False,,AIQD,ETN,MicroSectors -3x Short Artificial Intelligence (AI) ETNs
+AIQU,polygon,polygon_only_new_listing,False,,AIQU,ETN,MicroSectors 3x Long Artificial Intelligence (AI) ETNs
+ALDB,polygon,polygon_only_new_listing,False,,ALDB,ETF,Aptus Laddered Deep Buffer ETF
+AMA,polygon,polygon_only_new_listing,False,,AMA,ETF,Defiance Daily Target 2X Long AMAT ETF
+AMAN,polygon,polygon_only_new_listing,False,,AMAN,CS,Amanat Acquisition Corp Class A Ordinary Shares
+AMAU,polygon,polygon_only_new_listing,False,,AMAU,ETF,Leverage Shares 2X Long AMAT Daily ETF
+AMKL,polygon,polygon_only_new_listing,False,,AMKL,ETF,Defiance Daily Target 2X Long AMKR ETF
+AMPU,polygon,polygon_only_new_listing,False,,AMPU,ETF,Defiance Daily Target 2X Long AMPX ETF
+AMSS,polygon,polygon_only_new_listing,False,,AMSS,CS,AMASS Brands Inc. Common Stock
+APDB,polygon,polygon_only_new_listing,False,,APDB,ETF,Aptus April Deep Buffer ETF
+APUS,polygon,polygon_only_new_listing,False,,APUS,CS,"Apimeds Pharmaceuticals US, Inc."
+ARCL,polygon,polygon_only_new_listing,False,,ARCL,CS,ARC Group Acquisition I Corp Class A Ordinary Shares
+ASD,polygon,polygon_only_new_listing,False,,ASD,ETF,Defiance Autism Impact ETF
+ASEC,polygon,polygon_only_new_listing,False,,ASEC,ETF,American Century Securitized Credit ETF
+ASTY,polygon,polygon_only_new_listing,False,,ASTY,ETF,Defiance Daily Target 2X Long ASTS ETF
+ASUP,polygon,polygon_only_new_listing,False,,ASUP,ETF,T-REX 2X Long ASTS Daily Target ETF
+ATC,polygon,polygon_only_new_listing,False,,ATC,ETF,GraniteShares Autocallable COIN ETF
+AUC,polygon,polygon_only_new_listing,False,,AUC,CS,ATIF Holdings Limited Ordinary Shares
+AV,polygon,polygon_only_new_listing,False,,AV,ETF,Corgi Aerospace & Commercial Aviation ETF
+AVAZ,polygon,polygon_only_new_listing,False,,AVAZ,ETF,2x Avalanche ETF
+AVLN,polygon,polygon_only_new_listing,False,,AVLN,CS,Avalyn Pharma Inc. Common Stock
+AXTU,polygon,polygon_only_new_listing,False,,AXTU,ETF,T-REX 2X Long AXTI Daily Target ETF
+AXTX,polygon,polygon_only_new_listing,False,,AXTX,ETF,Tradr 2X Long AXTI Daily ETF
+AYA,polygon,polygon_only_new_listing,False,,AYA,CS,Aya Gold & Silver Inc. Common Shares
+AZUL,polygon,polygon_only_new_listing,False,,AZUL,ADRC,"Azul S.A. American Depositary Shares, each representing two (2) Common Shares"
+BAY,polygon,polygon_only_new_listing,False,,BAY,ETF,Corgi Bay Area Based ETF
+BFLX,polygon,polygon_only_new_listing,False,,BFLX,ETF,iShares Flexible Equity Active ETF
+BGCG,polygon,polygon_only_new_listing,False,,BGCG,ETF,Baillie Gifford International Concentrated Growth ETF
+BGDE,polygon,polygon_only_new_listing,False,,BGDE,CS,"Big Digital Energy, Inc. Common Stock"
+BGEG,polygon,polygon_only_new_listing,False,,BGEG,ETF,Baillie Gifford Emerging Markets ETF
+BGGG,polygon,polygon_only_new_listing,False,,BGGG,ETF,Baillie Gifford Long Term Global Growth ETF
+BGIA,polygon,polygon_only_new_listing,False,,BGIA,ETF,Baillie Gifford International Alpha ETF
+BHYP,polygon,polygon_only_new_listing,False,,BHYP,ETV,Bitwise Hyperliquid ETF
+BIOY,polygon,polygon_only_new_listing,False,,BIOY,ETF,GraniteShares YieldBOOST Biotech ETF
+BLCK,polygon,polygon_only_new_listing,False,,BLCK,ETF,Corgi Crypto Infrastructure ETF
+BNY,polygon,polygon_only_new_listing,False,,BNY,CS,Bank of New York Mellon Corporation
+BOT,polygon,polygon_only_new_listing,False,,BOT,CS,"RoboStrategy, Inc. Common Stock"
+BREW,polygon,polygon_only_new_listing,False,,BREW,ETF,Corgi Coffee & Energy Drinks ETF
+BROL,polygon,polygon_only_new_listing,False,,BROL,ETF,Baron Risk Optimized Large Cap ETF
+BRSM,polygon,polygon_only_new_listing,False,,BRSM,ETF,MFS Blended Research Small-Mid Cap ETF
+BRUN,polygon,polygon_only_new_listing,False,,BRUN,CS,Boost Run Inc. Class A Common Stock
+BRZX,polygon,polygon_only_new_listing,False,,BRZX,ETF,Corgi Brazil 2x Daily ETF
+BTCK,polygon,polygon_only_new_listing,False,,BTCK,ETV,7RCC Spot Bitcoin and Carbon Credit Futures ETF
+BTCU,polygon,polygon_only_new_listing,False,,BTCU,ETF,DIREXION DAILY BITCOIN BULL 2X ETF
+BUYB,polygon,polygon_only_new_listing,False,,BUYB,ETF,ProShares S&P 500 Buyback Aristocrats ETF
+BWIV,polygon,polygon_only_new_listing,False,,BWIV,CS,Blue Water Acquisition Corp. IV
+BXDC,polygon,polygon_only_new_listing,False,,BXDC,CS,Blackstone Digital Infrastructure Trust Inc.
+BZZ,polygon,polygon_only_new_listing,False,,BZZ,ETF,Corgi Drones & Urban Air Mobility ETF
+CATG,polygon,polygon_only_new_listing,False,,CATG,ETF,Leverage Shares 2X Long CAT Daily ETF
+CBIL,polygon,polygon_only_new_listing,False,,CBIL,ETF,Corgi 3-12 Month T-Bill ETF
+CBOT,polygon,polygon_only_new_listing,False,,CBOT,ETF,Corgi Robots & Humanoids ETF
+CBRG,polygon,polygon_only_new_listing,False,,CBRG,ETF,Leverage Shares 2X Long CBRS Daily ETF
+CBRS,polygon,polygon_only_new_listing,False,,CBRS,CS,Cerebras Systems Inc. Class A Common Stock
+CBRX,polygon,polygon_only_new_listing,False,,CBRX,ETF,Tradr 2X Long CBRS Daily ETF
+CBRZ,polygon,polygon_only_new_listing,False,,CBRZ,ETF,Tradr 2X Short CBRS Daily ETF
+CCAQ,polygon,polygon_only_new_listing,False,,CCAQ,CS,Collective Acquisition Corp. Class A Ordinary Shares
+CCPX,polygon,polygon_only_new_listing,False,,CCPX,ETF,Corgi China 2x Daily ETF
+CGOV,polygon,polygon_only_new_listing,False,,CGOV,ETF,Corgi 0-3 Month T-Bill ETF
+CHRN,polygon,polygon_only_new_listing,False,,CHRN,CS,ChronoScale Corporation Common Stock
+CHYG,polygon,polygon_only_new_listing,False,,CHYG,ETF,Corgi 0-5 Year High Yield Corporate Bond ETF
+CIEG,polygon,polygon_only_new_listing,False,,CIEG,ETF,Leverage Shares 2X Long CIEN Daily ETF
+CIEI,polygon,polygon_only_new_listing,False,,CIEI,ETF,Corgi 3-7 Year Treasury Bond ETF
+CIVG,polygon,polygon_only_new_listing,False,,CIVG,ETF,Corgi 1-5 Year Investment Grade Corporate Bond ETF
+CJUN,polygon,polygon_only_new_listing,False,,CJUN,ETF,Corgi U.S. Equities 15% Structured Buffer ETF - June Series
+CLOO,polygon,polygon_only_new_listing,False,,CLOO,ETF,NYLI Investment Grade CLO ETF
+CLUB,polygon,polygon_only_new_listing,False,,CLUB,ETF,Billionaires Club ETF
+CMAG,polygon,polygon_only_new_listing,False,,CMAG,ETF,Corgi Mag 7 ETF
+CMAY,polygon,polygon_only_new_listing,False,,CMAY,ETF,Corgi U.S. Equities 15% Structured Buffer ETF - May Series
+CNXU,polygon,polygon_only_new_listing,False,,CNXU,CS,Conexeu Sciences Inc. Common Stock
+COAG,polygon,polygon_only_new_listing,False,,COAG,CS,"Hemab Therapeutics Holdings, Inc. Common Stock"
+COHH,polygon,polygon_only_new_listing,False,,COHH,ETF,Leverage Shares 2X Long COHR Daily ETF
+CPNX,polygon,polygon_only_new_listing,False,,CPNX,ETF,Tradr 2X Long CPNG Daily ETF
+CQTM,polygon,polygon_only_new_listing,False,,CQTM,ETF,Corgi Quantum Computing ETF
+CRY,polygon,polygon_only_new_listing,False,,CRY,ETF,GraniteShares YieldBOOST CRCL ETF
+CTJN,polygon,polygon_only_new_listing,False,,CTJN,ETF,Corgi U.S. Equities 30% Structured Buffer ETF - June Series
+CTMA,polygon,polygon_only_new_listing,False,,CTMA,ETF,Corgi U.S. Equities 30% Structured Buffer ETF - May Series
+CUST,polygon,polygon_only_new_listing,False,,CUST,ETF,Corgi 1-3 Year Treasury Bond ETF
+CVGD,polygon,polygon_only_new_listing,False,,CVGD,ETF,CresAlta Global Dividend ETF
+CVSM,polygon,polygon_only_new_listing,False,,CVSM,ETF,CresAlta Small and Mid-Cap ETF
+DDFY,polygon,polygon_only_new_listing,False,,DDFY,ETF,Innovator Equity Dual Directional 15 Buffer ETF - May
+DDFZ,polygon,polygon_only_new_listing,False,,DDFZ,ETF,Innovator Equity Dual Directional 15 Buffer ETF - June
+DDTY,polygon,polygon_only_new_listing,False,,DDTY,ETF,Innovator Equity Dual Directional 10 Buffer ETF - May
+DDTZ,polygon,polygon_only_new_listing,False,,DDTZ,ETF,Innovator Equity Dual Directional 10 Buffer ETF - June
+DINE,polygon,polygon_only_new_listing,False,,DINE,ETF,Simplify Tax Aware Diversified Income Strategy ETF
+DIPR,polygon,polygon_only_new_listing,False,,DIPR,ETF,Corgi Space & Satellite Communications ETF
+DLMY,polygon,polygon_only_new_listing,False,,DLMY,ETF,FT Vest U.S. Equity Dual Directional Buffer ETF - May
+DOCK,polygon,polygon_only_new_listing,False,,DOCK,ETF,"Corgi Ports, Rail & Freight ETF"
+DUKR,polygon,polygon_only_new_listing,False,,DUKR,CS,DUKE Robotics Corp. Common Stock
+DUSG,polygon,polygon_only_new_listing,False,,DUSG,ETF,U.S. Small Cap Growth Portfolio ETF Class Shares
+DWWN,polygon,polygon_only_new_listing,False,,DWWN,ETF,Principal Long Duration ETF
+DYNC,polygon,polygon_only_new_listing,False,,DYNC,CS,Dynamix Corporation Class A Ordinary Shares
+EFOR,polygon,polygon_only_new_listing,False,,EFOR,CS,"Everforth, Inc."
+EFTY,polygon,polygon_only_new_listing,False,,EFTY,CS,"Etoiles Capital Group Co., Ltd. Class A Ordinary Shares"
+ELMT,polygon,polygon_only_new_listing,False,,ELMT,CS,The Elmet Group Co. Common Stock
+EMEM,polygon,polygon_only_new_listing,False,,EMEM,ETF,Sophus Capital Emerging Market ETF
+EMFI,polygon,polygon_only_new_listing,False,,EMFI,ETF,Pictet Emerging Markets Debt ETF
+EMJN,polygon,polygon_only_new_listing,False,,EMJN,ETF,Corgi Emerging Markets Equities 15% Structured Buffer ETF - June Series
+EMMY,polygon,polygon_only_new_listing,False,,EMMY,ETF,Corgi Emerging Markets Equities 15% Structured Buffer ETF - May Series
+EMPG,polygon,polygon_only_new_listing,False,,EMPG,CS,Empro Group Inc. Ordinary shares
+EMSC,polygon,polygon_only_new_listing,False,,EMSC,ETF,Sophus Capital Emerging Market Small Cap ETF
+EMXX,polygon,polygon_only_new_listing,False,,EMXX,ETF,Corgi Emerging Markets 2x Daily ETF
+ENHA,polygon,polygon_only_new_listing,False,,ENHA,CS,Enhanced Group Inc.
+EROK,polygon,polygon_only_new_listing,False,,EROK,CS,"EagleRock Land, LLC"
+ETNG,polygon,polygon_only_new_listing,False,,ETNG,ETF,Leverage Shares 2X Long ETN Daily ETF
+ETSS,polygon,polygon_only_new_listing,False,,ETSS,CS,Energy Transition Special Opportunities
+EUV,polygon,polygon_only_new_listing,False,,EUV,ETF,Corgi Lithography & Semiconductor Photonics ETF
+EUVX,polygon,polygon_only_new_listing,False,,EUVX,ETF,Corgi Lithography & Semiconductor Photonics 2x Daily ETF
+EVMU,polygon,polygon_only_new_listing,False,,EVMU,ETF,DIREXION DAILY ETHER BULL 2X ETF
+EXYN,polygon,polygon_only_new_listing,False,,EXYN,CS,"Exyn Technologies, Inc. Common Stock"
+EYES,polygon,polygon_only_new_listing,False,,EYES,ETF,Corgi Data & Surveillance ETF
+FABC,polygon,polygon_only_new_listing,False,,FABC,CS,"Fabric.AI, Inc. Common Stock"
+FDXF,polygon,polygon_only_new_listing,False,,FDXF,CS,"FedEx Freight Holding Company, Inc."
+FEMG,polygon,polygon_only_new_listing,False,,FEMG,ETF,Fidelity Enhanced Mid Cap Growth ETF
+FEMV,polygon,polygon_only_new_listing,False,,FEMV,ETF,Fidelity Enhanced Mid Cap Value ETF
+FINY,polygon,polygon_only_new_listing,False,,FINY,ETF,GraniteShares YieldBOOST Financials ETF
+FITZ,polygon,polygon_only_new_listing,False,,FITZ,ETF,Fitz-Gerald Must Have Portfolio ETF
+FIYY,polygon,polygon_only_new_listing,False,,FIYY,ETF,GraniteShares YieldBOOST 20Y Treasuries ETF
+FMAC,polygon,polygon_only_new_listing,False,,FMAC,CS,Future Money Acquisition Corporation Ordinary Shares
+FNRN,polygon,polygon_only_new_listing,False,,FNRN,CS,First Northern Community Bancorp Common stock
+FOCL,polygon,polygon_only_new_listing,False,,FOCL,ADRC,EDAP TMS S.A. American Depositary Shares
+FOTO,polygon,polygon_only_new_listing,False,,FOTO,ETF,Tuttle Capital Pure Play Photonics ETF
+FRVO,polygon,polygon_only_new_listing,False,,FRVO,CS,Fervo Energy Company Class A common stock
+FSEG,polygon,polygon_only_new_listing,False,,FSEG,ETF,Fidelity Enhanced Small Cap Growth ETF
+FSEV,polygon,polygon_only_new_listing,False,,FSEV,ETF,Fidelity Enhanced Small Cap Value ETF
+GASZ,polygon,polygon_only_new_listing,False,,GASZ,ETF,Corgi Natural Gas Power & Turbines ETF
+GIEQ,polygon,polygon_only_new_listing,False,,GIEQ,ETF,Goldman Sachs Data Enhanced International Equity ETF
+GLAM,polygon,polygon_only_new_listing,False,,GLAM,ETF,"Corgi Beauty, Skincare & Aesthetics ETF"
+GMRS,polygon,polygon_only_new_listing,False,,GMRS,CS,GMR Solutions Inc.
+GNMX,polygon,polygon_only_new_listing,False,,GNMX,ETF,Corgi Genomics & Precision Medicine ETF
+GOVM,polygon,polygon_only_new_listing,False,,GOVM,ETF,iShares 1-10 Year Treasury Bond ETF
+GTND,polygon,polygon_only_new_listing,False,,GTND,ETF,Goaltender ETF
+HALX,polygon,polygon_only_new_listing,False,,HALX,ETF,Tuttle Capital Heavy Assets Low Obsolescence ETF
+HAWK,polygon,polygon_only_new_listing,False,,HAWK,CS,"HawkEye 360, Inc."
+HBMX,polygon,polygon_only_new_listing,False,,HBMX,ETF,Tuttle Capital Concentrated Memory Stack ETF
+HDRN,polygon,polygon_only_new_listing,False,,HDRN,CS,"Hadron Energy, Inc. Common Stock"
+HIS,polygon,polygon_only_new_listing,False,,HIS,ETF,Humilis US Focused Opportunities ETF
+HJUN,polygon,polygon_only_new_listing,False,,HJUN,ETF,Corgi U.S. Equities 100% Structured Buffer ETF - June Series
+HMAY,polygon,polygon_only_new_listing,False,,HMAY,ETF,Corgi U.S. Equities 100% Structured Buffer ETF - May Series
+HONG,polygon,polygon_only_new_listing,False,,HONG,ETF,Leverage Shares 2X Long HON Daily ETF
+HULL,polygon,polygon_only_new_listing,False,,HULL,ETF,Corgi Shipping & Global Logistics ETF
+HYPG,polygon,polygon_only_new_listing,False,,HYPG,ETF,Grayscale Hyperliquid Staking ETF Common Units of fractional undivided beneficial interest
+IDJN,polygon,polygon_only_new_listing,False,,IDJN,ETF,Corgi International Developed Equities 15% Structured Buffer ETF - June Series
+IDMY,polygon,polygon_only_new_listing,False,,IDMY,ETF,Corgi International Developed Equities 15% Structured Buffer ETF - May Series
+INIO,polygon,polygon_only_new_listing,False,,INIO,CS,INNIO N.V. Ordinary Shares
+INYY,polygon,polygon_only_new_listing,False,,INYY,ETS,YieldMax INTC Option Income Strategy ETF
+IPFX,polygon,polygon_only_new_listing,False,,IPFX,CS,Inflection Point Acquisition Corp. VI Class A Ordinary Shares
+ISTM,polygon,polygon_only_new_listing,False,,ISTM,ETF,iShares U.S. ETF Trust iShares Strategic Metals ETF
+JADB,polygon,polygon_only_new_listing,False,,JADB,ETF,Aptus January Deep Buffer ETF
+JMG,polygon,polygon_only_new_listing,False,,JMG,CS,JM Group Limited
+JOUL,polygon,polygon_only_new_listing,False,,JOUL,ETF,Corgi High Voltage Grid Equipment ETF
+JPFP,polygon,polygon_only_new_listing,False,,JPFP,ETF,JPMorgan Managed Futures Plus ETF
+JUDB,polygon,polygon_only_new_listing,False,,JUDB,ETF,Aptus July Deep Buffer ETF
+JUNC,polygon,polygon_only_new_listing,False,,JUNC,ETF,Corgi U.S. Equities 10% Structured Buffer ETF - June Series
+KEEX,polygon,polygon_only_new_listing,False,,KEEX,ETF,Defiance Daily Target 2x Long KEEL ETF
+KMCA,polygon,polygon_only_new_listing,False,,KMCA,ETF,PLUS Korea Manufacturing Core Alliance Index ETF
+KPET,polygon,polygon_only_new_listing,False,,KPET,CS,KPET Ultra Paceline Corporation
+KRWX,polygon,polygon_only_new_listing,False,,KRWX,ETF,Corgi South Korea 2x Daily ETF
+KWY,polygon,polygon_only_new_listing,False,,KWY,CS,Kingsway Corporation
+KYC,polygon,polygon_only_new_listing,False,,KYC,ETF,Corgi Digital Banking & Fintech Infrastructure ETF
+LABT,polygon,polygon_only_new_listing,False,,LABT,CS,Lakewood-Amedex Biotherapeutics Inc. Common Stock
+LATR,polygon,polygon_only_new_listing,False,,LATR,ETF,Corgi Buy Now Pay Later ETF
+LAWR,polygon,polygon_only_new_listing,False,,LAWR,ADRC,"Robot Consulting Co., Ltd. ADS"
+LCLN,polygon,polygon_only_new_listing,False,,LCLN,CS,"Lincoln International, Inc."
+LEND,polygon,polygon_only_new_listing,False,,LEND,ETF,SEI High Yield Bond & Alternative Credit ETF
+LFTO,polygon,polygon_only_new_listing,False,,LFTO,CS,"Liftoff Mobile, Inc. Common Stock"
+LILAV,polygon,polygon_only_new_listing,False,,LILAV,CS,Liberty Latin America Ltd Class A Common Stock Ex-Distribution When Issued
+LILKV,polygon,polygon_only_new_listing,False,,LILKV,CS,Liberty Latin America Ltd Class C Common Stock Ex-Distribution When Issued
+LITU,polygon,polygon_only_new_listing,False,,LITU,ETF,T-REX 2X Long LITE Daily Target ETF
+LITZ,polygon,polygon_only_new_listing,False,,LITZ,ETF,Tradr 2X Short LITE Daily ETF
+LKFT,polygon,polygon_only_new_listing,False,,LKFT,ADRC,Lakefront Biotherapeutics American Depositary Shares
+LOHA,polygon,polygon_only_new_listing,False,,LOHA,ETF,Roundhill HALO ETF
+LQ,polygon,polygon_only_new_listing,False,,LQ,ETF,Simplify Tax Aware Alternatives ETF
+LQID,polygon,polygon_only_new_listing,False,,LQID,ETF,Kurv Enhanced Short Maturity ETF
+MAGH,polygon,polygon_only_new_listing,False,,MAGH,CS,Magnitude International Ltd Ordinary Shares
+MAMK,polygon,polygon_only_new_listing,False,,MAMK,CS,MaxsMaking Inc. Class A Ordinary Shares
+MAUG,polygon,polygon_only_new_listing,False,,MAUG,ETF,Pacer Swan SOS Moderate (August) ETF
+MAYC,polygon,polygon_only_new_listing,False,,MAYC,ETF,Corgi U.S. Equities 10% Structured Buffer ETF - May Series
+MBCE,polygon,polygon_only_new_listing,False,,MBCE,ETF,Monarch Blue Chips Elite Index ETF
+MCHU,polygon,polygon_only_new_listing,False,,MCHU,ETF,Tradr 2X Long MCHP Daily ETF
+MCTA,polygon,polygon_only_new_listing,False,,MCTA,CS,Charming Medical Limited Class A Ordinary Shares
+MFEB,polygon,polygon_only_new_listing,False,,MFEB,ETF,Pacer Swan SOS Moderate (February) ETF
+MGKX,polygon,polygon_only_new_listing,False,,MGKX,ETF,Corgi U.S. Mega-Cap Growth 2x Daily ETF
+MIVL,polygon,polygon_only_new_listing,False,,MIVL,ETF,MFS Active International Value ETF
+MMAY,polygon,polygon_only_new_listing,False,,MMAY,ETF,Pacer Swan SOS Moderate (May) ETF
+MNVR,polygon,polygon_only_new_listing,False,,MNVR,ETF,Pacer Swan SOS Moderate (November) ETF
+MOBI,polygon,polygon_only_new_listing,False,,MOBI,CS,"Mobia Medical, Inc. Common Stock"
+MPWX,polygon,polygon_only_new_listing,False,,MPWX,ETF,Tradr 2X Long MPWR Daily ETF
+MRA,polygon,polygon_only_new_listing,False,,MRA,ETF,GraniteShares Autocallable MARA ETF
+MSR,polygon,polygon_only_new_listing,False,,MSR,ETF,GraniteShares Autocallable MSTR ETF
+MWC,polygon,polygon_only_new_listing,False,,MWC,ADRC,"Micware Co., Ltd. American Depositary Shares"
+MYX,polygon,polygon_only_new_listing,False,,MYX,CS,Maywood Acquisition Corp. 2 Class A Ordinary Share
+NGIF,polygon,polygon_only_new_listing,False,,NGIF,ETF,Nuveen Global Infrastructure - ETF Class Shares
+NICO,polygon,polygon_only_new_listing,False,,NICO,ETF,Hexis Active Nicotine Engagement ETF
+NISM,polygon,polygon_only_new_listing,False,,NISM,ETF,NYLI International Small-Mid Cap Equity ETF
+NUDG,polygon,polygon_only_new_listing,False,,NUDG,ETF,Nuveen Dividend Growth - ETF Class Shares
+NUTR,polygon,polygon_only_new_listing,False,,NUTR,CS,Nusatrip Incorporated Common Stock
+NXB,polygon,polygon_only_new_listing,False,,NXB,CS,NextBoat Inc.
+NXPG,polygon,polygon_only_new_listing,False,,NXPG,ETF,Leverage Shares 2X Long NXPI Daily ETF
+NXPX,polygon,polygon_only_new_listing,False,,NXPX,ETF,Tradr 2X Long NXPI Daily ETF
+NYNY,polygon,polygon_only_new_listing,False,,NYNY,ETF,Corgi NYC Based ETF
+NYYY,polygon,polygon_only_new_listing,False,,NYYY,ETS,xETFs NVDA Daily Income ETF
+OCDB,polygon,polygon_only_new_listing,False,,OCDB,ETF,Aptus October Deep Buffer ETF
+OCTV,polygon,polygon_only_new_listing,False,,OCTV,CS,Octave Intelligence plc Class B Ordinary Shares
+ODDZ,polygon,polygon_only_new_listing,False,,ODDZ,ETF,Corgi Sports Betting & Gambling ETF
+ODTX,polygon,polygon_only_new_listing,False,,ODTX,CS,"Odyssey Therapeutics, Inc. Common Stock"
+ONG,polygon,polygon_only_new_listing,False,,ONG,ETF,Leverage Shares 2X Long ON Daily ETF
+ONT,polygon,polygon_only_new_listing,False,,ONT,CS,"Onterris, Inc."
+ONX,polygon,polygon_only_new_listing,False,,ONX,ETF,Tradr 2X Long ON Daily ETF
+OPTH,polygon,polygon_only_new_listing,False,,OPTH,CS,Optimi Health Corp. Common Shares
+OSSL,polygon,polygon_only_new_listing,False,,OSSL,ETF,Defiance Daily Target 2X Long OSS ETF
+OST,polygon,polygon_only_new_listing,False,,OST,CS,"Ostin Technology Group Co., Ltd. Class A Ordinary Shares"
+OWN,polygon,polygon_only_new_listing,False,,OWN,ETF,Inside Ownership 100 ETF
+PBK,polygon,polygon_only_new_listing,False,,PBK,CS,PowerBank Corporation Common Stock
+PC,polygon,polygon_only_new_listing,False,,PC,CS,Premium Catering (Holdings) Limited Ordinary Shares
+PCEB,polygon,polygon_only_new_listing,False,,PCEB,ETF,Polen Euro High Yield Bond ETF
+PCLC,polygon,polygon_only_new_listing,False,,PCLC,ETF,Polen 5Perspectives Large Growth ETF
+PCSG,polygon,polygon_only_new_listing,False,,PCSG,ETF,Polen 5Perspectives Small-Mid Growth ETF
+PECE,polygon,polygon_only_new_listing,False,,PECE,CS,Peace Acquisition Corp Ordinary Shares
+PJUS,polygon,polygon_only_new_listing,False,,PJUS,ETF,PGIM Jennison U.S. Core Equity ETF
+PLA,polygon,polygon_only_new_listing,False,,PLA,ETF,GraniteShares Autocallable PLTR ETF
+PLGO,polygon,polygon_only_new_listing,False,,PLGO,CS,Pelagos Insurance Capital Limited
+PLTS,polygon,polygon_only_new_listing,False,,PLTS,CS,Platinum Analytics Cayman Limited Class A Ordinary Shares
+POEL,polygon,polygon_only_new_listing,False,,POEL,ETF,Defiance Daily Target 2X Long POET ETF
+PONO,polygon,polygon_only_new_listing,False,,PONO,CS,"Pono Capital Four, Inc. Class A Ordinary Shares"
+PPLI,polygon,polygon_only_new_listing,False,,PPLI,CS,People Incorporated Common Stock
+PRIZ,polygon,polygon_only_new_listing,False,,PRIZ,ETF,Zacks Preferred Income ETF
+PS,polygon,polygon_only_new_listing,False,,PS,CS,Pershing Square Inc.
+PSAI,polygon,polygon_only_new_listing,False,,PSAI,ETF,Pacer S&P 500 3AI Top 100 ETF
+PSUS,polygon,polygon_only_new_listing,False,,PSUS,FUND,"Pershing Square USA, Ltd."
+PTNM,polygon,polygon_only_new_listing,False,,PTNM,CS,Pitanium Limited Class A Ordinary shares
+PTNT,polygon,polygon_only_new_listing,False,,PTNT,ETF,Corgi IP Licensing & Royalties ETF
+PUSA,polygon,polygon_only_new_listing,False,,PUSA,CS,Aureus Greenway Holdings Inc. Common Stock
+PWRL,polygon,polygon_only_new_listing,False,,PWRL,CS,Powerlaw Corp. Common Stock
+QADR,polygon,polygon_only_new_listing,False,,QADR,CS,QDRO Acquisition Corp. Class A Ordinary Shares
+QH,polygon,polygon_only_new_listing,False,,QH,ADRC,Quhuo Limited American Depository Shares
+QJN,polygon,polygon_only_new_listing,False,,QJN,ETF,Corgi Growth & Technology 10% Structured Buffer ETF - June Series
+QMMM,polygon,polygon_only_new_listing,False,,QMMM,CS,QMMM Holdings Limited Class A Ordinary Shares
+QMY,polygon,polygon_only_new_listing,False,,QMY,ETF,Corgi Growth & Technology 10% Structured Buffer ETF - May Series
+QNT,polygon,polygon_only_new_listing,False,,QNT,CS,Quantinuum Inc. Class A Common Stock
+QQJN,polygon,polygon_only_new_listing,False,,QQJN,ETF,Corgi Growth & Technology 15% Structured Buffer ETF - June Series
+QQMY,polygon,polygon_only_new_listing,False,,QQMY,ETF,Corgi Growth & Technology 15% Structured Buffer ETF - May Series
+QRED,polygon,polygon_only_new_listing,False,,QRED,CS,QuasarEdge Acquisition Corporation
+QTEX,polygon,polygon_only_new_listing,False,,QTEX,CS,QTREX Quantum Ltd. Ordinary Shares
+QVOL,polygon,polygon_only_new_listing,False,,QVOL,ETF,Infrastructure Capital Nasdaq Option Income ETF
+QXL,polygon,polygon_only_new_listing,False,,QXL,CS,Quantum X Labs Inc. Common Stock
+RACC,polygon,polygon_only_new_listing,False,,RACC,CS,Research Alliance Corporation III Class A Ordinary Shares
+RACK,polygon,polygon_only_new_listing,False,,RACK,ETF,VanEck Data Center Supply Chain ETF
+REA,polygon,polygon_only_new_listing,False,,REA,CS,"Rare Earths Americas, Inc."
+RIBB,polygon,polygon_only_new_listing,False,,RIBB,CS,Ribbon Acquisition Corp Class A Ordinary Shares
+RISE,polygon,polygon_only_new_listing,False,,RISE,ETF,Pictet Emerging Markets Rising Economies ETF
+RIZE,polygon,polygon_only_new_listing,False,,RIZE,ETF,Principal Inflation Protection ETF
+RKTO,polygon,polygon_only_new_listing,False,,RKTO,CS,Rocket One Inc. Common Stock
+RREV,polygon,polygon_only_new_listing,False,,RREV,CS,RRE Ventures Acquisition Corp. Class A Ordinary Shares
+RSIT,polygon,polygon_only_new_listing,False,,RSIT,ETF,Return Stacked International Stocks & Managed Futures ETF
+RTB,polygon,polygon_only_new_listing,False,,RTB,CS,"RTB Digital, Inc. Common Stock"
+SAGU,polygon,polygon_only_new_listing,False,,SAGU,CS,Shreya Acquisition Group
+SBMT,polygon,polygon_only_new_listing,False,,SBMT,CS,Silver Bow Mining Corp.
+SCA,polygon,polygon_only_new_listing,False,,SCA,ETF,GraniteShares Autocallable SMCI ETF
+SCJN,polygon,polygon_only_new_listing,False,,SCJN,ETF,Corgi U.S. Small-Cap 15% Structured Buffer ETF - June Series
+SCMY,polygon,polygon_only_new_listing,False,,SCMY,ETF,Corgi U.S. Small-Cap 15% Structured Buffer ETF - May Series
+SCOP,polygon,polygon_only_new_listing,False,,SCOP,ETV,Sprott Physical Copper Trust
+SDM,polygon,polygon_only_new_listing,False,,SDM,CS,Smart Digital Group Limited Ordinary Shares
+SKYA,polygon,polygon_only_new_listing,False,,SKYA,CS,"SkyAI, Inc. Common Stock"
+SMCP,polygon,polygon_only_new_listing,False,,SMCP,ETF,SMART Mid Cap ETF
+SNDG,polygon,polygon_only_new_listing,False,,SNDG,ETF,Leverage Shares 2X Long SNDK Daily ETF
+SNDQ,polygon,polygon_only_new_listing,False,,SNDQ,ETF,Tradr 2X Short SNDK Daily ETF
+SPTX,polygon,polygon_only_new_listing,False,,SPTX,CS,"Seaport Therapeutics, Inc. Common Stock"
+SSCP,polygon,polygon_only_new_listing,False,,SSCP,ETF,SMART Small Cap ETF
+SSMR,polygon,polygon_only_new_listing,False,,SSMR,CS,Sunshine Silver Mining & Refining Company
+STXL,polygon,polygon_only_new_listing,False,,STXL,ETF,Defiance Daily Target 2x Long STX ETF
+STXU,polygon,polygon_only_new_listing,False,,STXU,ETF,Leverage Shares 2X Long STX Daily ETF
+STXX,polygon,polygon_only_new_listing,False,,STXX,ETF,Tradr 2X Long STX Daily ETF
+STYL,polygon,polygon_only_new_listing,False,,STYL,ETF,Corgi Lifestyle Brands ETF
+SUIL,polygon,polygon_only_new_listing,False,,SUIL,ETF,2x Sui ETF
+SUJA,polygon,polygon_only_new_listing,False,,SUJA,CS,"Suja Life, Inc. Class A Common Stock"
+SVA,polygon,polygon_only_new_listing,False,,SVA,CS,"Sinovac Biotech, Ltd"
+TAJX,polygon,polygon_only_new_listing,False,,TAJX,ETF,Corgi India 2x Daily ETF
+TAP.A,polygon,polygon_only_new_listing,False,,TAP.A,CS,Molson Coors Beverage Company Class A
+TCAN,polygon,polygon_only_new_listing,False,,TCAN,ETF,21Shares Canton Network ETF
+TCGL,polygon,polygon_only_new_listing,False,,TCGL,CS,TechCreate Group Ltd.
+TECY,polygon,polygon_only_new_listing,False,,TECY,ETF,GraniteShares YieldBOOST Technology ETF
+TEUP,polygon,polygon_only_new_listing,False,,TEUP,ETF,T-REX 2X Long TE Daily Target ETF
+THYP,polygon,polygon_only_new_listing,False,,THYP,ETF,21Shares Hyperliquid ETF
+TKNS,polygon,polygon_only_new_listing,False,,TKNS,ETF,21Shares Active Crypto ETF
+TOAO,polygon,polygon_only_new_listing,False,,TOAO,ETF,Twin Oak Active Opportunities III ETF
+TPFC,polygon,polygon_only_new_listing,False,,TPFC,ETF,Timothy Plan Free Cash Flow ETF
+TPFG,polygon,polygon_only_new_listing,False,,TPFG,ETF,Timothy Plan Free Cash Flow Growth ETF
+TPFI,polygon,polygon_only_new_listing,False,,TPFI,ETF,Timothy Plan Fixed Income ETF
+TRUI,polygon,polygon_only_new_listing,False,,TRUI,ETF,VanEck Industrials TruSector ETF
+TRUO,polygon,polygon_only_new_listing,False,,TRUO,ETF,VanEck Consumer Staples TruSector ETF
+TXXH,polygon,polygon_only_new_listing,False,,TXXH,ETF,21Shares 2x Long HYPE ETF
+TYYY,polygon,polygon_only_new_listing,False,,TYYY,ETS,xETFs TSLA Daily Income ETF
+UCFI,polygon,polygon_only_new_listing,False,,UCFI,CS,CN Healthy Food Tech Group Corp. Common Stock
+UFOX,polygon,polygon_only_new_listing,False,,UFOX,ETF,Defiance Connective Technologies ETF
+UGLD,polygon,polygon_only_new_listing,False,,UGLD,ETF,DIREXION DAILY GOLD BULL 2X ETF
+USLV,polygon,polygon_only_new_listing,False,,USLV,ETF,DIREXION DAILY SILVER BULL 2X ETF
+USX,polygon,polygon_only_new_listing,False,,USX,ETF,Corgi Total U.S. Market 2x Daily ETF
+UUPP,polygon,polygon_only_new_listing,False,,UUPP,ETF,Principal CLO ETF
+UZX,polygon,polygon_only_new_listing,False,,UZX,CS,Linkage Global Inc Class A Ordinary Shares
+VAIE,polygon,polygon_only_new_listing,False,,VAIE,ETF,VegaShares US Equity Autocallable Income ETF
+VBIO,polygon,polygon_only_new_listing,False,,VBIO,CS,"Valion Bio, Inc. Common Stock"
+VBNB,polygon,polygon_only_new_listing,False,,VBNB,ETF,VanEck BNB ETF Common Shares of Beneficial Interest
+VBX,polygon,polygon_only_new_listing,False,,VBX,ETF,Corgi U.S. Small-Cap 2x Daily ETF
+VCHY,polygon,polygon_only_new_listing,False,,VCHY,ETF,Vanguard U.S. High-Yield Corporate Bond Index ETF
+VECA,polygon,polygon_only_new_listing,False,,VECA,CS,Vernal Capital Acquisition Corp.
+VIDA,polygon,polygon_only_new_listing,False,,VIDA,CS,VIDA Global Inc.
+VIVK,polygon,polygon_only_new_listing,False,,VIVK,CS,"Vivakor, Inc. Common Stock"
+VOOX,polygon,polygon_only_new_listing,False,,VOOX,ETF,Corgi U.S. Large-Cap 2x Daily ETF
+VSXY,polygon,polygon_only_new_listing,False,,VSXY,CS,Victorias Secret & Co.
+WARP,polygon,polygon_only_new_listing,False,,WARP,ETF,VanEck Space ETF
+WATS,polygon,polygon_only_new_listing,False,,WATS,ETF,Corgi Battery Energy Storage Systems ETF
+WDAI,polygon,polygon_only_new_listing,False,,WDAI,ETF,Pacer S&P World 3AI Top 300 ETF
+WDE,polygon,polygon_only_new_listing,False,,WDE,ETF,Principal Securitized Debt ETF
+WDIG,polygon,polygon_only_new_listing,False,,WDIG,ETF,WisdomTree Efficient Rare Earth Plus Strategic Metals Fund
+WDRN,polygon,polygon_only_new_listing,False,,WDRN,ETF,"WisdomTree Physical AI, Humanoids and Drones Fund"
+WEBX,polygon,polygon_only_new_listing,False,,WEBX,ETF,Corgi Chinese Internet 2x Daily ETF
+WENC,polygon,polygon_only_new_listing,False,,WENC,CS,West Enclave Merger Corp.
+WHK,polygon,polygon_only_new_listing,False,,WHK,CS,WhiteHawk Minerals Corp.
+WHLRL,polygon,polygon_only_new_listing,False,,WHLRL,CS,"Wheeler Real Estate Investment Trust, Inc. 7.00% Senior Subordinated Convertible Notes Due 2031"
+WNDR,polygon,polygon_only_new_listing,False,,WNDR,ETF,Corgi Travel & Leisure ETF
+WR,polygon,polygon_only_new_listing,False,,WR,ETF,Corgi U.S. War Machine ETF
+WRTH,polygon,polygon_only_new_listing,False,,WRTH,ETF,Worth Charting Options Income ETF
+WSE,polygon,polygon_only_new_listing,False,,WSE,CS,Wise Group plc Class A Ordinary Shares
+WSO.B,polygon,polygon_only_new_listing,False,,WSO.B,CS,"Watsco, Inc. Class B"
+WX,polygon,polygon_only_new_listing,False,,WX,ETF,Corgi All World 2x Daily ETF
+WYFL,polygon,polygon_only_new_listing,False,,WYFL,ETF,Defiance Daily Target 2X Long WYFI ETF
+XA,polygon,polygon_only_new_listing,False,,XA,ETF,Corgi AI Cybersecurity ETF
+XAGI,polygon,polygon_only_new_listing,False,,XAGI,ETF,Corgi AGIX 2x Daily ETF
+XBIX,polygon,polygon_only_new_listing,False,,XBIX,ETF,Corgi U.S. Biotech 2x Daily ETF
+XBNB,polygon,polygon_only_new_listing,False,,XBNB,ETF,Teucrium xETFs 2x Long Daily BNB ETF
+XCOM,polygon,polygon_only_new_listing,False,,XCOM,ETF,Corgi All Commodities 2x Daily ETF
+XE,polygon,polygon_only_new_listing,False,,XE,CS,"X-Energy, Inc. Class A Common Stock"
+XEUR,polygon,polygon_only_new_listing,False,,XEUR,ETF,Corgi Europe Equities 2x Daily ETF
+XEY,polygon,polygon_only_new_listing,False,,XEY,ETF,GraniteShares YieldBOOST Ether ETF
+XHOA,polygon,polygon_only_new_listing,False,,XHOA,ETF,Corgi U.S. Real Estate 2x Daily ETF
+XIWC,polygon,polygon_only_new_listing,False,,XIWC,ETF,Corgi U.S. Micro-Cap 2x Daily ETF
+XKRE,polygon,polygon_only_new_listing,False,,XKRE,ETF,Corgi U.S. Regional Banks 2x Daily ETF
+XLBX,polygon,polygon_only_new_listing,False,,XLBX,ETF,Corgi U.S. Materials 2x Daily ETF
+XLEX,polygon,polygon_only_new_listing,False,,XLEX,ETF,Corgi U.S. Energy 2x Daily ETF
+XLFX,polygon,polygon_only_new_listing,False,,XLFX,ETF,Corgi U.S. Financials 2x Daily ETF
+XLIX,polygon,polygon_only_new_listing,False,,XLIX,ETF,Corgi U.S. Industrials 2x Daily ETF
+XLKX,polygon,polygon_only_new_listing,False,,XLKX,ETF,Corgi U.S. Technology 2x Daily ETF
+XLPX,polygon,polygon_only_new_listing,False,,XLPX,ETF,Corgi U.S. Consumer Staples 2x Daily ETF
+XLUX,polygon,polygon_only_new_listing,False,,XLUX,ETF,Corgi U.S. Utilities 2x Daily ETF
+XLVX,polygon,polygon_only_new_listing,False,,XLVX,ETF,Corgi U.S. Healthcare 2x Daily ETF
+XLYX,polygon,polygon_only_new_listing,False,,XLYX,ETF,Corgi U.S. Consumer Discretionary 2x Daily ETF
+XMAX,polygon,polygon_only_new_listing,False,,XMAX,CS,"XMAX, Inc. Common Stock"
+XNDX,polygon,polygon_only_new_listing,False,,XNDX,ETF,Tradr 2X Long XNDU Daily ETF
+XOVL,polygon,polygon_only_new_listing,False,,XOVL,ETF,Defiance Daily Target 2X Long XOVR ETF
+XPAV,polygon,polygon_only_new_listing,False,,XPAV,ETF,Corgi U.S. Infrastructure 2x Daily ETF
+XSEM,polygon,polygon_only_new_listing,False,,XSEM,ETF,Corgi U.S. Semiconductors 2x Daily ETF
+XTAI,polygon,polygon_only_new_listing,False,,XTAI,ETF,Corgi Taiwan 2x Daily ETF
+XVO,polygon,polygon_only_new_listing,False,,XVO,ETF,Corgi U.S. Mid-Cap 2x Daily ETF
+XVUG,polygon,polygon_only_new_listing,False,,XVUG,ETF,Corgi U.S. Growth 2x Daily ETF
+XW,polygon,polygon_only_new_listing,False,,XW,ETF,Corgi Ex-U.S. Equities 2x Daily ETF
+YCLO,polygon,polygon_only_new_listing,False,,YCLO,ETF,Franklin BSP CLO ETF
+YUNG,polygon,polygon_only_new_listing,False,,YUNG,ETF,Corgi Longevity Consumer ETF
+ZINC,polygon,polygon_only_new_listing,False,,ZINC,ETF,Zacks Income ETF
+ZSQR,polygon,polygon_only_new_listing,False,,ZSQR,CS,Z Squared Inc. Common Stock

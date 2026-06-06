@@ -44,6 +44,17 @@ tools/watchlists
 # Claude AI internal config
 .claude/
 
+# --- Unified market-data pipeline ---
+# Ignore the bulk price data (2.8GB+); KEEP the code (src/), docs (*.md),
+# metadata (classification CSV, manifest/summary JSON), and audit reports so the
+# pipeline is reproducible and version-controlled without bloating the repo.
+data/market_data/merged/
+data/market_data/polygon_raw/
+data/market_data/polygon_normalized/
+data/market_data/polygon_patch/
+data/market_data/logs/
+data_cache/
+
 # Private strategies (belt & suspenders - submodule handles this, but safety first)
 # This prevents accidental commits if someone copies files instead of using the submodule
 custom_strategies/private/*.py

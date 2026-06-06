@@ -1,0 +1,22 @@
+symbol,source_feed,bucket,required_asset,last_date,polygon_ticker,security_type,note
+$DJI,norgate,norgate_only_exclude_nontradeable,True,2026-04-22,,index,norgate breadth/index
+$NDX,norgate,norgate_only_exclude_nontradeable,True,2026-04-22,,index,norgate breadth/index
+$OEX,norgate,norgate_only_exclude_nontradeable,True,2026-04-22,,index,norgate breadth/index
+$RUT,norgate,norgate_only_exclude_nontradeable,True,2026-04-22,,index,norgate breadth/index
+$SPX,norgate,norgate_only_exclude_nontradeable,True,2026-04-22,,index,norgate breadth/index
+$VIX,norgate,norgate_only_exclude_nontradeable,True,2026-04-22,,index,norgate breadth/index
+$VXN,norgate,norgate_only_exclude_nontradeable,True,2026-04-22,,index,norgate breadth/index
+DIA,both,common_to_both,True,2026-04-22,DIA,ETF,matched
+GLD,both,common_to_both,True,2026-04-22,GLD,ETV,matched
+HYG,both,common_to_both,True,2026-04-22,HYG,ETF,matched
+IEF,both,common_to_both,True,2026-04-22,IEF,ETF,matched
+IWM,both,common_to_both,True,2026-04-22,IWM,ETF,matched
+LQD,both,common_to_both,True,2026-04-22,LQD,ETF,matched
+QQQ,both,common_to_both,True,2026-04-22,QQQ,ETF,matched
+SLV,both,common_to_both,True,2026-04-22,SLV,ETV,matched
+SPY,both,common_to_both,True,2026-04-22,SPY,ETF,matched
+TLT,both,common_to_both,True,2026-04-22,TLT,ETF,matched
+TNX,norgate,norgate_only_delisted_keep,True,2026-03-20,,equity_or_etf,"delisted, keep full history"
+UUP,both,common_to_both,True,2026-04-22,UUP,ETV,matched
+VIX,norgate,norgate_only_delisted_keep,True,2026-03-20,,equity_or_etf,"delisted, keep full history"
+XLF,both,common_to_both,True,2026-04-22,XLF,ETF,matched

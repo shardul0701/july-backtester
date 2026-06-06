@@ -1,0 +1,74 @@
+{
+  "generated_at": "2026-06-06 09:07:03",
+  "git_commit": "98b03f6",
+  "anchor": "2026-04-22",
+  "patch_start": "2026-04-23",
+  "ground_truth": "merged/ directory + audit summary (single pass)",
+  "merged_files_total": 35310,
+  "suffixed_delisted_files": 20911,
+  "indices_present": [
+    "DJI",
+    "NDX",
+    "OEX",
+    "RUT",
+    "SPX",
+    "TNX",
+    "VIX",
+    "VXN"
+  ],
+  "index_validation": {
+    "ok": 8,
+    "bad": 0
+  },
+  "status_counts": {
+    "ok": 34143,
+    "review_no_patch": 698,
+    "insufficient_history": 351,
+    "identity_review": 110,
+    "flagged": 8
+  },
+  "bucket_counts_materialized": {
+    "norgate_only_delisted_keep": 21968,
+    "common_to_both": 11853,
+    "norgate_only_review": 698,
+    "polygon_only_new_listing": 373,
+    "polygon_only_exclude_nontradeable": 319,
+    "polygon_only_coverage_gap": 91,
+    "required_index": 8
+  },
+  "insufficient_history": 351,
+  "classification_bucket_counts": {
+    "norgate_only_delisted_keep": 22402,
+    "common_to_both": 11853,
+    "norgate_only_exclude_nontradeable": 1615,
+    "norgate_only_review": 698,
+    "polygon_only_exclude_nontradeable": 457,
+    "polygon_only_new_listing": 374,
+    "polygon_only_coverage_gap": 95
+  },
+  "recycled_ticker_collisions": [
+    "APUS",
+    "EFTY",
+    "EMPG",
+    "JMG",
+    "LAWR",
+    "MAGH",
+    "MAMK",
+    "MCTA",
+    "NUTR",
+    "OST",
+    "PC",
+    "PLTS",
+    "PTNM",
+    "QMMM",
+    "RIBB",
+    "SDM",
+    "SVA",
+    "TAP.A",
+    "TCGL",
+    "UCFI",
+    "WHLRL",
+    "WSO.B"
+  ],
+  "note": "Authoritative for reporting. Supersedes merge_summary.json (write-time return counts) and standalone insufficient-history CSVs (different pipeline states). classification_bucket_counts are CLASSIFIED rows; bucket_counts_materialized are what actually landed in merged/ \u2014 a gap means rows with no source data to write."
+}
