@@ -91,6 +91,9 @@ KNOWN_KEYS: set[str] = {
     "verbose_output",
     # SECTION 22: Realized-Only Reporting
     "exclude_open_positions",
+    # SECTION 24: Deterministic Entry Queue
+    "entry_priority",
+    "entry_random_seed",
     # S3
     "s3_reports_bucket",
     "upload_to_s3",
