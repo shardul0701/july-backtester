@@ -364,6 +364,17 @@ CONFIG = {
     # False (default) = include EoB mark-to-market closes (original behaviour)
     # True            = realized trades only; EoB positions are dropped
     "exclude_open_positions": False,
+
+    # ============================================================
+    # SECTION 23: FORWARD TESTING — Capital isolation model
+    # ============================================================
+    # "isolated" (default): each strategy gets its own fixed dollar slice.
+    # This is the only model that maps backtest P&L to forward P&L 1:1.
+    # "shared" is a future path — documented but not yet implemented.
+    "forward_test_mode": {
+        "capital_model": "isolated",        # "isolated" (default) | "shared" (future)
+        "strategy_capital_allocation": {},  # {strategy_name: dollar_amount}; empty = initial_capital / N
+    },
 }
 
 if CONFIG.get("data_provider") == "norgate":  # noqa: SIM102

@@ -22,6 +22,7 @@ from multiprocessing import Pool, cpu_count
 import orjson
 from helpers.caching import CACHE_DIR
 from helpers.noise import inject_price_noise
+from helpers.config_validators import validate_forward_test_mode
 
 logger = logging.getLogger(__name__)
 
@@ -273,6 +274,20 @@ def main():
 
     if not CONFIG.get("portfolios"):
         errors.append("  - portfolios is empty. Add at least one entry to run, e.g. \"My Symbols\": [\"AAPL\"].")
+
+    errors.extend(validate_forward_test_mode(CONFIG.get("forward_test_mode", {})))
+
+    ft = CONFIG.get("forward_test_mode", {})
+    allocs = ft.get("strategy_capital_allocation") if ft else None
+    if allocs:
+        total_allocated = sum(allocs.values())
+        initial = CONFIG.get("initial_capital", 0)
+        if initial > 0 and abs(total_allocated - initial) > 1e-6:
+            logger.warning(
+                f"[forward_test_mode] strategy_capital_allocation sums to "
+                f"${total_allocated:,.2f} but initial_capital is ${initial:,.2f}. "
+                "Adjust allocations or leave strategy_capital_allocation empty to auto-split."
+            )
 
     if errors:
         print("\n[ERROR] Invalid configuration in config.py:")
