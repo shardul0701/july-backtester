@@ -189,16 +189,12 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     'Profit': net_pnl, 'ProfitPct': net_pnl / spos['notional'] if spos['notional'] > 0 else 0,
                     'Shares': spos['shares'], 'is_win': 1 if net_pnl > 0 else 0,
                     'HoldDuration': (date - spos['entry_date']).days,
-<<<<<<< Updated upstream
-                    'MAE_pct': 0.0, 'MFE_pct': 0.0, 'ExitReason': 'Short Cover',
-=======
                     'MAE_pct': short_mae, 'MFE_pct': short_mfe,
                     'ExitReason': (
                         'PIT Membership Exit (last available close)' if pit_force_exit
                         else 'PIT Membership Exit' if not pit_member
                         else 'Short Cover'
                     ),
->>>>>>> Stashed changes
                     'InitialRisk': 0.0, 'RMultiple': None,
                 })
                 short_exited.append(symbol)
