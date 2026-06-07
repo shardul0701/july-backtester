@@ -590,57 +590,14 @@ In `helpers/summary.py::generate_per_portfolio_summary()`, Step 4b's `save_only_
 
 **Model B — shared:** future path — not yet implemented. All strategies draw from a common cash pool.
 
-**Validation** (in `main.py` S2 block via `helpers/config_validators.py::validate_forward_test_mode`):
+**Validation** (in `main.py` S2 block via `helpers/config_validator.py::validate_forward_test_mode`):
 - `capital_model` must be `"isolated"` or `"shared"` — any other value is a startup error.
 - Negative `strategy_capital_allocation` values are a startup error.
 
-**Tests:** `tests/test_forward_test_config.py` — 12 unit tests, imports `validate_forward_test_mode` directly via `importlib.util` to avoid the heavy `helpers/__init__.py` chain (pandas_ta / orjson) that breaks in CI's Python 3.9 environment.
+**Tests:** `validate_forward_test_mode` is covered by `tests/test_config_validator.py` (or equivalent) via direct import from `helpers/config_validator.py`.
 
 ## Alpaca Paper Trading (issues #163, #164)
 
-### Adapter script — `scripts/alpaca_paper_runner.py`
+> **Status: NOT YET INTEGRATED** — Alpaca integration is blocked on the capital isolation architecture decision (issue #162). Scripts and tests live in a separate branch and will land once #162 is resolved.
 
-Reads `order_manifest.csv` from a backtest run and submits market-on-open (MOO) orders to Alpaca paper trading.
-
-**Depends on ticket #161** (order manifest output from engine). Until #161 is complete, use `scripts/alpaca_rebalance_from_vt12_targets.py` for target-weight rebalancing.
-
-```bash
-# Dry-run (default — no orders submitted):
-python scripts/alpaca_paper_runner.py --run-id 2026-06-05_09-00-00
-
-# Submit actual orders (requires safety flag):
-python scripts/alpaca_paper_runner.py --run-id 2026-06-05_09-00-00 \
-    --submit --i-understand-submit
-```
-
-**Config section** (config.py SECTION 23):
-```python
-"alpaca": {
-    "api_key_env": "APCA_API_KEY_ID",
-    "secret_key_env": "APCA_API_SECRET_KEY",
-    "base_url": "https://paper-api.alpaca.markets",
-    "order_timeout_seconds": 300,
-}
-```
-
-**API keys:** Set `APCA_API_KEY_ID` and `APCA_API_SECRET_KEY` in `.env`. Get paper keys at app.alpaca.markets → Paper Trading → API Keys.
-
-**Output:** `output/runs/<run_id>/alpaca_fills.csv` — one row per order with fill price, slippage bps, order ID, and status.
-
-**Error handling:** Non-tradeable symbols (indexes, delisted) → logged as skipped. Partial fills and order timeouts → recorded in fills CSV; do not crash the runner.
-
-**Tests:** `tests/test_alpaca_adapter.py` — 17 mocked tests (no live network). Covers manifest loading, order building, fill slippage calculation, dry-run end-to-end, and submit mode with mocked Alpaca responses.
-
-### Reconciliation script — `scripts/reconcile_fills.py`
-
-Joins `order_manifest.csv` with `alpaca_fills.csv` and prints a four-section report.
-
-```bash
-python scripts/reconcile_fills.py --run-id 2026-06-05_09-00-00
-```
-
-**Report sections:** per-trade diff table, aggregate slippage summary (with recalibration warning if median diverges >20% from `slippage_pct`), unfilled order audit, symbol fill rate (flags < 90%).
-
-**Output:** `output/runs/<run_id>/fill_reconciliation.csv`
-
-**Tests:** `tests/test_fill_reconciliation.py` — 12 fixture-based tests (no network).
+The config skeleton for Alpaca credentials is in `config.py` SECTION 23 (keys: `api_key_env`, `secret_key_env`, `base_url`, `order_timeout_seconds`). API keys go in `.env` as `APCA_API_KEY_ID` / `APCA_API_SECRET_KEY`.

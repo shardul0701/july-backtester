@@ -5,9 +5,9 @@ Edit the values below before running.  Every key is documented; do NOT rename
 or remove keys — the engine validates against a known allowlist in
 helpers/config_validator.py and will warn on typos.
 
-Research-specific presets (e.g. config_weekly_rsi.py) live next to this file.
-Copy the preset over config.py temporarily when you want to reproduce a
-specific experiment, and restore this file when you are done.
+Research-specific presets (e.g. config_weekly_rsi.py) should NOT be committed
+to the repo. Keep experiment configs locally and copy values into this file
+temporarily when reproducing an experiment, then restore before committing.
 """
 
 CONFIG = {
@@ -205,7 +205,8 @@ CONFIG = {
     # SECTION 23: ALPACA PAPER TRADING
     # ============================================================
     # API keys are read from env vars / .env (never hardcoded here).
-    # Run:  python scripts/alpaca_paper_runner.py --run-id <run_id> [--dry-run]
+    # Alpaca integration scripts (issues #163/#164) are blocked on the capital
+    # isolation architecture decision (#162) and live in a separate branch.
     "alpaca": {
         "api_key_env": "APCA_API_KEY_ID",
         "secret_key_env": "APCA_API_SECRET_KEY",
