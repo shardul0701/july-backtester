@@ -61,7 +61,7 @@ PIT_TICKER_NORMALISATION = {
     #
     # GOOG / GOOGL note: post-split NQ100 YAML files list BOTH as distinct members.
     # Mapping GOOG -> GOOGL would silently collapse them; both pass through unchanged.
-    "PCLN": "BKNG", "HANS": "MNST", "GOOG": "GOOGL",
+    "PCLN": "BKNG", "HANS": "MNST",
     # --- S&P 500 renames / mergers (old -> surviving ticker) ---
     "ABC": "COR", "ADS": "BFH", "ANTM": "ELV", "BHGE": "BKR", "BLL": "BALL",
     "CCE": "CCEP", "CDAY": "DAY", "CHK": "EXE", "COG": "CTRA", "CTL": "LUMN",
