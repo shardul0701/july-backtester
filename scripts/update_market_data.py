@@ -62,8 +62,11 @@ def main():
     polygon_io.pull_splits(logger=log)
     polygon_io.pull_dividends(logger=log)
 
-    # Guard: pull_range returns [] on market holidays or empty reruns.
-    # Proceeding with an empty list would IndexError and corrupt patch state.
+    # PR #187 Fix 4 — empty trading_days guard (review item: minor nit)
+    # polygon_io.pull_range() returns [] on US market holidays and on reruns where
+    # every date in the window is already cached. Without this guard, trading_days[-1]
+    # raised IndexError and left patch state in a partially-written, inconsistent
+    # condition that silently broke the next successful run.
     if not trading_days:
         log.warning("pull_range returned no trading days (holiday or empty rerun) — nothing to update.")
         return

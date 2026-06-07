@@ -100,10 +100,15 @@ def build(skip_delisted=False, indices_only=False, asof=None, log=None):
     else:
         log.info("skipped Case B (delisted)")
 
-    # Re-merge required index assets UNCONDITIONALLY so they always win any name
-    # collision (e.g. a delisted equity tickered "VIX" or "TNX" from Case B above,
-    # or from the daily updater which runs with skip_delisted=True and previously
-    # skipped this guard entirely).
+    # PR #187 Fix 5 — unconditional index re-merge (review item: minor nit)
+    # Previously this block sat inside `if not skip_delisted:`, so two callers
+    # never triggered it:
+    #   (a) daily update_market_data.py calls build(skip_delisted=True)
+    #   (b) build(indices_only=True) also skipped Case B
+    # A delisted equity tickered "VIX" or "TNX" (Case B) could overwrite the real
+    # index file and corrupt the merged dataset silently. Moving the re-merge
+    # outside the conditional ensures index assets always win any name collision
+    # regardless of which build mode is active.
     reidx = 0
     for sym in REQUIRED_INDICES:
         try:

@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 KNOWN_KEYS: set[str] = {
     # SECTION 1: Data Provider
     "data_provider",
-    "polygon_api_secret_name",
+    "polygon_api_secret_name",  # PR #187: added — was triggering "unknown key" warning
     "csv_data_dir",
     "parquet_data_dir",
     # SECTION 2: Backtest Period & Capital
@@ -124,6 +124,11 @@ KNOWN_KEYS: set[str] = {
 
 def validate_forward_test_mode(ft: dict) -> list[str]:
     """Return a list of error strings for an invalid forward_test_mode config.
+
+    PR #187 Fix 6 — moved here from helpers/config_validators.py (plural) so
+    all config-validation logic lives in a single canonical module.
+    config_validators.py is now a one-line shim that re-exports this function
+    for backward compatibility with any existing importers.
 
     Empty list means valid.
     """

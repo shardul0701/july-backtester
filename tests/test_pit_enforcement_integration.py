@@ -1,14 +1,26 @@
 """Integration test: pit_enforcement columns are correctly written into
 portfolio_data and the simulator respects them end-to-end.
 
-Zach PR #187 review (Major #2): pit_enforcement.py was tested in isolation but
-never wired into the engine — _pit_force_exit was always False because main.py
-never populated the column.  These tests verify the full pipeline:
+PR #187 Fix 2 — Major review item from @zachisit:
+  pit_enforcement.py (build_member_mask, build_forced_exit_mask) was fully unit-tested
+  in isolation but never connected to the engine. main.py built _pit_member_masks but
+  never wrote the resulting values as columns into portfolio_data, so _pit_flag() in
+  portfolio_simulations.py always returned the column-absent default (False), making
+  PIT membership enforcement a no-op at runtime despite passing all unit tests.
 
-  build_member_mask / build_forced_exit_mask
-      → written as _pit_member / _pit_force_exit columns in portfolio_data
-          → simulator reads them via _pit_flag()
-              → trade exits with the correct ExitReason
+Fix: main.py now writes _pit_member and _pit_force_exit as DataFrame columns for
+every symbol in portfolio_data before tasks are dispatched to the worker pool.
+
+Test classes
+------------
+TestBuildMemberMask       — unit: build_member_mask produces correct True/False pattern
+                            across single spells, gaps, and edge cases (all tests use
+                            pd.bdate_range — Mon–Fri only, never weekend dates).
+TestBuildForcedExitMask   — unit: build_forced_exit_mask marks the last member bar
+                            only when no timely post-leave bar exists within exit_buffer.
+TestPitColumnsWiredIntoSimulator — integration: _pit_member / _pit_force_exit columns
+                            written to a real DataFrame propagate correctly through
+                            run_portfolio_simulation → _pit_flag() → ExitReason.
 """
 import pandas as pd
 import pytest
@@ -134,10 +146,12 @@ class TestBuildForcedExitMask:
 # ---------------------------------------------------------------------------
 
 class TestPitColumnsWiredIntoSimulator:
-    """Prove a non-member / force-exited symbol triggers the correct ExitReason."""
+    """Prove the full pipeline: column values written by main.py reach _pit_flag()
+    in the simulator and produce the correct trade behaviour and ExitReason."""
 
     def _run(self, df, sym="FAKE"):
         from helpers.portfolio_simulations import run_portfolio_simulation
+        # Constant buy signal — strategy always wants in; PIT columns decide eligibility.
         signals = {sym: pd.Series(1, index=df.index)}
         with patch.dict("config.CONFIG", _SIM_CONFIG):
             return run_portfolio_simulation(
@@ -146,15 +160,19 @@ class TestPitColumnsWiredIntoSimulator:
             )
 
     def test_non_member_symbol_produces_no_trades(self):
+        # _pit_member=False for the entire period → simulator never enters.
+        # run_portfolio_simulation returns None (not a dict) when pnl_list is empty.
         idx = pd.bdate_range("2020-01-02", "2020-01-31")
         df = _frame(idx)
         df["_pit_member"] = False
         df["_pit_force_exit"] = False
         result = self._run(df)
-        # run_portfolio_simulation returns None when there are no trades
-        assert result is None
+        assert result is None  # None = no trades; subscripting None was the pre-fix crash
 
     def test_member_symbol_exits_on_membership_end(self):
+        # Symbol is member through 2020-01-15 (Wed), non-member after.
+        # Simulator should enter on the first member bar and fire "PIT Membership Exit"
+        # when it encounters the first non-member bar.
         idx = pd.bdate_range("2020-01-02", "2020-01-31")
         removal = pd.Timestamp("2020-01-15")   # Wednesday
         df = _frame(idx)
@@ -166,6 +184,10 @@ class TestPitColumnsWiredIntoSimulator:
         assert "PIT Membership Exit" in last["ExitReason"]
 
     def test_force_exit_closes_at_last_member_bar(self):
+        # _pit_force_exit=True on 2020-01-08 (Wed) tells the simulator to close
+        # at that bar's Close price rather than waiting for the next open.
+        # Used when a symbol is removed from the index with no next-bar available
+        # (e.g. sudden delisting or data gap at end of backtest period).
         idx = pd.bdate_range("2020-01-02", "2020-01-10")
         force_date = pd.Timestamp("2020-01-08")  # Wednesday
         df = _frame(idx)
