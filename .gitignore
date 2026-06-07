@@ -61,3 +61,6 @@ custom_strategies/private/*.py
 !custom_strategies/private/_TEMPLATE_strategy.py
 custom_strategies/private/**/*.py
 !custom_strategies/private/.gitkeep
+# Binary data files — belong in private data submodule (july-backtester-norgate-data)
+data/nq100_membership.parquet
+data/*.parquet
