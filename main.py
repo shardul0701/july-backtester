@@ -291,9 +291,12 @@ def main():
     from datetime import datetime as _dt
     try:
         start = _dt.strptime(CONFIG["start_date"], "%Y-%m-%d")
-        end = _dt.strptime(CONFIG["end_date"], "%Y-%m-%d")
-        if start >= end:
-            errors.append(f"  - start_date ({CONFIG['start_date']}) must be before end_date ({CONFIG['end_date']})")
+        # end_date=None means "today" — skip comparison, it's always valid
+        _end_date_str = CONFIG.get("end_date")
+        if _end_date_str is not None:
+            end = _dt.strptime(_end_date_str, "%Y-%m-%d")
+            if start >= end:
+                errors.append(f"  - start_date ({CONFIG['start_date']}) must be before end_date ({_end_date_str})")
     except ValueError as e:
         errors.append(f"  - Invalid date format in config: {e}")
 

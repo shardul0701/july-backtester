@@ -27,7 +27,7 @@ CONFIG = {
     # SECTION 2: BACKTEST PERIOD & CAPITAL
     # ============================================================
     "start_date": "2004-01-01",
-    "end_date": None,          # None = today
+    "end_date": "2026-12-31",  # update this or set to today's date before running
     "initial_capital": 100000.0,
 
     # ============================================================
@@ -149,7 +149,7 @@ CONFIG = {
     # ============================================================
     # SECTION 17: SHORT SELLING BORROW COST
     # ============================================================
-    "htb_rate_annual": 0.02,        # 2% annual HTB; 0.0 = no borrow cost
+    "htb_rate_annual": 0.0,         # 0.0 = disabled (long-only default); set to e.g. 0.02 for short strategies
 
     # ============================================================
     # SECTION 18: MONTE CARLO SAMPLING

@@ -12,52 +12,61 @@ never populated the column.  These tests verify the full pipeline:
 """
 import pandas as pd
 import pytest
+from unittest.mock import patch
 
 from helpers.pit_enforcement import build_member_mask, build_forced_exit_mask
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Minimal sim config (matches test_pipeline_fixes.py pattern)
 # ---------------------------------------------------------------------------
+_SIM_CONFIG = {
+    "execution_time": "open",
+    "slippage_pct": 0.0,
+    "commission_per_share": 0.0,
+    "max_pct_adv": 0.0,
+    "volume_impact_coeff": 0.0,
+    "htb_rate_annual": 0.0,
+    "exclude_open_positions": False,
+    "risk_free_rate": 0.0,
+    "timeframe": "D",
+    "timeframe_multiplier": 1,
+    "rolling_sharpe_window": 0,
+}
 
-def _make_df(idx, member_until=None, force_exit_on=None):
-    """Minimal OHLCV frame with PIT columns."""
-    df = pd.DataFrame(
+
+def _frame(idx):
+    """Minimal OHLCV frame with no PIT columns (caller adds them)."""
+    return pd.DataFrame(
         {
             "Open": 100.0,
             "High": 105.0,
             "Low": 95.0,
             "Close": 100.0,
             "Volume": 1_000_000,
-            "Signal": 1,
             "ATR_14": 2.0,
+            "Volume_Spike": 1.0,
         },
         index=idx,
     )
-    if member_until is not None:
-        df["_pit_member"] = idx <= pd.Timestamp(member_until)
-    else:
-        df["_pit_member"] = True
-    df["_pit_force_exit"] = False
-    if force_exit_on is not None:
-        df.loc[pd.Timestamp(force_exit_on), "_pit_force_exit"] = True
-    return df
 
 
 # ---------------------------------------------------------------------------
-# build_member_mask
+# build_member_mask  — uses pd.bdate_range (Mon–Fri), all dates must be weekdays
 # ---------------------------------------------------------------------------
 
 class TestBuildMemberMask:
     def test_single_spell_covers_correct_range(self):
+        # 2020-01-02 Thu, 2020-01-03 Fri, 2020-01-06 Mon … 2020-01-10 Fri
         idx = pd.bdate_range("2020-01-02", "2020-01-10")
-        intervals = [(pd.Timestamp("2020-01-05"), pd.Timestamp("2020-01-09"))]
+        intervals = [(pd.Timestamp("2020-01-06"), pd.Timestamp("2020-01-09"))]
         mask = build_member_mask(idx, intervals)
-        assert not mask["2020-01-02"]
-        assert mask["2020-01-05"]
-        assert mask["2020-01-07"]
-        assert mask["2020-01-09"]
-        assert not mask["2020-01-10"]
+        assert not mask.loc["2020-01-02"]   # before spell
+        assert not mask.loc["2020-01-03"]   # before spell
+        assert mask.loc["2020-01-06"]       # spell start (Monday)
+        assert mask.loc["2020-01-07"]       # inside spell
+        assert mask.loc["2020-01-09"]       # spell end
+        assert not mask.loc["2020-01-10"]   # after spell
 
     def test_empty_intervals_returns_all_false(self):
         idx = pd.bdate_range("2020-01-02", "2020-01-10")
@@ -71,12 +80,12 @@ class TestBuildMemberMask:
             (pd.Timestamp("2020-01-13"), pd.Timestamp("2020-01-16")),
         ]
         mask = build_member_mask(idx, intervals)
-        assert mask["2020-01-02"]
-        assert mask["2020-01-07"]
-        assert not mask["2020-01-08"]   # gap
-        assert not mask["2020-01-09"]   # gap
-        assert mask["2020-01-13"]
-        assert mask["2020-01-16"]
+        assert mask.loc["2020-01-02"]
+        assert mask.loc["2020-01-07"]
+        assert not mask.loc["2020-01-08"]   # gap (Wednesday)
+        assert not mask.loc["2020-01-09"]   # gap (Thursday)
+        assert mask.loc["2020-01-13"]
+        assert mask.loc["2020-01-16"]
 
     def test_full_period_spell_returns_all_true(self):
         idx = pd.bdate_range("2020-01-02", "2020-01-10")
@@ -91,14 +100,12 @@ class TestBuildMemberMask:
 
 class TestBuildForcedExitMask:
     def test_spell_ending_at_backtest_end_is_not_forced(self):
-        """If the spell ends at (or after) the backtest end, no forced exit needed."""
         idx = pd.bdate_range("2020-01-02", "2020-01-10")
         intervals = [(pd.Timestamp("2020-01-02"), pd.Timestamp("2020-01-10"))]
         forced = build_forced_exit_mask(idx, intervals, backtest_end="2020-01-10")
         assert not forced.any()
 
     def test_spell_ending_with_timely_post_bar_is_not_forced(self):
-        """There are bars after the spell end within the buffer — normal exit."""
         idx = pd.bdate_range("2020-01-02", "2020-01-16")
         intervals = [(pd.Timestamp("2020-01-02"), pd.Timestamp("2020-01-09"))]
         forced = build_forced_exit_mask(idx, intervals, backtest_end="2020-01-16",
@@ -106,17 +113,15 @@ class TestBuildForcedExitMask:
         assert not forced.any()
 
     def test_no_post_leave_bar_marks_last_member_bar(self):
-        """Delisted with no trading days after removal → mark last member bar."""
+        # Spell ends 2020-01-10; backtest ends 2020-01-20 but buffer=1 day means
+        # next bar must be within 1 calendar day of 2020-01-10 — there is none
+        # (next bday is 2020-01-13, which is 3 calendar days away).
         idx = pd.bdate_range("2020-01-02", "2020-01-10")
         intervals = [(pd.Timestamp("2020-01-02"), pd.Timestamp("2020-01-10"))]
-        # backtest ends on 2020-01-10 too, but the spell ends exactly there — no
-        # bar exists AFTER the spell end within the buffer.
         forced = build_forced_exit_mask(idx, intervals, backtest_end="2020-01-20",
                                         exit_buffer_days=1)
-        # last member bar = 2020-01-10; no post bar within 1 day → forced
-        assert forced["2020-01-10"]
-        # earlier bars are not forced
-        assert not forced["2020-01-09"]
+        assert forced.loc["2020-01-10"]
+        assert not forced.loc["2020-01-09"]
 
     def test_empty_intervals_returns_all_false(self):
         idx = pd.bdate_range("2020-01-02", "2020-01-10")
@@ -125,58 +130,50 @@ class TestBuildForcedExitMask:
 
 
 # ---------------------------------------------------------------------------
-# End-to-end: columns written into portfolio_data → simulator respects them
+# End-to-end: _pit_member / _pit_force_exit columns → simulator respects them
 # ---------------------------------------------------------------------------
 
 class TestPitColumnsWiredIntoSimulator:
-    """Verify that _pit_member=False actually blocks entry and triggers exit."""
+    """Prove a non-member / force-exited symbol triggers the correct ExitReason."""
 
-    def _run_sim(self, portfolio_data, config=None):
+    def _run(self, df, sym="FAKE"):
         from helpers.portfolio_simulations import run_portfolio_simulation
-        from config import CONFIG as _CONFIG
-
-        cfg = dict(_CONFIG)
-        if config:
-            cfg.update(config)
-
-        stop_config = {"type": "none"}
-        signals = {sym: df["Signal"] for sym, df in portfolio_data.items()}
-        return run_portfolio_simulation(
-            portfolio_data=portfolio_data,
-            signals=signals,
-            initial_capital=100_000.0,
-            allocation_per_trade=0.10,
-            stop_config=stop_config,
-            slippage_pct=0.0,
-            commission_per_share=0.0,
-            config=cfg,
-        )
+        signals = {sym: pd.Series(1, index=df.index)}
+        with patch.dict("config.CONFIG", _SIM_CONFIG):
+            return run_portfolio_simulation(
+                {sym: df}, signals, 10_000.0, 0.5,
+                None, None, None, {"type": "none"},
+            )
 
     def test_non_member_symbol_produces_no_trades(self):
         idx = pd.bdate_range("2020-01-02", "2020-01-31")
-        df = _make_df(idx)
-        df["_pit_member"] = False   # never a member — no entries allowed
-        _, trade_log, _ = self._run_sim({"FAKE": df})
-        assert len(trade_log) == 0
+        df = _frame(idx)
+        df["_pit_member"] = False
+        df["_pit_force_exit"] = False
+        result = self._run(df)
+        # run_portfolio_simulation returns None when there are no trades
+        assert result is None
 
-    def test_member_symbol_enters_and_exits_on_membership_end(self):
+    def test_member_symbol_exits_on_membership_end(self):
         idx = pd.bdate_range("2020-01-02", "2020-01-31")
-        removal_date = "2020-01-15"
-        df = _make_df(idx, member_until=removal_date)
-        _, trade_log, _ = self._run_sim({"FAKE": df})
+        removal = pd.Timestamp("2020-01-15")   # Wednesday
+        df = _frame(idx)
+        df["_pit_member"] = idx <= removal
+        df["_pit_force_exit"] = False
+        result = self._run(df)
+        assert result["Trades"] >= 1
+        last = result["trade_log"][-1]
+        assert "PIT Membership Exit" in last["ExitReason"]
 
-        assert len(trade_log) >= 1
-        last_trade = trade_log[-1]
-        assert "PIT Membership Exit" in last_trade["ExitReason"]
-
-    def test_force_exit_bar_closes_at_close_price(self):
+    def test_force_exit_closes_at_last_member_bar(self):
         idx = pd.bdate_range("2020-01-02", "2020-01-10")
-        force_date = "2020-01-08"
-        df = _make_df(idx, member_until="2020-01-31", force_exit_on=force_date)
-        _, trade_log, _ = self._run_sim({"FAKE": df})
-
-        # The forced-exit trade should close on or before the forced-exit bar.
-        forced_trades = [t for t in trade_log
-                         if "last available close" in t.get("ExitReason", "")]
-        assert len(forced_trades) >= 1
-        assert forced_trades[0]["ExitDate"] <= force_date
+        force_date = pd.Timestamp("2020-01-08")  # Wednesday
+        df = _frame(idx)
+        df["_pit_member"] = True
+        df["_pit_force_exit"] = False
+        df.loc[force_date, "_pit_force_exit"] = True
+        result = self._run(df)
+        forced = [t for t in result["trade_log"]
+                  if "last available close" in t.get("ExitReason", "")]
+        assert len(forced) >= 1
+        assert forced[0]["ExitDate"][:10] <= "2020-01-08"
