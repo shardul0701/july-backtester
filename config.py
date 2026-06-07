@@ -63,10 +63,11 @@ CONFIG = {
     # SECTION 6: SUMMARY FILTERING
     # ============================================================
     # Strategies below these thresholds are omitted from the printed table.
-    # Set all to -9999 / 1.0 during initial exploration to see everything.
-    "mc_score_min_to_show_in_summary": 0,
-    "min_pandl_to_show_in_summary": 0,
-    "max_acceptable_drawdown": 0.30,
+    # Platform default: show everything (-9999 = no filter). Tighten once you
+    # know which strategies are worth following.
+    "mc_score_min_to_show_in_summary": -9999,
+    "min_pandl_to_show_in_summary": -9999,
+    "max_acceptable_drawdown": 1.0,
     "min_performance_vs_spy": -9999.0,
     "min_performance_vs_qqq": -9999.0,
     "save_only_filtered_trades": False,
