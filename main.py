@@ -25,6 +25,14 @@ from helpers.noise import inject_price_noise
 
 logger = logging.getLogger(__name__)
 
+# Module-level defaults so workers can reference these globals safely even in
+# test contexts where init_worker was never called.
+spy_df_global = None
+vix_df_global = None
+tnx_df_global = None
+portfolio_data_global = None
+pit_member_masks_global = None
+
 # --------------------------------------------------------------------
 # --- WORKER INITIALIZER FOR MULTIPROCESSING ---
 # --------------------------------------------------------------------
@@ -49,7 +57,7 @@ def run_single_simulation(args):
     This version now uses globally initialized dataframes AND portfolio_data.
     """
     # Access ALL globally initialized data
-    global spy_df_global, vix_df_global, tnx_df_global, portfolio_data_global
+    global spy_df_global, vix_df_global, tnx_df_global, portfolio_data_global, pit_member_masks_global
 
     # 1. Unpack the arguments. `portfolio_data` has been REMOVED from the tuple.
     portfolio_name, name, logic_func, dependencies, stop_config, \
