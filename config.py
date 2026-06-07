@@ -338,6 +338,22 @@ CONFIG = {
     # When True, all 23 columns are displayed.
     # Override at runtime with: python main.py --verbose
     "verbose_output": False,
+
+    # ============================================================
+    # SECTION 22: POINT-IN-TIME UNIVERSE PATHS
+    # ============================================================
+    # Absolute paths to local clones of the PIT data repos.
+    # Required when using "pit:nq100" or "pit:sp500" as a portfolio value.
+    # Leave as "" to fall back to the NQ100_DATA_ROOT / SP500_DATA_ROOT
+    # environment variables, or drop the YAML files directly into:
+    #   tickers_to_scan/point_in_time/nq100/
+    #   tickers_to_scan/point_in_time/sp500/
+    #
+    # Repos (public):
+    #   NQ100 — https://github.com/shardul0701/NQ100-Survivorship-bias-data-2004-2026
+    #   SP500 — https://github.com/shardul0701/SP500-Survivorship-bias-data-2004-2026
+    "nq100_pit_path": "",
+    "sp500_pit_path": "",
 }
 
 if CONFIG.get("data_provider") == "norgate":  # noqa: SIM102

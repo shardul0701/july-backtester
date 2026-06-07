@@ -88,6 +88,9 @@ KNOWN_KEYS: set[str] = {
     "export_ml_features",
     # SECTION 21: Verbose Summary Table
     "verbose_output",
+    # SECTION 22: Point-in-Time Universe Paths
+    "nq100_pit_path",
+    "sp500_pit_path",
     # S3
     "s3_reports_bucket",
     "upload_to_s3",
