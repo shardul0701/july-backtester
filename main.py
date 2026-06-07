@@ -22,22 +22,8 @@ from multiprocessing import Pool, cpu_count
 import orjson
 from helpers.caching import CACHE_DIR
 from helpers.noise import inject_price_noise
-from helpers.config_validators import validate_forward_test_mode
 
 logger = logging.getLogger(__name__)
-
-
-def _write_data_screen_audit(run_base_dir, portfolio_name, rows):
-    """Write merged-data keep/drop decisions for one portfolio."""
-    if not rows:
-        return None
-    safe_name = "".join(
-        c if c.isalnum() or c in ("-", "_") else "_"
-        for c in str(portfolio_name)
-    ).strip("_") or "portfolio"
-    path = os.path.join(run_base_dir, f"{safe_name}_data_screen.csv")
-    pd.DataFrame(rows).to_csv(path, index=False)
-    return path
 
 
 def _pick_reference_df(comparison_dfs: dict) -> pd.DataFrame:
@@ -53,20 +39,30 @@ def _pick_reference_df(comparison_dfs: dict) -> pd.DataFrame:
     return next(iter(comparison_dfs.values()))
 
 
+# Module-level defaults so workers can reference these globals safely even in
+# test contexts where init_worker was never called.
+comparison_dfs_global = None
+benchmark_returns_global = None
+dependency_map_global = None
+portfolio_data_global = None
+pit_member_masks_global = None
+
 # --------------------------------------------------------------------
 # --- WORKER INITIALIZER FOR MULTIPROCESSING ---
 # --------------------------------------------------------------------
-def init_worker(comparison_dfs_dict, benchmark_returns_dict, dependency_map_dict, portfolio_data_for_worker):
+def init_worker(comparison_dfs_dict, benchmark_returns_dict, dependency_map_dict, portfolio_data_for_worker, pit_member_masks_dict=None):
     """
     Initializer for the multiprocessing pool.
     Makes comparison ticker DataFrames, benchmark returns, dependency symbol map,
-    and the current portfolio's data globally available to each worker process.
+    the current portfolio's data, and optional PIT membership masks globally
+    available to each worker process.
     """
-    global comparison_dfs_global, benchmark_returns_global, dependency_map_global, portfolio_data_global
+    global comparison_dfs_global, benchmark_returns_global, dependency_map_global, portfolio_data_global, pit_member_masks_global
     comparison_dfs_global = comparison_dfs_dict
     benchmark_returns_global = benchmark_returns_dict
     dependency_map_global = dependency_map_dict
     portfolio_data_global = portfolio_data_for_worker
+    pit_member_masks_global = pit_member_masks_dict
 
 # --------------------------------------------------------------------
 
@@ -76,7 +72,7 @@ def run_single_simulation(args):
     This version now uses globally initialized dataframes AND portfolio_data.
     """
     # Access ALL globally initialized data
-    global comparison_dfs_global, benchmark_returns_global, dependency_map_global, portfolio_data_global
+    global comparison_dfs_global, benchmark_returns_global, dependency_map_global, portfolio_data_global, pit_member_masks_global
 
     # 1. Unpack the arguments. `portfolio_data` has been REMOVED from the tuple.
     portfolio_name, name, logic_func, dependencies, stop_config, \
@@ -108,8 +104,6 @@ def run_single_simulation(args):
                     dep_df = comparison_dfs_global[dep_symbol]
                     kwargs[f'{dep_key}_df'] = dep_df.reindex(df.index, method='ffill')
 
-            kwargs['symbol'] = symbol
-
             if strategy_params:
                 kwargs.update(strategy_params)
 
@@ -124,19 +118,27 @@ def run_single_simulation(args):
             base_signals_with_dfs[symbol] = logic_func(df.copy(), **kwargs)
 
         # The simulator now handles stop-loss logic internally.
-        # PIT daily gating (engine-safe): where a symbol is NOT an index member
-        # (warm-up bars before it joined, or gap bars while it was out), force the
-        # signal flat so the engine never trades it. The `_pit_member` column is
-        # attached during data-prep only when pit_enforce_daily is set; otherwise
-        # this is a no-op and signals pass through unchanged.
-        final_signals = {}
-        for symbol, sdf in base_signals_with_dfs.items():
-            sig = sdf['Signal']
-            member = portfolio_data.get(symbol)
-            if member is not None and '_pit_member' in member.columns:
-                from helpers.pit_enforcement import mask_signal
-                sig = mask_signal(sig, member['_pit_member'])
-            final_signals[symbol] = sig
+        final_signals = {symbol: df['Signal'] for symbol, df in base_signals_with_dfs.items()}
+
+        # --- PIT SIGNAL GATING ---
+        # When the portfolio was built from a ``pit:`` universe, apply two filters:
+        # 1. Block long entries (Signal==1) on dates when the symbol is not an index member.
+        # 2. Inject exit signals (Signal==-1) on the first trading day after a symbol
+        #    is removed from the index, so open positions are closed promptly.
+        # This runs per-simulation but mask computation is O(1) per date (precomputed).
+        if pit_member_masks_global is not None:
+            for symbol, sig in list(final_signals.items()):
+                mask = pit_member_masks_global.get(symbol)
+                if mask is None:
+                    continue
+                aligned = mask.reindex(sig.index, fill_value=False)
+                new_sig = sig.copy()
+                new_sig.loc[(sig == 1) & ~aligned] = 0
+                was_member = aligned.shift(1, fill_value=False)
+                removal_days = ~aligned & was_member
+                new_sig.loc[removal_days] = -1
+                final_signals[symbol] = new_sig
+        # --- END PIT SIGNAL GATING ---
 
         # Call the simulation, passing the stop_config and using the global dataframes.
         result = run_portfolio_simulation(
@@ -243,14 +245,6 @@ def run_single_simulation(args):
         return None
 
 def main():
-    # Reconfigure stdout/stderr to UTF-8 on Windows so box-drawing characters
-    # in log messages don't raise UnicodeEncodeError with cp1252 consoles.
-    for _s in (sys.stdout, sys.stderr):
-        try:
-            _s.reconfigure(encoding='utf-8', errors='replace')
-        except AttributeError:
-            pass
-
     # --- ARGUMENT PARSING (full parser, applied before any CONFIG reads) ---
     from helpers.cli_config import build_parser, apply_overrides, print_help_config
     parser = build_parser()
@@ -309,20 +303,6 @@ def main():
 
     if not CONFIG.get("portfolios"):
         errors.append("  - portfolios is empty. Add at least one entry to run, e.g. \"My Symbols\": [\"AAPL\"].")
-
-    errors.extend(validate_forward_test_mode(CONFIG.get("forward_test_mode", {})))
-
-    ft = CONFIG.get("forward_test_mode", {})
-    allocs = ft.get("strategy_capital_allocation") if ft else None
-    if allocs:
-        total_allocated = sum(allocs.values())
-        initial = CONFIG.get("initial_capital", 0)
-        if initial > 0 and abs(total_allocated - initial) > 1e-6:
-            logger.warning(
-                f"[forward_test_mode] strategy_capital_allocation sums to "
-                f"${total_allocated:,.2f} but initial_capital is ${initial:,.2f}. "
-                "Adjust allocations or leave strategy_capital_allocation empty to auto-split."
-            )
 
     if errors:
         print("\n[ERROR] Invalid configuration in config.py:")
@@ -387,10 +367,6 @@ def main():
             _symbol_counts[_pname] = "? (Norgate)"
         elif isinstance(_pvalue, str) and _pvalue.startswith("pit:"):
             _symbol_counts[_pname] = f"? ({_pvalue} - resolved at runtime)"
-        elif isinstance(_pvalue, str) and _pvalue == "sp500_pit":
-            _symbol_counts[_pname] = "? (S&P 500 PIT — resolved at runtime)"
-        elif isinstance(_pvalue, str) and _pvalue == "nq100_pit":
-            _symbol_counts[_pname] = "? (NQ100 PIT — resolved at runtime)"
         else:
             _symbol_counts[_pname] = "?"
 
@@ -528,7 +504,8 @@ def main():
     # Loop through each portfolio sequentially
     for portfolio_name, value in _portfolios.items():
         logger.info(f"--> Preparing and running portfolio: {portfolio_name}")
-        
+        _current_pit_schedule = None  # reset each portfolio; set only for pit: portfolios
+
         # --- Data fetching for the current portfolio (no changes) ---
         # (Your existing code to get symbols and build `portfolio_data` is perfect)
         symbols = []
@@ -551,186 +528,31 @@ def main():
              with open(file_path, 'rb') as f:
                  symbols = orjson.loads(f.read())
         elif isinstance(value, str) and value.startswith("pit:"):
-            from helpers.point_in_time import resolve_pit_portfolio
+            from helpers.point_in_time import tickers_union_for_period as _pit_union, build_membership_schedule as _pit_schedule_build
+            _pit_index_name = value.split(":", 1)[1]
             try:
-                symbols = resolve_pit_portfolio(value, CONFIG) or []
+                symbols = _pit_union(_pit_index_name, CONFIG["start_date"], CONFIG["end_date"], CONFIG)
+                _current_pit_schedule = _pit_schedule_build(_pit_index_name, CONFIG["start_date"], CONFIG["end_date"], CONFIG)
             except Exception as e:
                 logger.error(f"  -> ERROR resolving PIT portfolio '{value}' for '{portfolio_name}': {e}")
                 continue
             logger.info(
-                f"  -> {value} universe as of {CONFIG['start_date']}: {len(symbols)} tickers"
+                f"  -> {value} full historical union ({CONFIG['start_date']} to {CONFIG['end_date']}): "
+                f"{len(symbols)} tickers (PIT membership enforced during simulation)"
             )
-        elif isinstance(value, str) and value == "sp500_pit":
-            from helpers.pit_universe import get_sp500_tickers_in_period
-            _sp500_repo = CONFIG.get("sp500_pit_path") or os.environ.get("SP500_DATA_ROOT", "")
-            if not _sp500_repo:
-                logger.error(
-                    f"  -> SKIPPING '{portfolio_name}': sp500_pit requires "
-                    "'sp500_pit_path' in config or SP500_DATA_ROOT in .env"
-                )
-                continue
-            symbols = get_sp500_tickers_in_period(
-                CONFIG["start_date"], CONFIG["end_date"], _sp500_repo
-            )
-            logger.info(f"  -> S&P 500 PIT universe: {len(symbols)} tickers "
-                        f"({CONFIG['start_date']} -> {CONFIG['end_date']})")
-        elif isinstance(value, str) and value == "nq100_pit":
-            from helpers.pit_universe import get_nq100_tickers_in_period
-            _nq100_parquet = CONFIG.get("nq100_pit_path") or os.path.join(
-                "data", "nq100_membership.parquet"
-            )
-            symbols = get_nq100_tickers_in_period(
-                CONFIG["start_date"], CONFIG["end_date"], _nq100_parquet
-            )
-            logger.info(f"  -> NQ100 PIT universe: {len(symbols)} tickers "
-                        f"({CONFIG['start_date']} -> {CONFIG['end_date']})")
-
+        
         if not symbols:
             logger.warning(f"No symbols found for '{portfolio_name}'. Skipping.")
             continue
 
-        # --- DAILY PIT ENFORCEMENT (required for PIT portfolios) ---
-        # For PIT universes (sp500_pit/nq100_pit/pit:*), gate each symbol to its
-        # index-membership era so a name cannot be traded years before it joined
-        # ("hold today's members back in 2010").
-        #   * _pit_intervals[sym] = [(join, leave), ...] contiguous spells
-        #   * _pit_spans[sym]     = (first_join, last_leave) outer bound (data trim)
-        # A per-symbol boolean `_pit_member` column is attached below. Signals are
-        # masked and the simulator also checks membership on the execution date.
-        _pit_intervals, _pit_spans = {}, {}
-        _pit_requested = (
-            isinstance(value, str)
-            and (value.startswith("pit:") or value in ("sp500_pit", "nq100_pit"))
-        )
-        if _pit_requested and not CONFIG.get("pit_enforce_daily"):
-            logger.error(
-                f"  -> SKIPPING '{portfolio_name}': PIT portfolios require "
-                "pit_enforce_daily=True to prevent out-of-membership trades.")
-            continue
-        if CONFIG.get("pit_enforce_daily") and _pit_requested:
-            from helpers.pit_enforcement import membership_intervals, membership_spans
-            _pit_intervals = membership_intervals(value, CONFIG)
-            _pit_spans = membership_spans(value, CONFIG)
-            if _pit_intervals:
-                _n_gaps = sum(1 for sp in _pit_intervals.values() if len(sp) > 1)
-                logger.info(
-                    f"  -> PIT daily enforcement ON: {len(_pit_intervals)} tickers "
-                    f"gated to membership spells ({_n_gaps} with re-entry gaps; "
-                    f"warmup {CONFIG.get('pit_warmup_days', 400)}d). Warm-up/gap bars "
-                    f"kept for indicators but masked from trading.")
-            else:
-                logger.error(
-                    f"  -> SKIPPING '{portfolio_name}': PIT enforcement is enabled "
-                    "but no membership intervals could be loaded.")
-                continue
-        _pit_warmup = CONFIG.get("pit_warmup_days", 400)
-        _pit_exit_buffer = CONFIG.get("pit_exit_buffer_days", 10)
-        # --- END DAILY PIT ENFORCEMENT (setup) ---
-
         MIN_BARS = CONFIG.get("min_bars_required", 250)
-        _data_screen_rows = []
-        _is_merged = CONFIG.get("data_provider", "").lower() == "merged"
-        if _is_merged and CONFIG.get("merged_quality_filter_enabled", True):
-            from src.data.unified_market_data_provider import UnifiedMarketDataProvider
-            _merged_provider = UnifiedMarketDataProvider()
-            _excluded_statuses = tuple(CONFIG.get(
-                "merged_exclude_statuses",
-                ("insufficient_history", "review_no_patch",
-                 "identity_review", "flagged")))
-
-            if _pit_requested:
-                _screened_intervals = {}
-                for symbol in symbols:
-                    spells = _pit_intervals.get(symbol, [])
-                    if not spells:
-                        _data_screen_rows.append({
-                            "symbol": symbol, "action": "drop",
-                            "reason": "no_membership_intervals",
-                        })
-                        continue
-                    kept_spells, spell_rows = _merged_provider.filter_membership_intervals(
-                        symbol, spells,
-                        exclude_statuses=_excluded_statuses,
-                        tolerance_days=CONFIG.get(
-                            "pit_coverage_tolerance_days", 7))
-                    _data_screen_rows.extend(spell_rows)
-                    if kept_spells:
-                        _screened_intervals[symbol] = kept_spells
-                _pit_intervals = _screened_intervals
-                _pit_spans = {
-                    symbol: (
-                        min(start for start, _ in spells),
-                        max(end for _, end in spells),
-                    )
-                    for symbol, spells in _pit_intervals.items()
-                }
-                symbols = [symbol for symbol in symbols if symbol in _pit_intervals]
-            else:
-                kept_symbols, dropped_symbols = _merged_provider.filter_universe(
-                    symbols,
-                    exclude_statuses=_excluded_statuses,
-                    min_avg_dollar_volume=CONFIG.get(
-                        "merged_min_avg_dollar_volume", 0.0),
-                )
-                kept_set = set(kept_symbols)
-                _data_screen_rows.extend({
-                    "symbol": symbol,
-                    "action": "keep" if symbol in kept_set else "drop",
-                    "reason": "quality_pass" if symbol in kept_set
-                              else dropped_symbols.get(symbol, "filtered"),
-                } for symbol in symbols)
-                symbols = kept_symbols
-
-            dropped_count = sum(
-                row.get("action") == "drop" for row in _data_screen_rows)
-            logger.info(
-                f"  -> Merged data screen: {len(symbols)} symbols retained; "
-                f"{dropped_count} symbol/spell exclusions.")
-            if not symbols:
-                audit_path = _write_data_screen_audit(
-                    run_base_dir, portfolio_name, _data_screen_rows)
-                logger.error(
-                    f"  -> SKIPPING '{portfolio_name}': merged data screen "
-                    f"removed every symbol. Audit: {audit_path}")
-                continue
-
         skipped_symbols = []
         portfolio_data = {}
         for symbol in tqdm(symbols, desc="  -> Fetching & Preparing Data", unit=" symbols"):
-            # Span-bounded fetch under PIT: pass the membership window as the date
-            # range so the provider's date-aware resolution serves the correct era
-            # of a recycled ticker (e.g. historical JAVA, not today's namesake).
-            _fetch_start, _fetch_end = CONFIG["start_date"], CONFIG["end_date"]
-            if (_pit_intervals and symbol in _pit_intervals
-                    and CONFIG.get("data_provider", "").lower() == "merged"):
-                from src.data.unified_market_data_provider import get_price_data_for_intervals
-                df = get_price_data_for_intervals(
-                    symbol, _pit_intervals[symbol],
-                    warmup_days=_pit_warmup,
-                    exit_buffer_days=_pit_exit_buffer)
-            else:
-                df = None
-            if df is None and _pit_spans and symbol in _pit_spans:
-                _sp_first, _sp_last = _pit_spans[symbol]
-                _fetch_start = (pd.Timestamp(_sp_first)
-                                - pd.Timedelta(days=_pit_warmup)).strftime("%Y-%m-%d")
-                _fetch_end = (
-                    pd.Timestamp(_sp_last) + pd.Timedelta(days=_pit_exit_buffer)
-                ).strftime("%Y-%m-%d")
-            if df is None:
-                df = data_fetcher(symbol, _fetch_start, _fetch_end, CONFIG)
-            if _pit_spans and df is not None and not df.empty and symbol in _pit_spans:
-                from helpers.pit_enforcement import trim_to_membership
-                df = trim_to_membership(
-                    df, _pit_spans[symbol], warmup_days=_pit_warmup,
-                    exit_buffer_days=_pit_exit_buffer)
+            df = data_fetcher(symbol, CONFIG["start_date"], CONFIG["end_date"], CONFIG)
             if df is not None and not df.empty:
                 if len(df) < MIN_BARS:
                     skipped_symbols.append((symbol, len(df)))
-                    _data_screen_rows.append({
-                        "symbol": symbol, "action": "drop",
-                        "reason": f"bars={len(df)}<{MIN_BARS}",
-                    })
                     continue
                 # --- NOISE INJECTION (stress test) ---
                 _noise_pct = CONFIG.get("noise_injection_pct", 0.0)
@@ -775,20 +597,6 @@ def main():
                 df['Volume_Spike'] = df['Volume'] / df['Volume'].rolling(20).mean()
 
                 # --- END FEATURE ENGINEERING ---
-
-                # --- PIT membership mask (engine-safe daily gating) ---
-                # True only on actual member days; warm-up + gap bars are False.
-                # run_single_simulation forces the signal flat where this is False.
-                if _pit_intervals and symbol in _pit_intervals:
-                    from helpers.pit_enforcement import (
-                        build_forced_exit_mask,
-                        build_member_mask,
-                    )
-                    df['_pit_member'] = build_member_mask(df.index, _pit_intervals[symbol])
-                    df['_pit_force_exit'] = build_forced_exit_mask(
-                        df.index, _pit_intervals[symbol], CONFIG["end_date"],
-                        exit_buffer_days=_pit_exit_buffer)
-                # --- END PIT membership mask ---
                 portfolio_data[symbol] = df
 
         if skipped_symbols:
@@ -796,15 +604,32 @@ def main():
                 f"  -> Skipped {len(skipped_symbols)} symbol(s) with fewer than {MIN_BARS} bars: "
                 + ", ".join(f"{s} ({n} bars)" for s, n in skipped_symbols)
             )
-        if _is_merged:
-            audit_path = _write_data_screen_audit(
-                run_base_dir, portfolio_name, _data_screen_rows)
-            if audit_path:
-                logger.info(f"  -> Data-screen audit: {audit_path}")
 
         if not portfolio_data:
             logger.warning(f"Could not fetch data for any symbols in '{portfolio_name}'. Skipping.")
             continue
+
+        # --- PIT MEMBERSHIP MASKS (precomputed once per portfolio) ---
+        # For pit: portfolios, build a boolean Series per symbol marking which
+        # trading dates the symbol was an index member.  Workers apply this mask
+        # to gate entry signals and inject exit signals — zero per-simulation
+        # overhead beyond a vectorised lookup.
+        if _current_pit_schedule is not None:
+            from helpers.point_in_time import pit_members_on as _pit_members_on
+            _pit_member_masks: dict[str, object] = {}
+            for _sym, _df in portfolio_data.items():
+                _dates = _df.index
+                _date_strs = [str(d)[:10] for d in _dates]
+                _pit_member_masks[_sym] = pd.Series(
+                    [_sym in _pit_members_on(_current_pit_schedule, d) for d in _date_strs],
+                    index=_dates,
+                    dtype=bool,
+                )
+            _n_with_history = sum(m.any() for m in _pit_member_masks.values())
+            logger.info(f"  -> PIT masks built: {_n_with_history}/{len(_pit_member_masks)} symbols have at least one membership day")
+        else:
+            _pit_member_masks = None
+        # --- END PIT MEMBERSHIP MASKS ---
 
         # --- Generate tasks for THIS portfolio, WITHOUT the large `portfolio_data` ---
         tasks_for_this_portfolio = []
@@ -837,8 +662,8 @@ def main():
         logger.info("=" * 15 + f" RUNNING SIMULATIONS FOR '{portfolio_name}' " + "=" * 15)
         logger.info(f"Found {len(tasks_for_this_portfolio)} tasks. Using up to {cpu_count()} CPU cores.")
         
-        # Pass comparison data and portfolio data during initialization, not with each task
-        init_args = (comparison_dfs, benchmark_returns, comparison_config["dependencies"], portfolio_data)
+        # Pass comparison data, portfolio data, and PIT masks during initialization
+        init_args = (comparison_dfs, benchmark_returns, comparison_config["dependencies"], portfolio_data, _pit_member_masks)
 
         with Pool(processes=cpu_count(), initializer=init_worker, initargs=init_args) as p:
             import time as _time
