@@ -3,10 +3,26 @@
 This module is the small public API used by the main backtester for
 survivorship-bias-free portfolio definitions such as ``pit:nq100`` and
 ``pit:sp500``. It intentionally keeps static JSON portfolios unchanged.
+
+Public API
+----------
+tickers_union_for_period(index, start_date, end_date, config)
+    Returns all tickers that were ever in the index between start_date and
+    end_date.  Use this to build a survivorship-bias-free ticker universe
+    that includes delisted / removed constituents.
+
+build_membership_schedule(index, start_date, end_date, config)
+    Returns a sorted list of (effective_date, frozenset_of_members) snapshots
+    covering [start_date, end_date].  Precompute once per portfolio; query
+    cheaply per date with pit_members_on().
+
+pit_members_on(schedule, date)
+    Binary-search the schedule for membership on an ISO date string.
 """
 
 from __future__ import annotations
 
+import bisect
 import os
 from functools import lru_cache
 from pathlib import Path
@@ -37,26 +53,17 @@ INDEX_FILE_PREFIXES = {
 }
 
 PIT_TICKER_NORMALISATION = {
-    # Maps a historical PIT-membership ticker -> the ticker the merged/ price
-    # store actually carries (Norgate back-fills the *current* ticker, so a name
-    # that was "UTX" in 2015 lives in the store as "RTX"). Every target below was
-    # verified to exist in merged/ (exact file or date-suffixed delisted file);
-    # see scripts/diagnose_pipeline_issues.py. This lifts PIT->price coverage to
-    # ~99% S&P / ~99% NQ100. Names with NO surviving file (bankruptcies such as
-    # ENDP/JCP/SIVB/TUP/WIN/MERQE/QRTEA/RHAT and Norgate-snapshot gaps
-    # MMC/ATGE/PARA) are intentionally absent — no alias can recover them.
-    "PCLN": "BKNG", "HANS": "MNST", "GOOG": "GOOGL", "FB": "META",
-    # --- S&P 500 renames / mergers (old -> surviving ticker) ---
-    "ABC": "COR", "ADS": "BFH", "ANTM": "ELV", "BHGE": "BKR", "BLL": "BALL",
-    "CCE": "CCEP", "CDAY": "DAY", "CHK": "EXE", "COG": "CTRA", "CTL": "LUMN",
-    "DDR": "SITC", "DISCA": "WBD", "DNR": "DEN", "DWDP": "DD", "ESV": "VAL",
-    "FBHS": "FBIN", "FII": "FHI", "FLT": "CPAY", "GPS": "GAP", "HFC": "DINO",
-    "HRS": "LHX", "JEC": "J", "KORS": "CPRI", "MYL": "VTRS", "NLOK": "GEN",
-    "PKI": "RVTY", "RE": "EG", "SYMC": "GEN", "TMK": "GL", "UTX": "RTX",
-    "WFT": "WFRD", "WLTW": "WTW", "WYND": "TNL",
-    # --- Nasdaq-100 renames / mergers ---
-    "AEOS": "AEO", "IVGN": "LIFE", "JDSU": "VIAV", "KFT": "MDLZ", "UAUA": "UAL",
-    "VIP": "VEON", "YHOO": "AABA",
+    # Common historical/modern symbol aliases seen in the public PIT repos and
+    # price-provider stores. These are deliberately conservative; provider-level
+    # ticker mapping remains a separate concern for deeper Norgate work.
+    #
+    # GOOG / GOOGL note: Google split into two share classes in April 2014.
+    # Post-split NQ100 YAML files list BOTH GOOG (Class C) and GOOGL (Class A)
+    # as distinct members. Mapping GOOG -> GOOGL would silently collapse them,
+    # dropping one position with no warning. The mapping is intentionally absent
+    # here; both symbols pass through unchanged.
+    "PCLN": "BKNG",
+    "HANS": "MNST",
 }
 
 
@@ -98,8 +105,6 @@ def _candidate_roots(index: str, config: dict | None = None) -> list[Path]:
     for name in INDEX_DIR_NAMES[index]:
         roots.append(pit_base / name)
 
-    if index == "nq100":
-        roots.append(ROOT / "NQ-SB" / "nasdaq100_point_in_time_universe_repo")
     roots.append(ROOT)
 
     seen: set[Path] = set()
@@ -191,3 +196,138 @@ def resolve_pit_portfolio(value: str, config: dict) -> list[str] | None:
         return None
     index = value.split(":", 1)[1]
     return tickers_as_of(index, config["start_date"], config)
+
+
+# ---------------------------------------------------------------------------
+# Full-history union and membership schedule (survivorship-bias-free engine)
+# ---------------------------------------------------------------------------
+
+def tickers_union_for_period(
+    index: str,
+    start_date: str,
+    end_date: str,
+    config: dict | None = None,
+) -> list[str]:
+    """Return every ticker that was ever in *index* between *start_date* and *end_date*.
+
+    This builds a survivorship-bias-free universe: it includes companies that
+    were later removed, delisted, or acquired, as long as they were members of
+    the index at some point during the requested period.
+
+    Parameters
+    ----------
+    index       : ``"nq100"`` or ``"sp500"``
+    start_date  : ISO date string (``"2004-01-01"``)
+    end_date    : ISO date string (``"2026-01-01"``)
+    config      : Optional backtester config.  Recognised path keys:
+                  ``nq100_pit_path`` and ``sp500_pit_path``.
+
+    Returns
+    -------
+    list[str]
+        Sorted list of unique tickers.
+    """
+    idx = _canonical_index(index)
+    sy = int(start_date[:4])
+    ey = int(end_date[:4])
+    union: set[str] = set()
+    for year in range(sy, ey + 1):
+        try:
+            path = _find_year_yaml(idx, year, config)
+            data = _load_year_yaml(path)
+        except FileNotFoundError:
+            continue
+        union.update(normalise_pit_ticker(t) for t in (data.get("tickers_on_Jan_1") or []))
+        for entry in ((data.get("changes") or {}).values()):
+            if entry:
+                union.update(normalise_pit_ticker(t) for t in (entry.get("union") or []))
+    return sorted(union)
+
+
+def build_membership_schedule(
+    index: str,
+    start_date: str,
+    end_date: str,
+    config: dict | None = None,
+) -> list[tuple[str, frozenset]]:
+    """Build a sorted list of (effective_date, member_frozenset) snapshots.
+
+    The first entry always has ``date == start_date`` and represents the index
+    membership at the *opening* of the backtest.  Each subsequent entry records
+    a membership change event within ``(start_date, end_date]``.
+
+    Query membership on any date with ``pit_members_on(schedule, date)``.
+
+    Parameters
+    ----------
+    index       : ``"nq100"`` or ``"sp500"``
+    start_date  : ISO date string
+    end_date    : ISO date string
+    config      : Optional backtester config (see ``tickers_union_for_period``).
+
+    Returns
+    -------
+    list[tuple[str, frozenset]]
+        Sorted ``[(date_str, frozenset_of_tickers), ...]``.
+    """
+    idx = _canonical_index(index)
+    sy = int(start_date[:4])
+    ey = int(end_date[:4])
+
+    # --- Step 1: derive initial membership at exactly start_date ---
+    members: set[str] = set()
+    try:
+        path = _find_year_yaml(idx, sy, config)
+        data = _load_year_yaml(path)
+        members = {normalise_pit_ticker(t) for t in (data.get("tickers_on_Jan_1") or [])}
+        for change_date in sorted(str(d) for d in (data.get("changes") or {}).keys()):
+            if change_date > start_date:
+                break
+            entry = (data.get("changes") or {}).get(change_date) or {}
+            members -= {normalise_pit_ticker(t) for t in (entry.get("difference") or [])}
+            members |= {normalise_pit_ticker(t) for t in (entry.get("union") or [])}
+    except FileNotFoundError:
+        pass
+
+    schedule: list[tuple[str, frozenset]] = [(start_date, frozenset(members))]
+
+    # --- Step 2: record every change event strictly after start_date ---
+    for year in range(sy, ey + 1):
+        try:
+            path = _find_year_yaml(idx, year, config)
+            data = _load_year_yaml(path)
+        except FileNotFoundError:
+            continue
+        for change_date in sorted(str(d) for d in (data.get("changes") or {}).keys()):
+            if change_date <= start_date or change_date > end_date:
+                continue
+            entry = (data.get("changes") or {}).get(change_date) or {}
+            current = set(schedule[-1][1])
+            current -= {normalise_pit_ticker(t) for t in (entry.get("difference") or [])}
+            current |= {normalise_pit_ticker(t) for t in (entry.get("union") or [])}
+            schedule.append((change_date, frozenset(current)))
+
+    return schedule
+
+
+def pit_members_on(schedule: list[tuple[str, frozenset]], date: str) -> frozenset:
+    """Return the PIT member frozenset on *date* using a prebuilt schedule.
+
+    Uses binary search — O(log k) where k is the number of change events.
+
+    Parameters
+    ----------
+    schedule : output of ``build_membership_schedule``
+    date     : ISO date string (``"2010-05-15"``)
+
+    Returns
+    -------
+    frozenset[str]
+        The set of index members on that date.  Empty frozenset if *date* is
+        before the first schedule entry.
+    """
+    dates = [s[0] for s in schedule]
+    idx = bisect.bisect_right(dates, date) - 1
+    if idx < 0:
+        return frozenset()
+    return schedule[idx][1]
