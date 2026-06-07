@@ -310,9 +310,9 @@ def main():
         errors.append("  - portfolios is empty. Add at least one entry to run, e.g. \"My Symbols\": [\"AAPL\"].")
 
     # PR #187 Fix 6 — validator consolidation (review item: duplicate module)
-    # validate_forward_test_mode was defined in config_validators.py (plural) but
-    # validate_config lived in config_validator.py (singular). Both are now in the
-    # singular file; config_validators.py is a one-line backward-compat shim.
+    # validate_forward_test_mode and validate_config both now live in the single
+    # canonical helpers/config_validator.py; the duplicate config_validators.py
+    # (plural) was removed entirely.
     from helpers.config_validator import validate_config, validate_forward_test_mode
     for _warn in validate_config(CONFIG):  # warns on typo'd / unknown config keys
         logger.warning(_warn)

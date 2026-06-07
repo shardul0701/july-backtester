@@ -16,8 +16,8 @@ validate_intraday_config(config: dict) -> list[str]
 validate_comparison_tickers(config: dict) -> list[str]
     Additional structural validators.
 
-Note: config_validators.py (plural) is a thin shim that re-exports
-validate_forward_test_mode from this module for backward compatibility.
+This is the single canonical home for all config validation. (The former
+config_validators.py duplicate was removed; everything lives here.)
 """
 
 import difflib
@@ -125,10 +125,9 @@ KNOWN_KEYS: set[str] = {
 def validate_forward_test_mode(ft: dict) -> list[str]:
     """Return a list of error strings for an invalid forward_test_mode config.
 
-    PR #187 Fix 6 — moved here from helpers/config_validators.py (plural) so
-    all config-validation logic lives in a single canonical module.
-    config_validators.py is now a one-line shim that re-exports this function
-    for backward compatibility with any existing importers.
+    PR #187 Fix 6 — consolidated here from the former duplicate
+    helpers/config_validators.py (plural), which has been removed so all
+    config-validation logic lives in this single canonical module.
 
     Empty list means valid.
     """
