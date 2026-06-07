@@ -111,7 +111,7 @@ CONFIG = {
     # ============================================================
     "min_trades_for_mc": 20,
     "num_mc_simulations": 1000,
-    "mc_sampling": "block",
+    "mc_sampling": "iid",
     "mc_block_size": None,
  
     # ============================================================
