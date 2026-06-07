@@ -727,7 +727,7 @@ def main():
             for _i, _r in enumerate(tqdm(p.imap(run_single_simulation, tasks_for_this_portfolio), total=_total, desc="  -> Running sims"), start=1):
                 _results.append(_r)
                 if _i in _checkpoints:
-                    _elapsed = _time.monotonic() - _start_pool
+                    _elapsed = max(_time.monotonic() - _start_pool, 1e-9)
                     _rate = _i / _elapsed
                     _remaining = (_total - _i) / _rate if _rate > 0 else 0
                     logger.info(f"  -> Progress: {_i}/{_total} tasks done | Elapsed: {_elapsed:.0f}s | ETA: {_remaining:.0f}s remaining")

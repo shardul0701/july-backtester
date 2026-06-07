@@ -47,7 +47,7 @@ def _run_progress_loop(tasks, logger):
     for _i, _r in enumerate(iter(tasks), start=1):
         _results.append(_r)
         if _i in _checkpoints:
-            _elapsed = _time.monotonic() - _start_pool
+            _elapsed = max(_time.monotonic() - _start_pool, 1e-9)
             _rate = _i / _elapsed
             _remaining = (_total - _i) / _rate if _rate > 0 else 0
             logger.info(
@@ -223,7 +223,7 @@ class TestTqdmCompatibility:
             ):
                 _results.append(_r)
                 if _i in _checkpoints:
-                    _elapsed = _time.monotonic() - _start_pool
+                    _elapsed = max(_time.monotonic() - _start_pool, 1e-9)
                     _rate = _i / _elapsed
                     _remaining = (_total - _i) / _rate if _rate > 0 else 0
                     logging.getLogger("test").info(
@@ -250,7 +250,7 @@ class TestTqdmCompatibility:
             ):
                 _results.append(_r)
                 if _i in _checkpoints:
-                    _elapsed = _time.monotonic() - _start_pool
+                    _elapsed = max(_time.monotonic() - _start_pool, 1e-9)
                     _rate = _i / _elapsed
                     _remaining = (_total - _i) / _rate if _rate > 0 else 0
                     log.info(
