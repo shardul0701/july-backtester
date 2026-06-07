@@ -61,6 +61,13 @@ def main():
                                          force_dates=trailing, logger=log)
     polygon_io.pull_splits(logger=log)
     polygon_io.pull_dividends(logger=log)
+
+    # Guard: pull_range returns [] on market holidays or empty reruns.
+    # Proceeding with an empty list would IndexError and corrupt patch state.
+    if not trading_days:
+        log.warning("pull_range returned no trading days (holiday or empty rerun) — nothing to update.")
+        return
+
     last_day = trading_days[-1]
     log.info(f"latest completed trading day: {last_day}")
 

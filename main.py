@@ -304,6 +304,14 @@ def main():
     if not CONFIG.get("portfolios"):
         errors.append("  - portfolios is empty. Add at least one entry to run, e.g. \"My Symbols\": [\"AAPL\"].")
 
+    # Unknown-key check: warns on typos without blocking startup.
+    from helpers.config_validator import validate_config, validate_forward_test_mode
+    for _warn in validate_config(CONFIG):
+        logger.warning(_warn)
+
+    # forward_test_mode structural validation (capital model + allocation signs).
+    errors.extend(validate_forward_test_mode(CONFIG.get("forward_test_mode", {})))
+
     if errors:
         print("\n[ERROR] Invalid configuration in config.py:")
         for e in errors:
@@ -504,6 +512,18 @@ def main():
     # Loop through each portfolio sequentially
     for portfolio_name, value in _portfolios.items():
         logger.info(f"--> Preparing and running portfolio: {portfolio_name}")
+
+        # Normalise legacy PIT keyword forms to the canonical pit: prefix so that
+        # config entries like "sp500_pit" / "nq100_pit" resolve the same code path
+        # as "pit:sp500" / "pit:nq100". The docs and .env.example previously
+        # advertised both forms; supporting both keeps old configs working.
+        if isinstance(value, str) and value == "sp500_pit":
+            value = "pit:sp500"
+            logger.info(f"  -> '{portfolio_name}': normalised 'sp500_pit' → 'pit:sp500'")
+        elif isinstance(value, str) and value == "nq100_pit":
+            value = "pit:nq100"
+            logger.info(f"  -> '{portfolio_name}': normalised 'nq100_pit' → 'pit:nq100'")
+
         _current_pit_schedule = None  # reset each portfolio; set only for pit: portfolios
 
         # --- Data fetching for the current portfolio (no changes) ---
@@ -616,6 +636,11 @@ def main():
         # overhead beyond a vectorised lookup.
         if _current_pit_schedule is not None:
             from helpers.point_in_time import pit_members_on as _pit_members_on
+            from helpers.pit_enforcement import (
+                build_member_mask as _pit_build_member_mask,
+                build_forced_exit_mask as _pit_build_forced_exit_mask,
+                membership_intervals as _pit_membership_intervals,
+            )
             _pit_member_masks: dict[str, object] = {}
             for _sym, _df in portfolio_data.items():
                 _dates = _df.index
@@ -627,6 +652,30 @@ def main():
                 )
             _n_with_history = sum(m.any() for m in _pit_member_masks.values())
             logger.info(f"  -> PIT masks built: {_n_with_history}/{len(_pit_member_masks)} symbols have at least one membership day")
+
+            # Wire pit_enforcement columns into portfolio_data so the simulator's
+            # _pit_flag() reads real values rather than always returning the default.
+            # _pit_member gates entries and triggers membership-exit on non-member bars.
+            # _pit_force_exit closes at Close on the last available member bar when no
+            # timely post-leave bar exists (e.g. sudden delisting with no next-open).
+            _pit_intervals = _pit_membership_intervals(value, CONFIG)
+            _exit_buffer = CONFIG.get("pit_exit_buffer_days", 10)
+            _backtest_end = CONFIG.get("end_date") or str(pd.Timestamp.now().normalize().date())
+            _n_forced = 0
+            for _sym, _mask in _pit_member_masks.items():
+                _df = portfolio_data[_sym]
+                _df["_pit_member"] = _mask.reindex(_df.index, fill_value=False)
+                _sym_intervals = _pit_intervals.get(_sym, [])
+                if _sym_intervals:
+                    _force_mask = _pit_build_forced_exit_mask(
+                        _df.index, _sym_intervals, _backtest_end, _exit_buffer
+                    )
+                else:
+                    _force_mask = pd.Series(False, index=_df.index)
+                _df["_pit_force_exit"] = _force_mask
+                if _force_mask.any():
+                    _n_forced += 1
+            logger.info(f"  -> PIT columns written to portfolio_data: {_n_forced} symbols have forced-exit bars")
         else:
             _pit_member_masks = None
         # --- END PIT MEMBERSHIP MASKS ---

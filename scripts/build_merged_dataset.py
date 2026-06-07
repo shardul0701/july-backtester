@@ -97,20 +97,23 @@ def build(skip_delisted=False, indices_only=False, asof=None, log=None):
             "norgate_only_delisted_keep",
             lambda r: merge.merge_delisted(r["symbol"], r["security_type"], _live_keys),
             "symbol")
-        # Collision guard: a delisted/common ticker can share a name with a required
-        # index (e.g. a delisted equity tickered "VIX"/"TNX"), and Case B would
-        # overwrite the real index file. Re-merge indices LAST so they always win.
-        reidx = 0
-        for sym in REQUIRED_INDICES:
-            try:
-                if merge.merge_required_index(sym, paths.PATCH_START, asof):
-                    reidx += 1
-            except Exception as e:
-                log.warning(f"index {sym} re-merge failed: {e}")
-        counts["required_indices"] = reidx
-        log.info(f"required indices re-merged last (collision guard): {reidx}/{len(REQUIRED_INDICES)}")
     else:
         log.info("skipped Case B (delisted)")
+
+    # Re-merge required index assets UNCONDITIONALLY so they always win any name
+    # collision (e.g. a delisted equity tickered "VIX" or "TNX" from Case B above,
+    # or from the daily updater which runs with skip_delisted=True and previously
+    # skipped this guard entirely).
+    reidx = 0
+    for sym in REQUIRED_INDICES:
+        try:
+            if merge.merge_required_index(sym, paths.PATCH_START, asof):
+                reidx += 1
+        except Exception as e:
+            log.warning(f"index {sym} re-merge failed: {e}")
+    counts["required_indices"] = reidx
+    log.info(f"required indices re-merged last (collision guard): {reidx}/{len(REQUIRED_INDICES)}")
+
     return _finish(counts, log)
 
 

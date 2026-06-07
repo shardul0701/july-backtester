@@ -1,12 +1,23 @@
 # helpers/config_validator.py
 """
-Config key validation — warns on unknown or typo'd keys in CONFIG.
+Config validation helpers — unknown-key warnings and forward-test-mode checks.
 
 Public API
 ----------
 validate_config(config: dict) -> list[str]
     Returns a list of warning messages for unrecognised keys.
     Each message includes a "did you mean?" suggestion if a close match exists.
+
+validate_forward_test_mode(ft: dict) -> list[str]
+    Returns a list of error strings for an invalid forward_test_mode config.
+    Empty list means valid.
+
+validate_intraday_config(config: dict) -> list[str]
+validate_comparison_tickers(config: dict) -> list[str]
+    Additional structural validators.
+
+Note: config_validators.py (plural) is a thin shim that re-exports
+validate_forward_test_mode from this module for backward compatibility.
 """
 
 import difflib
@@ -22,6 +33,7 @@ logger = logging.getLogger(__name__)
 KNOWN_KEYS: set[str] = {
     # SECTION 1: Data Provider
     "data_provider",
+    "polygon_api_secret_name",
     "csv_data_dir",
     "parquet_data_dir",
     # SECTION 2: Backtest Period & Capital
@@ -108,6 +120,29 @@ KNOWN_KEYS: set[str] = {
     "s3_reports_bucket",
     "upload_to_s3",
 }
+
+
+def validate_forward_test_mode(ft: dict) -> list[str]:
+    """Return a list of error strings for an invalid forward_test_mode config.
+
+    Empty list means valid.
+    """
+    if not ft:
+        return []
+    errors: list[str] = []
+    valid_models = ("isolated", "shared")
+    cm = ft.get("capital_model", "isolated")
+    if cm not in valid_models:
+        errors.append(
+            f"  - forward_test_mode.capital_model '{cm}' must be one of: {valid_models}"
+        )
+    for strat, amt in (ft.get("strategy_capital_allocation") or {}).items():
+        if amt < 0:
+            errors.append(
+                f"  - forward_test_mode.strategy_capital_allocation['{strat}']"
+                f" = {amt} must be >= 0"
+            )
+    return errors
 
 
 def validate_config(config: dict) -> list[str]:

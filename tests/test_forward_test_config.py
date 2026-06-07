@@ -13,10 +13,11 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# Load config_validators directly to avoid triggering helpers/__init__.py
-# (which pulls in pandas_ta and numpy — unavailable in the CI Python 3.9 env).
+# Load config_validator (singular — canonical) directly to avoid triggering
+# helpers/__init__.py which pulls in pandas_ta / numpy unavailable in CI Python 3.9.
+# config_validators.py (plural) is now a thin shim that re-exports from here.
 _spec = importlib.util.spec_from_file_location(
-    "config_validators", ROOT / "helpers" / "config_validators.py"
+    "config_validator", ROOT / "helpers" / "config_validator.py"
 )
 _mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_mod)
