@@ -366,7 +366,29 @@ CONFIG = {
     "exclude_open_positions": False,
 
     # ============================================================
-    # SECTION 23: POINT-IN-TIME UNIVERSE PATHS
+    # SECTION 23: SURVIVORSHIP BIAS
+    # ============================================================
+    # Include delisted/failed companies in backtests to avoid survivorship bias.
+    # Only Norgate and Polygon support delisting data.
+    # Yahoo and CSV providers will log a warning if enabled.
+    "include_delisted": False,
+
+    # How to price force-closed positions when a stock is delisted:
+    # "last_close" — use the last known Close price (default, realistic)
+    # "zero" — assume total loss (conservative, stress-test scenario)
+    "delisting_price_assumption": "last_close",
+
+    # Optional path to a JSON file of historically delisted symbols to merge
+    # into the universe when include_delisted=True. Same format as nasdaq_100.json.
+    # Relative paths resolve from tickers_to_scan/. Set to None to disable.
+    # Without this, the universe still only contains surviving stocks even when
+    # include_delisted=True — setting this is required for true survivorship
+    # bias correction.
+    # Example: "delisted_symbols_file": "nasdaq_100_delisted.json"
+    "delisted_symbols_file": None,
+
+    # ============================================================
+    # SECTION 24: POINT-IN-TIME UNIVERSE PATHS
     # ============================================================
     # Absolute paths to local clones of the PIT data repos.
     # Required when using "pit:nq100" or "pit:sp500" as a portfolio value.
