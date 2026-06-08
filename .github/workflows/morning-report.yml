@@ -1,0 +1,41 @@
+name: Morning Positions Report
+
+# Runs Mon–Fri at 14:30 UTC = 10:30 AM EDT / 9:30 AM EST
+# Shows today's filled orders (what was bought/sold at open) + current positions + P&L.
+# Output is visible in the GitHub Actions run log — click the run to see it.
+
+on:
+  schedule:
+    - cron: '30 14 * * 1-5'
+  workflow_dispatch:
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repo (with latest paper_state/)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install pandas numpy pyarrow python-dotenv
+
+      - name: Run positions report
+        run: python scripts/daily_positions_report.py --cloud
+        env:
+          ALPACA_BASE_URL:       https://paper-api.alpaca.markets
+          B1_APCA_API_KEY_ID:    ${{ secrets.B1_APCA_API_KEY_ID }}
+          B1_APCA_API_SECRET_KEY: ${{ secrets.B1_APCA_API_SECRET_KEY }}
+          B2_APCA_API_KEY_ID:    ${{ secrets.B2_APCA_API_KEY_ID }}
+          B2_APCA_API_SECRET_KEY: ${{ secrets.B2_APCA_API_SECRET_KEY }}
+          MR_APCA_API_KEY_ID:    ${{ secrets.MR_APCA_API_KEY_ID }}
+          MR_APCA_API_SECRET_KEY: ${{ secrets.MR_APCA_API_SECRET_KEY }}

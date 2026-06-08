@@ -1,0 +1,52 @@
+{
+  "strategy": "B1_VG12_PIT",
+  "last_processed_date": "2026-06-08",
+  "cash": 70000.0030720512,
+  "c7": {
+    "bars_since_rebalance": 3,
+    "last_rebalance_date": "2026-06-03",
+    "tickers": [
+      "CIEN",
+      "DELL",
+      "LITE",
+      "MU",
+      "SNDK",
+      "STX",
+      "WDC"
+    ]
+  },
+  "mr_positions": {
+    "GOOG": {
+      "entry_date": "2026-06-04",
+      "entry_px": 355.6177,
+      "stop_price": 334.1136,
+      "target_price": 398.0928,
+      "hold_bars": 3,
+      "shares": 28.120084,
+      "cost_basis": 9999.9995958868
+    },
+    "SBUX": {
+      "entry_date": "2026-06-02",
+      "entry_px": 96.4064,
+      "stop_price": 90.5767,
+      "target_price": 107.9212,
+      "hold_bars": 5,
+      "shares": 103.72754,
+      "cost_basis": 9999.998712256001
+    },
+    "GOOGL": {
+      "entry_date": "2026-06-04",
+      "entry_px": 359.0794,
+      "stop_price": 337.366,
+      "target_price": 401.968,
+      "hold_bars": 3,
+      "shares": 27.84899,
+      "cost_basis": 9999.998619806001
+    }
+  },
+  "def_tickers": [
+    "IAU",
+    "TLT"
+  ],
+  "_ghost_syms": []
+}

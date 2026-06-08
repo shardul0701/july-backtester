@@ -1,0 +1,78 @@
+name: Nightly Trading Pipeline
+
+# Runs Mon–Fri at 22:00 UTC = 6 PM EDT / 5 PM EST
+# Fetches EOD prices, updates MR+C7 positions, generates target books, submits orders.
+# Commits updated paper_state/ back to the repo so the next morning report sees it.
+
+on:
+  schedule:
+    - cron: '0 22 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (no orders)'
+        required: false
+        default: 'false'
+        type: choice
+        options: ['false', 'true']
+
+permissions:
+  contents: write    # needed to commit updated paper_state/ back to repo
+
+jobs:
+  pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repo (with state files)
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 1
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install pandas numpy pyarrow python-dotenv
+
+      - name: Run nightly pipeline
+        run: |
+          DRY="${{ github.event.inputs.dry_run }}"
+          if [ "$DRY" = "true" ]; then
+            python scripts/daily_pipeline.py --cloud --dry-run
+          else
+            python scripts/daily_pipeline.py --cloud
+          fi
+        env:
+          POLYGON_API_KEY:       ${{ secrets.POLYGON_API_KEY }}
+          ALPACA_BASE_URL:       https://paper-api.alpaca.markets
+          B1_APCA_API_KEY_ID:    ${{ secrets.B1_APCA_API_KEY_ID }}
+          B1_APCA_API_SECRET_KEY: ${{ secrets.B1_APCA_API_SECRET_KEY }}
+          B2_APCA_API_KEY_ID:    ${{ secrets.B2_APCA_API_KEY_ID }}
+          B2_APCA_API_SECRET_KEY: ${{ secrets.B2_APCA_API_SECRET_KEY }}
+          MR_APCA_API_KEY_ID:    ${{ secrets.MR_APCA_API_KEY_ID }}
+          MR_APCA_API_SECRET_KEY: ${{ secrets.MR_APCA_API_SECRET_KEY }}
+
+      - name: Run post-submit positions snapshot
+        run: python scripts/daily_positions_report.py --cloud
+        env:
+          ALPACA_BASE_URL:       https://paper-api.alpaca.markets
+          B1_APCA_API_KEY_ID:    ${{ secrets.B1_APCA_API_KEY_ID }}
+          B1_APCA_API_SECRET_KEY: ${{ secrets.B1_APCA_API_SECRET_KEY }}
+          B2_APCA_API_KEY_ID:    ${{ secrets.B2_APCA_API_KEY_ID }}
+          B2_APCA_API_SECRET_KEY: ${{ secrets.B2_APCA_API_SECRET_KEY }}
+          MR_APCA_API_KEY_ID:    ${{ secrets.MR_APCA_API_KEY_ID }}
+          MR_APCA_API_SECRET_KEY: ${{ secrets.MR_APCA_API_SECRET_KEY }}
+
+      - name: Commit updated state to repo
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add paper_state/
+          git diff --staged --quiet || git commit -m "chore: nightly state update $(date +%Y-%m-%d)"
+          git push
