@@ -173,7 +173,66 @@ CONFIG = {
     "s3_reports_bucket": "",
 
     # ============================================================
-    # SECTION 21: POINT-IN-TIME (PIT) MEMBERSHIP ENFORCEMENT
+    # SECTION 23: SURVIVORSHIP BIAS
+    # ============================================================
+    # Include delisted/failed companies in backtests to avoid survivorship bias.
+    # Only Norgate and Polygon support delisting data.
+    # Yahoo and CSV providers will log a warning if enabled.
+    "include_delisted": False,
+
+    # How to price force-closed positions when a stock is delisted:
+    # "last_close" — use the last known Close price (default, realistic)
+    # "zero" — assume total loss (conservative, stress-test scenario)
+    "delisting_price_assumption": "last_close",
+
+    # Optional path to a JSON file of historically delisted symbols to merge
+    # into the universe when include_delisted=True. Same format as nasdaq_100.json.
+    # Relative paths resolve from tickers_to_scan/. Set to None to disable.
+    # Without this, the universe still only contains surviving stocks even when
+    # include_delisted=True — setting this is required for true survivorship
+    # bias correction.
+    # Example: "delisted_symbols_file": "nasdaq_100_delisted.json"
+    "delisted_symbols_file": None,
+
+    # ============================================================
+    # SECTION 24: DATA QUALITY VALIDATION
+    # ============================================================
+    # Pre-flight data quality checks before backtest runs.
+    # Detects: missing bars, price jumps, OHLC violations, negative prices, zero volume
+    "data_quality_checks": True,
+
+    # Minimum quality score (0-100) to proceed with backtest in strict mode
+    "data_quality_threshold": 80,
+
+    # When True, fail fast if any symbol has score < threshold
+    # When False (default), log warnings and continue
+    "strict_data_quality": False,
+
+    # ============================================================
+    # SECTION 25: POSITION SIZING
+    # ============================================================
+    # Position sizing method: "fixed", "kelly", "vol_parity", "risk_parity"
+    "position_sizing_method": "fixed",
+
+    # Fixed method: % of equity per trade (used by "fixed" method)
+    # Already defined in SECTION 8, but listed here for reference
+    # "allocation_per_trade": 0.10,
+
+    # Kelly Criterion: fraction of full Kelly to use (conservative)
+    # Full Kelly can be very aggressive, so we use 25% by default
+    "kelly_fraction": 0.25,
+
+    # Volatility/Risk Parity: target risk per trade (2% of equity)
+    # This is the $ amount you're willing to lose if the trade hits your stop
+    "target_risk_per_trade": 0.02,
+
+    # Portfolio heat limit: max total $ risk across all open positions
+    # 0.10 = 10% of equity can be at risk simultaneously
+    # 1.0 = no limit (allow full portfolio risk)
+    "max_portfolio_heat": 0.10,
+
+    # ============================================================
+    # SECTION 26: POINT-IN-TIME (PIT) MEMBERSHIP ENFORCEMENT
     # ============================================================
     # Only relevant for PIT portfolios ("pit:nq100" / "pit:sp500").
     # When pit_enforce_daily=True each symbol is gated to its index-membership

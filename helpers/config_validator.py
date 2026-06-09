@@ -103,6 +103,19 @@ KNOWN_KEYS: set[str] = {
     "verbose_output",
     # SECTION 22: Realized-Only Reporting
     "exclude_open_positions",
+    # SECTION 23: Survivorship Bias
+    "include_delisted",
+    "delisting_price_assumption",
+    "delisted_symbols_file",
+    # SECTION 24: Data Quality
+    "data_quality_checks",
+    "data_quality_threshold",
+    "strict_data_quality",
+    # SECTION 25: Position Sizing
+    "position_sizing_method",
+    "kelly_fraction",
+    "target_risk_per_trade",
+    "max_portfolio_heat",
     # PIT and merged-data screening
     "pit_enforce_daily",
     "pit_warmup_days",
