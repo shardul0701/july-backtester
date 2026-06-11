@@ -1,3 +1,5 @@
+import random as _random
+
 import pandas as pd
 import numpy as np
 from config import CONFIG
@@ -222,7 +224,6 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                 return (1, "", sym)
             _short_items = sorted(portfolio_data.items(), key=_short_sig_key)
         elif _priority == "random_seed":
-            import random as _random
             _rng_short = _random.Random(CONFIG.get("entry_random_seed", 42))
             _short_items = sorted(portfolio_data.items(), key=lambda x: x[0])
             _rng_short.shuffle(_short_items)
@@ -260,7 +261,6 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                 return (1, "", sym)
             _entry_items = sorted(portfolio_data.items(), key=_long_sig_key)
         elif _priority == "random_seed":
-            import random as _random
             _rng_long = _random.Random(CONFIG.get("entry_random_seed", 42))
             _entry_items = sorted(portfolio_data.items(), key=lambda x: x[0])
             _rng_long.shuffle(_entry_items)
