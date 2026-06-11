@@ -107,6 +107,9 @@ KNOWN_KEYS: set[str] = {
     # SECTION 26: Point-in-Time Universe Paths
     "nq100_pit_path",
     "sp500_pit_path",
+    # SECTION 27: Deterministic Entry Queue
+    "entry_priority",
+    "entry_random_seed",
     # S3
     "s3_reports_bucket",
     "upload_to_s3",

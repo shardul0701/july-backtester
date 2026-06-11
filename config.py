@@ -339,6 +339,17 @@ CONFIG = {
     "export_ml_features": False,
 
     # ============================================================
+    # SECTION 24: DETERMINISTIC ENTRY QUEUE (#160)
+    # ============================================================
+    # Controls the order in which symbols are evaluated for entry when multiple
+    # signals fire on the same bar and capital can only fill a subset.
+    # "alphabetical" (default) — A→Z, reproducible and Alpaca-replicable
+    # "signal_date"            — earlier-signalling symbols get priority
+    # "random_seed"            — shuffle with a fixed seed (sensitivity testing)
+    "entry_priority": "alphabetical",
+    "entry_random_seed": 42,
+
+    # ============================================================
     # SECTION 21: VERBOSE SUMMARY TABLE
     # ============================================================
     # When False (default), terminal summary tables show a compact

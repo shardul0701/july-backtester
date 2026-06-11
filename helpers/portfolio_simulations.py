@@ -4,7 +4,7 @@ from config import CONFIG
 from .simulations import calculate_advanced_metrics
 from helpers.position_sizing import calculate_position_size, check_portfolio_heat
 
-def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocation_pct, spy_df, vix_df, tnx_df, stop_config, delisting_dates=None):
+def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocation_pct, spy_df, vix_df, tnx_df, stop_config, size_mults=None, delisting_dates=None):
     """
     Runs a portfolio simulation with integrated stop-loss handling and logs
     a rich set of features for each trade for future machine learning analysis.
@@ -144,6 +144,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                 'ExitDate': exit_date.isoformat(), 'ExitPrice': exit_price,
                 'Profit': net_pnl, 'ProfitPct': net_pnl / position_value if position_value > 0 else 0,
                 'Shares': pos['shares'],
+                'PosSizeMult': pos.get('size_mult', 1.0),
                 'is_win': 1 if net_pnl > 0 else 0,
                 'HoldDuration': duration,
                 'MAE_pct': mae_pct, 'MFE_pct': mfe_pct,
@@ -180,6 +181,14 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                 net_pnl = (spos['shares'] * spos['entry_price']) - (spos['shares'] * cover_slip) - (2 * commission) - spos.get('total_borrow_cost', 0.0)
                 cash += spos['shares'] * (spos['entry_price'] - cover_slip) - commission
                 trade_counter += 1
+                # MAE/MFE for shorts: favorable = price drops, adverse = price rises
+                short_trade_df = portfolio_data[symbol].loc[spos['entry_date']:date]
+                if not short_trade_df.empty:
+                    _ep = spos['entry_price']
+                    short_mfe = (_ep - short_trade_df['Low'].min())  / _ep  # max drop = best case
+                    short_mae = (short_trade_df['High'].max() - _ep) / _ep  # max rise = worst case
+                else:
+                    short_mfe, short_mae = 0.0, 0.0
                 trade_log.append({
                     'Symbol': symbol, 'Trade': f"Short {trade_counter}",
                     'EntryDate': spos['entry_date'].isoformat(), 'EntryPrice': spos['entry_price'],
@@ -187,7 +196,12 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     'Profit': net_pnl, 'ProfitPct': net_pnl / spos['notional'] if spos['notional'] > 0 else 0,
                     'Shares': spos['shares'], 'is_win': 1 if net_pnl > 0 else 0,
                     'HoldDuration': (date - spos['entry_date']).days,
-                    'MAE_pct': 0.0, 'MFE_pct': 0.0, 'ExitReason': 'Short Cover',
+                    'MAE_pct': short_mae, 'MFE_pct': short_mfe,
+                    'ExitReason': (
+                        'PIT Membership Exit (last available close)' if pit_force_exit
+                        else 'PIT Membership Exit' if not pit_member
+                        else 'Short Cover'
+                    ),
                     'InitialRisk': 0.0, 'RMultiple': None,
                 })
                 short_exited.append(symbol)
@@ -195,7 +209,26 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
             del short_positions[symbol]
 
         # --- SHORT ENTRY (signal = -2, not already in any position) ---
-        for symbol, df in portfolio_data.items():
+        _priority = CONFIG.get("entry_priority", "alphabetical")
+        if _priority == "signal_date":
+            def _short_sig_key(item):
+                sym, _df = item
+                if date not in _df.index:
+                    return (1, "", sym)
+                sd = prev_trading_dates[sym].get(date) if execution_time == "open" else date
+                if (pd.notna(sd) and sym in signals and sd in signals[sym].index
+                        and signals[sym].loc[sd] == -2):
+                    return (0, str(sd), sym)
+                return (1, "", sym)
+            _short_items = sorted(portfolio_data.items(), key=_short_sig_key)
+        elif _priority == "random_seed":
+            import random as _random
+            _rng_short = _random.Random(CONFIG.get("entry_random_seed", 42))
+            _short_items = sorted(portfolio_data.items(), key=lambda x: x[0])
+            _rng_short.shuffle(_short_items)
+        else:
+            _short_items = sorted(portfolio_data.items(), key=lambda x: x[0])
+        for symbol, df in _short_items:
             if date not in df.index or symbol in positions or symbol in short_positions:
                 continue
             sig_date = prev_trading_dates[symbol].get(date) if execution_time == 'open' else date
@@ -208,14 +241,32 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     continue
                 shares = alloc / ep
                 commission = shares * CONFIG['commission_per_share']
-                cash += shares * ep - commission   # short seller receives proceeds
+                cash -= commission   # proceeds and collateral cancel; only commission is a real cash cost
                 short_positions[symbol] = {
                     'entry_date': date, 'entry_price': ep,
                     'shares': shares, 'notional': shares * ep, 'total_borrow_cost': 0.0,
                 }
 
         # --- POSITION ENTRY LOGIC ---
-        for symbol, df in portfolio_data.items():
+        if _priority == "signal_date":
+            def _long_sig_key(item):
+                sym, _df = item
+                if date not in _df.index:
+                    return (1, "", sym)
+                sd = prev_trading_dates[sym].get(date) if execution_time == "open" else date
+                if (pd.notna(sd) and sym in signals and sd in signals[sym].index
+                        and signals[sym].loc[sd] == 1):
+                    return (0, str(sd), sym)
+                return (1, "", sym)
+            _entry_items = sorted(portfolio_data.items(), key=_long_sig_key)
+        elif _priority == "random_seed":
+            import random as _random
+            _rng_long = _random.Random(CONFIG.get("entry_random_seed", 42))
+            _entry_items = sorted(portfolio_data.items(), key=lambda x: x[0])
+            _rng_long.shuffle(_entry_items)
+        else:
+            _entry_items = sorted(portfolio_data.items(), key=lambda x: x[0])
+        for symbol, df in _entry_items:
             # <-- NEW CHECK: If the current date doesn't exist for this stock,
             # we cannot possibly enter a position.
             if date not in df.index:
@@ -233,6 +284,16 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
             entry_price = raw_entry_price * (1 + CONFIG['slippage_pct'])
 
             if entry_price > 0 and cash > 0:
+                # --- PER-SIGNAL SIZE MULTIPLIER ---
+                # Apply per-signal size multiplier when the strategy provides one
+                # (e.g. 0.6x / 0.8x / 1.0x based on ML probability band). Multiplied
+                # into the sized position below, before the portfolio heat check.
+                _size_mult = 1.0
+                if size_mults is not None and symbol in size_mults:
+                    _sm_val = size_mults[symbol].get(signal_date, np.nan)
+                    if pd.notna(_sm_val) and _sm_val > 0:
+                        _size_mult = float(_sm_val)
+
                 # --- POSITION SIZING ---
                 sizing_method = CONFIG.get('position_sizing_method', 'fixed')
                 sizing_kwargs = {}
@@ -275,6 +336,10 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     allocation_pct=allocation_pct,  # honour the caller's allocation, not CONFIG only
                     **sizing_kwargs
                 )
+
+                # Apply the per-signal size multiplier (entry-queue / ML band)
+                # to the sized position before the heat check.
+                shares = shares * _size_mult
 
                 # --- PORTFOLIO HEAT CHECK ---
                 # Compute the dollar risk this position adds. For methods with a
@@ -399,6 +464,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         'stop_loss_level': stop_loss_level,
                         'initial_stop_loss_level': stop_loss_level,
                         'entry_impact_bps': entry_impact_bps,
+                        'size_mult': _size_mult,
                         'risk': new_position_risk,
                     }
                     cash -= total_cost
