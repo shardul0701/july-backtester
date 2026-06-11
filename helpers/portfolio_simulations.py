@@ -2,12 +2,19 @@ import pandas as pd
 import numpy as np
 from config import CONFIG
 from .simulations import calculate_advanced_metrics
+from helpers.position_sizing import calculate_position_size, check_portfolio_heat
 
-def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocation_pct, spy_df, vix_df, tnx_df, stop_config, size_mults=None):
+def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocation_pct, spy_df, vix_df, tnx_df, stop_config, size_mults=None, delisting_dates=None):
     """
     Runs a portfolio simulation with integrated stop-loss handling and logs
     a rich set of features for each trade for future machine learning analysis.
     (Version hardened against KeyError from misaligned dates).
+
+    Parameters
+    ----------
+    delisting_dates : dict[str, str], optional
+        {symbol: "YYYY-MM-DD"} mapping of delisting dates from helpers/survivorship.py.
+        When provided, open positions are force-closed on delisting.
     """
     from helpers.timeframe_utils import get_bars_per_year
 
@@ -273,25 +280,82 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                 entry_exec_date = date
 
             if pd.isna(raw_entry_price): continue
-            
+
             entry_price = raw_entry_price * (1 + CONFIG['slippage_pct'])
-            
-            # Determine max capital to allocate for this single trade.
-            # Apply per-signal size multiplier when the strategy provides one
-            # (e.g. 0.6x / 0.8x / 1.0x based on ML probability band).
-            _size_mult = 1.0
-            if size_mults is not None and symbol in size_mults:
-                _sm_val = size_mults[symbol].get(signal_date, np.nan)
-                if pd.notna(_sm_val) and _sm_val > 0:
-                    _size_mult = float(_sm_val)
-            capital_to_allocate = total_equity * allocation_pct * _size_mult
-            
-            # You cannot allocate more for the principal than your available cash
-            capital_to_allocate = min(capital_to_allocate, cash)
-            
-            if entry_price > 0 and capital_to_allocate > 0:
-                # Calculate ideal shares based on the capital allocation
-                shares = capital_to_allocate / entry_price
+
+            if entry_price > 0 and cash > 0:
+                # --- PER-SIGNAL SIZE MULTIPLIER ---
+                # Apply per-signal size multiplier when the strategy provides one
+                # (e.g. 0.6x / 0.8x / 1.0x based on ML probability band). Multiplied
+                # into the sized position below, before the portfolio heat check.
+                _size_mult = 1.0
+                if size_mults is not None and symbol in size_mults:
+                    _sm_val = size_mults[symbol].get(signal_date, np.nan)
+                    if pd.notna(_sm_val) and _sm_val > 0:
+                        _size_mult = float(_sm_val)
+
+                # --- POSITION SIZING ---
+                sizing_method = CONFIG.get('position_sizing_method', 'fixed')
+                sizing_kwargs = {}
+
+                # For risk_parity: derive stop_distance_pct from the configured stop so
+                # sizing uses the actual stop rather than always falling back to 3x ATR.
+                if sizing_method == "risk_parity":
+                    stop_type = stop_config.get("type", "none")
+                    if stop_type == "percentage":
+                        sizing_kwargs["stop_distance_pct"] = stop_config.get("value", 0.05)
+                    elif stop_type == "atr":
+                        _day_before = prev_trading_dates[symbol].get(entry_exec_date)
+                        if _day_before is not None and _day_before in df.index and "ATR_14" in df.columns:
+                            _atr = df.loc[_day_before, 'ATR_14']
+                            _close = df.loc[_day_before, 'Close']
+                            if pd.notna(_atr) and pd.notna(_close) and _close > 0:
+                                sizing_kwargs["stop_distance_pct"] = (
+                                    _atr * stop_config.get("multiplier", 3.0)
+                                ) / _close
+
+                # For kelly: compute rolling stats from completed trades so sizing
+                # actually adapts to the strategy's live performance.
+                if sizing_method == "kelly" and len(trade_log) >= 10:
+                    _wins = [t for t in trade_log if t.get("is_win") == 1 and t.get("ProfitPct") is not None]
+                    _losses = [t for t in trade_log if t.get("is_win") == 0 and t.get("ProfitPct") is not None]
+                    if _wins and _losses:
+                        sizing_kwargs["win_rate"] = len(_wins) / len(trade_log)
+                        sizing_kwargs["avg_win"] = sum(t["ProfitPct"] for t in _wins) / len(_wins)
+                        sizing_kwargs["avg_loss"] = sum(abs(t["ProfitPct"]) for t in _losses) / len(_losses)
+
+                # Slice to current date to prevent look-ahead bias: vol_parity and
+                # risk_parity use .iloc[-1] on the passed DataFrame, so passing the
+                # full history would use a future ATR value on early simulation dates.
+                shares = calculate_position_size(
+                    method=sizing_method,
+                    equity=total_equity,
+                    price=entry_price,
+                    symbol_data=df.loc[:date],
+                    config=CONFIG,
+                    allocation_pct=allocation_pct,  # honour the caller's allocation, not CONFIG only
+                    **sizing_kwargs
+                )
+
+                # Apply the per-signal size multiplier (entry-queue / ML band)
+                # to the sized position before the heat check.
+                shares = shares * _size_mult
+
+                # --- PORTFOLIO HEAT CHECK ---
+                # Compute the dollar risk this position adds. For methods with a
+                # known stop distance we use that; otherwise fall back to the
+                # target_risk_per_trade parameter (which is what vol/risk parity
+                # sized against anyway).
+                _stop_dist = sizing_kwargs.get("stop_distance_pct") or CONFIG.get("target_risk_per_trade", 0.02)
+                new_position_risk = shares * entry_price * _stop_dist
+                max_heat = CONFIG.get("max_portfolio_heat", 1.0)
+                if not check_portfolio_heat(positions, new_position_risk, total_equity, max_heat):
+                    continue
+
+                # Cash constraint
+                capital_needed = shares * entry_price
+                if capital_needed > cash:
+                    shares = cash / entry_price
 
                 # --- VOLUME-BASED LIQUIDITY FILTER ---
                 max_pct_adv = CONFIG.get('max_pct_adv') or 0
@@ -401,10 +465,83 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         'initial_stop_loss_level': stop_loss_level,
                         'entry_impact_bps': entry_impact_bps,
                         'size_mult': _size_mult,
+                        'risk': new_position_risk,
                     }
                     cash -= total_cost
     
     exclude_open = CONFIG.get('exclude_open_positions', False)
+
+    # --- SURVIVORSHIP BIAS: FORCE-CLOSE DELISTED OPEN POSITIONS ---
+    # This MUST run before the End-of-Backtest mark-to-market block below.
+    # Otherwise, a still-open position in a delisted symbol would either be
+    # marked-to-market at its last bar (exclude_open=False) or dropped entirely
+    # (exclude_open=True) — in both cases the delisting loss would be silently
+    # ignored, defeating the purpose of survivorship handling.
+    survivorship_stats = {}
+    # Each entry: (symbol, delisting_ts, shares, exit_price) — used to correct the
+    # equity curve, whose daily-loop values still mark the position to market.
+    _delisting_corrections = []
+    if delisting_dates and CONFIG.get("include_delisted", False):
+        _price_assumption = CONFIG.get("delisting_price_assumption", "last_close")
+        _positions_delisted = 0
+        _total_delisting_loss = 0.0
+        for symbol in list(positions.keys()):
+            if symbol not in delisting_dates:
+                continue
+            pos = positions[symbol]
+            delisting_ts = pd.Timestamp(delisting_dates[symbol])
+            entry_ts = pos['entry_date']
+            if delisting_ts < entry_ts:
+                continue  # delisted before we entered — leave for normal handling
+
+            # Determine exit price under the configured assumption.
+            if _price_assumption == "zero":
+                exit_price = 0.0
+            else:  # "last_close": last available Close on/before the delisting date
+                exit_price = pos['entry_price']  # fallback
+                sym_df = portfolio_data.get(symbol)
+                if sym_df is not None and not sym_df.empty:
+                    prior = sym_df.loc[sym_df.index <= delisting_ts, 'Close'].dropna()
+                    if not prior.empty:
+                        exit_price = float(prior.iloc[-1])
+
+            commission = pos['shares'] * CONFIG['commission_per_share']
+            net_pnl = ((exit_price - pos['entry_price']) * pos['shares']) - (2 * commission)
+            # Realised proceeds return to cash (delisting is a real liquidation).
+            cash += (pos['shares'] * exit_price) - commission
+
+            _initial_sl = pos.get('initial_stop_loss_level')
+            if pd.notna(_initial_sl) and _initial_sl > 0 and _initial_sl < pos['entry_price']:
+                _initial_risk_per_share = pos['entry_price'] - _initial_sl
+            else:
+                _initial_risk_per_share = pos['entry_price'] * 0.01
+            _r_multiple = (net_pnl / (_initial_risk_per_share * pos['shares'])
+                           if _initial_risk_per_share > 0 and pos['shares'] > 0 else None)
+
+            trade_counter += 1
+            _pos_value = pos['shares'] * pos['entry_price']
+            trade_log.append({
+                'Symbol': symbol, 'Trade': f"Long {trade_counter}",
+                'EntryDate': pos['entry_date'].isoformat(), 'EntryPrice': pos['entry_price'],
+                'ExitDate': delisting_ts.isoformat(), 'ExitPrice': exit_price,
+                'Profit': net_pnl, 'ProfitPct': net_pnl / _pos_value if _pos_value > 0 else -1.0,
+                'Shares': pos['shares'], 'is_win': 1 if net_pnl > 0 else 0,
+                'HoldDuration': (delisting_ts - pos['entry_date']).days,
+                'MAE_pct': 0.0, 'MFE_pct': 0.0, 'ExitReason': "Delisting",
+                'InitialRisk': _initial_risk_per_share, 'RMultiple': _r_multiple,
+                **pos.get('features', {}),
+            })
+            _delisting_corrections.append((symbol, delisting_ts, pos['shares'], exit_price))
+            _positions_delisted += 1
+            _total_delisting_loss += net_pnl
+            del positions[symbol]  # exclude from EoB mark-to-market / drop logic
+
+        survivorship_stats = {
+            "positions_delisted": _positions_delisted,
+            "total_delisting_loss": _total_delisting_loss,
+            "delisting_loss_pct": (_total_delisting_loss / initial_capital
+                                   if initial_capital > 0 else 0.0),
+        }
 
     # --- START: MARK-TO-MARKET LOGIC ---
     # After the main loop, check for any positions that are still open.
@@ -444,6 +581,33 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
     pnl_list = [t['Profit'] for t in trade_log]
     if not pnl_list: return None
 
+    # --- SURVIVORSHIP BIAS: CORRECT EQUITY CURVE FOR DELISTED POSITIONS ---
+    # The daily loop marked each now-delisted position to market for every bar
+    # of the hold, including bars on/after the delisting date. From the delisting
+    # date forward the position is no longer held — its value is the realised
+    # proceeds (shares * exit_price), which were added to cash above. So for each
+    # date >= delisting we replace the marked-to-market contribution
+    # (shares * Close[date]) with the frozen realised value (shares * exit_price).
+    # This avoids double-counting the loss and keeps Sharpe/drawdown/CAGR correct.
+    if _delisting_corrections:
+        for symbol, delisting_ts, shares, exit_price in _delisting_corrections:
+            sym_df = portfolio_data.get(symbol)
+            if sym_df is None:
+                continue
+            mask = portfolio_timeline.index >= delisting_ts
+            for dt in portfolio_timeline.index[mask]:
+                if pd.isna(portfolio_timeline.loc[dt]):
+                    continue
+                # What the daily loop added for this symbol on this date.
+                if dt in sym_df.index:
+                    mtm_close = sym_df.loc[dt, 'Close']
+                else:
+                    prior_idx = sym_df.index[sym_df.index < dt]
+                    mtm_close = sym_df.loc[prior_idx[-1], 'Close'] if len(prior_idx) else np.nan
+                if pd.isna(mtm_close):
+                    continue
+                portfolio_timeline.loc[dt] += shares * (exit_price - mtm_close)
+
     duration_list = [t['HoldDuration'] for t in trade_log]
     if exclude_open:
         # Realized-only: headline P&L is the sum of closed trade profits only.
@@ -454,4 +618,4 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
 
     return {**metrics, "pnl_percent": final_pnl_percent, "Trades": len(pnl_list),
             "trade_pnl_list": pnl_list, "trade_log": trade_log, "initial_capital": initial_capital,
-            "portfolio_timeline": portfolio_timeline.dropna()}
+            "portfolio_timeline": portfolio_timeline.dropna(), **survivorship_stats}

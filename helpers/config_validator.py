@@ -91,7 +91,23 @@ KNOWN_KEYS: set[str] = {
     "verbose_output",
     # SECTION 22: Realized-Only Reporting
     "exclude_open_positions",
-    # SECTION 24: Deterministic Entry Queue
+    # SECTION 23: Survivorship Bias
+    "include_delisted",
+    "delisting_price_assumption",
+    "delisted_symbols_file",
+    # SECTION 24: Data Quality
+    "data_quality_checks",
+    "data_quality_threshold",
+    "strict_data_quality",
+    # SECTION 25: Position Sizing
+    "position_sizing_method",
+    "kelly_fraction",
+    "target_risk_per_trade",
+    "max_portfolio_heat",
+    # SECTION 26: Point-in-Time Universe Paths
+    "nq100_pit_path",
+    "sp500_pit_path",
+    # SECTION 27: Deterministic Entry Queue
     "entry_priority",
     "entry_random_seed",
     # S3

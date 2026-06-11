@@ -39,20 +39,31 @@ def _pick_reference_df(comparison_dfs: dict) -> pd.DataFrame:
     return next(iter(comparison_dfs.values()))
 
 
+# Module-level defaults so workers can reference these globals safely even in
+# test contexts where init_worker was never called.
+comparison_dfs_global = None
+benchmark_returns_global = None
+dependency_map_global = None
+portfolio_data_global = None
+pit_member_masks_global = None
+
 # --------------------------------------------------------------------
 # --- WORKER INITIALIZER FOR MULTIPROCESSING ---
 # --------------------------------------------------------------------
-def init_worker(comparison_dfs_dict, benchmark_returns_dict, dependency_map_dict, portfolio_data_for_worker):
+def init_worker(comparison_dfs_dict, benchmark_returns_dict, dependency_map_dict, portfolio_data_for_worker, delisting_dates_for_worker=None, pit_member_masks_dict=None):
     """
     Initializer for the multiprocessing pool.
     Makes comparison ticker DataFrames, benchmark returns, dependency symbol map,
-    and the current portfolio's data globally available to each worker process.
+    the current portfolio's data, delisting dates, and optional PIT membership
+    masks globally available to each worker process.
     """
-    global comparison_dfs_global, benchmark_returns_global, dependency_map_global, portfolio_data_global
+    global comparison_dfs_global, benchmark_returns_global, dependency_map_global, portfolio_data_global, delisting_dates_global, pit_member_masks_global
     comparison_dfs_global = comparison_dfs_dict
     benchmark_returns_global = benchmark_returns_dict
     dependency_map_global = dependency_map_dict
     portfolio_data_global = portfolio_data_for_worker
+    delisting_dates_global = delisting_dates_for_worker
+    pit_member_masks_global = pit_member_masks_dict
 
 # --------------------------------------------------------------------
 
@@ -62,7 +73,7 @@ def run_single_simulation(args):
     This version now uses globally initialized dataframes AND portfolio_data.
     """
     # Access ALL globally initialized data
-    global comparison_dfs_global, benchmark_returns_global, dependency_map_global, portfolio_data_global
+    global comparison_dfs_global, benchmark_returns_global, dependency_map_global, portfolio_data_global, delisting_dates_global, pit_member_masks_global
 
     # 1. Unpack the arguments. `portfolio_data` has been REMOVED from the tuple.
     portfolio_name, name, logic_func, dependencies, stop_config, \
@@ -110,10 +121,30 @@ def run_single_simulation(args):
         # The simulator now handles stop-loss logic internally.
         final_signals = {symbol: df['Signal'] for symbol, df in base_signals_with_dfs.items()}
 
+        # --- PIT SIGNAL GATING ---
+        # When the portfolio was built from a ``pit:`` universe, apply two filters:
+        # 1. Block long entries (Signal==1) on dates when the symbol is not an index member.
+        # 2. Inject exit signals (Signal==-1) on the first trading day after a symbol
+        #    is removed from the index, so open positions are closed promptly.
+        # This runs per-simulation but mask computation is O(1) per date (precomputed).
+        if pit_member_masks_global is not None:
+            for symbol, sig in list(final_signals.items()):
+                mask = pit_member_masks_global.get(symbol)
+                if mask is None:
+                    continue
+                aligned = mask.reindex(sig.index, fill_value=False)
+                new_sig = sig.copy()
+                new_sig.loc[(sig == 1) & ~aligned] = 0
+                was_member = aligned.shift(1, fill_value=False)
+                removal_days = ~aligned & was_member
+                new_sig.loc[removal_days] = -1
+                final_signals[symbol] = new_sig
+        # --- END PIT SIGNAL GATING ---
+
         # Call the simulation, passing the stop_config and using the global dataframes.
         result = run_portfolio_simulation(
             portfolio_data, final_signals, CONFIG["initial_capital"], CONFIG["allocation_per_trade"],
-            spy_df_local, vix_df_local, tnx_df_local, stop_config
+            spy_df_local, vix_df_local, tnx_df_local, stop_config, delisting_dates_global
         )
         
         if result is None: return None
@@ -335,6 +366,8 @@ def main():
                 _symbol_counts[_pname] = "?"
         elif isinstance(_pvalue, str) and _pvalue.startswith("norgate:"):
             _symbol_counts[_pname] = "? (Norgate)"
+        elif isinstance(_pvalue, str) and _pvalue.startswith("pit:"):
+            _symbol_counts[_pname] = f"? ({_pvalue} - resolved at runtime)"
         else:
             _symbol_counts[_pname] = "?"
 
@@ -472,7 +505,8 @@ def main():
     # Loop through each portfolio sequentially
     for portfolio_name, value in _portfolios.items():
         logger.info(f"--> Preparing and running portfolio: {portfolio_name}")
-        
+        _current_pit_schedule = None  # reset each portfolio; set only for pit: portfolios
+
         # --- Data fetching for the current portfolio (no changes) ---
         # (Your existing code to get symbols and build `portfolio_data` is perfect)
         symbols = []
@@ -494,10 +528,43 @@ def main():
              file_path = os.path.join("tickers_to_scan", value)
              with open(file_path, 'rb') as f:
                  symbols = orjson.loads(f.read())
+        elif isinstance(value, str) and value.startswith("pit:"):
+            from helpers.point_in_time import tickers_union_for_period as _pit_union, build_membership_schedule as _pit_schedule_build
+            _pit_index_name = value.split(":", 1)[1]
+            try:
+                symbols = _pit_union(_pit_index_name, CONFIG["start_date"], CONFIG["end_date"], CONFIG)
+                _current_pit_schedule = _pit_schedule_build(_pit_index_name, CONFIG["start_date"], CONFIG["end_date"], CONFIG)
+            except Exception as e:
+                logger.error(f"  -> ERROR resolving PIT portfolio '{value}' for '{portfolio_name}': {e}")
+                continue
+            logger.info(
+                f"  -> {value} full historical union ({CONFIG['start_date']} to {CONFIG['end_date']}): "
+                f"{len(symbols)} tickers (PIT membership enforced during simulation)"
+            )
         
         if not symbols:
             logger.warning(f"No symbols found for '{portfolio_name}'. Skipping.")
             continue
+
+        # --- SURVIVORSHIP: merge delisted symbols into universe ---
+        if CONFIG.get("include_delisted", False):
+            delisted_file = CONFIG.get("delisted_symbols_file")
+            if delisted_file:
+                delisted_path = os.path.join("tickers_to_scan", delisted_file) if not os.path.isabs(delisted_file) else delisted_file
+                if os.path.exists(delisted_path):
+                    with open(delisted_path, "rb") as _f:
+                        extra_symbols = orjson.loads(_f.read())
+                    before = len(symbols)
+                    symbols = list(dict.fromkeys(symbols + extra_symbols))
+                    logger.info(f"  -> Merged {len(symbols) - before} delisted symbols from '{delisted_file}' (universe: {len(symbols)} total)")
+                else:
+                    logger.warning(f"  -> [WARNING] delisted_symbols_file '{delisted_file}' not found — universe contains survivors only")
+            else:
+                logger.warning(
+                    "  -> [WARNING] include_delisted=True but no delisted_symbols_file configured. "
+                    "Universe contains survivors only. Set 'delisted_symbols_file' to a JSON ticker list "
+                    "(e.g. tickers_to_scan/nasdaq_100_delisted.json) to include historically delisted stocks."
+                )
 
         MIN_BARS = CONFIG.get("min_bars_required", 250)
         skipped_symbols = []
@@ -563,6 +630,65 @@ def main():
             logger.warning(f"Could not fetch data for any symbols in '{portfolio_name}'. Skipping.")
             continue
 
+        # --- DATA QUALITY VALIDATION ---
+        if CONFIG.get("data_quality_checks", True):
+            from helpers.data_quality import quality_report
+            logger.info(f"  -> Running data quality checks on {len(symbols)} symbols...")
+            quality_df = quality_report(symbols, portfolio_data, CONFIG.get("timeframe", "D"))
+
+            # Display quality report
+            threshold = CONFIG.get("data_quality_threshold", 80)
+            low_quality = quality_df[quality_df["score"] < threshold]
+
+            if not low_quality.empty:
+                logger.warning(f"  -> {len(low_quality)} symbol(s) have quality score < {threshold}")
+                print("\n" + "=" * 80)
+                print(f"DATA QUALITY REPORT: {portfolio_name}".center(80))
+                print("=" * 80)
+                # Show only low-quality symbols in detail
+                print(low_quality[["symbol", "score", "issues"]].to_string(index=False))
+                print("=" * 80 + "\n")
+
+                if CONFIG.get("strict_data_quality", False):
+                    raise ValueError(
+                        f"Data quality check failed: {len(low_quality)} symbol(s) below threshold {threshold}. "
+                        f"Set strict_data_quality=False to continue with warnings."
+                    )
+            else:
+                logger.info(f"  -> All symbols passed quality checks (min score: {quality_df['score'].min():.1f})")
+        # --- FETCH DELISTING DATES (if survivorship bias handling is enabled) ---
+        delisting_dates = {}
+        if CONFIG.get("include_delisted", False):
+            from helpers.survivorship import get_delisting_dates
+            logger.info(f"  -> Fetching delisting dates for {len(symbols)} symbols...")
+            delisting_dates = get_delisting_dates(symbols, CONFIG["data_provider"], CONFIG)
+            if delisting_dates:
+                logger.info(f"  -> Found {len(delisting_dates)} delisted symbols: {', '.join(list(delisting_dates.keys())[:10])}{'...' if len(delisting_dates) > 10 else ''}")
+            else:
+                logger.info(f"  -> No delisted symbols found (or provider doesn't support delisting data).")
+
+        # --- PIT MEMBERSHIP MASKS (precomputed once per portfolio) ---
+        # For pit: portfolios, build a boolean Series per symbol marking which
+        # trading dates the symbol was an index member.  Workers apply this mask
+        # to gate entry signals and inject exit signals — zero per-simulation
+        # overhead beyond a vectorised lookup.
+        if _current_pit_schedule is not None:
+            from helpers.point_in_time import pit_members_on as _pit_members_on
+            _pit_member_masks: dict[str, object] = {}
+            for _sym, _df in portfolio_data.items():
+                _dates = _df.index
+                _date_strs = [str(d)[:10] for d in _dates]
+                _pit_member_masks[_sym] = pd.Series(
+                    [_sym in _pit_members_on(_current_pit_schedule, d) for d in _date_strs],
+                    index=_dates,
+                    dtype=bool,
+                )
+            _n_with_history = sum(m.any() for m in _pit_member_masks.values())
+            logger.info(f"  -> PIT masks built: {_n_with_history}/{len(_pit_member_masks)} symbols have at least one membership day")
+        else:
+            _pit_member_masks = None
+        # --- END PIT MEMBERSHIP MASKS ---
+
         # --- Generate tasks for THIS portfolio, WITHOUT the large `portfolio_data` ---
         tasks_for_this_portfolio = []
         for strat_name, strategy_config in get_active_strategies().items():
@@ -594,8 +720,8 @@ def main():
         logger.info("=" * 15 + f" RUNNING SIMULATIONS FOR '{portfolio_name}' " + "=" * 15)
         logger.info(f"Found {len(tasks_for_this_portfolio)} tasks. Using up to {cpu_count()} CPU cores.")
         
-        # Pass comparison data and portfolio data during initialization, not with each task
-        init_args = (comparison_dfs, benchmark_returns, comparison_config["dependencies"], portfolio_data)
+        # Pass comparison data, portfolio data, delisting dates, and PIT masks during initialization
+        init_args = (comparison_dfs, benchmark_returns, comparison_config["dependencies"], portfolio_data, delisting_dates, _pit_member_masks)
 
         with Pool(processes=cpu_count(), initializer=init_worker, initargs=init_args) as p:
             import time as _time
