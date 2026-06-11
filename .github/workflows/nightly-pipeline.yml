@@ -5,8 +5,13 @@ name: Nightly Trading Pipeline
 # Commits updated paper_state/ back to the repo so the next morning report sees it.
 
 on:
-  schedule:
-    - cron: '0 22 * * 1-5'
+  # Cron DISABLED to prevent double-management: the local Windows task
+  # `LiveStrategyManager` (5:30 PM ET) is the single authoritative submitter
+  # for all 5 strategies. This cloud path only handles B1/B2/MR and would
+  # conflict if it also fired nightly. Re-enable the cron ONLY if you retire
+  # the local task and port S8/SSD into the cloud pipeline.
+  # schedule:
+  #   - cron: '0 22 * * 1-5'
   workflow_dispatch:
     inputs:
       dry_run:

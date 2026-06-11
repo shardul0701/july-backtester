@@ -284,8 +284,13 @@ def _prefetch_cloud_history(date_str: str, lookback_days: int = 135) -> None:
 def _generate_today_signals_cloud(date_str: str) -> pd.DataFrame:
     """Generate MR entry signals for date_str from _CLOUD_HISTORY.
 
-    Applies a simplified REG2E filter: NQ100 stocks where RSI-14 < 35
-    and 10d return ranks in the bottom 20% (rank ≤ 20/100).
+    Replicates the authoritative REG2E entry rules from
+    MR/generate_mr_cross_sectional_signals.py (full fidelity, no longer a proxy):
+      - Wilder RSI-14 (rolling mean) < 25  AND  price >= 10
+      - cross-sectional 10d-return rank: select the 5 MOST oversold (rank <= 5)
+      - VIX <= 40 at signal day; 30% 1-day VIX spike in trailing 5d -> blackout
+      - crash gate: skip only when QQQ < 200MA AND VIX rising (both today)
+    Universe is the current NQ100 (correct for a forward as-of book).
     """
     nq100_path = ROOT / "tickers_to_scan" / "nasdaq_100.json"
     if not nq100_path.exists():
@@ -295,46 +300,59 @@ def _generate_today_signals_cloud(date_str: str) -> pd.DataFrame:
 
     dt = pd.Timestamp(date_str)
 
-    # VIX gate
+    # ── VIX gates: level (>40) + 30% 1-day spike blackout (trailing 5d) ──────
     vix_df = _CLOUD_HISTORY.get("I:VIX")
-    vix_val = float(vix_df.loc[dt, "Close"]) if (
-        vix_df is not None and dt in vix_df.index) else np.nan
+    vix_close = (vix_df["Close"] if (vix_df is not None and "Close" in vix_df.columns)
+                 else None)
+    vix_val = (float(vix_close.loc[dt]) if (vix_close is not None and dt in vix_close.index)
+               else np.nan)
     if np.isfinite(vix_val) and vix_val > 40:
         print(f"  [cloud] VIX={vix_val:.1f} > 40 — no MR entries today")
         return pd.DataFrame()
-
-    # QQQ 200MA bull filter
-    qqq_df = _CLOUD_HISTORY.get("QQQ")
-    if qqq_df is not None and "Close" in qqq_df.columns:
-        try:
-            ma200 = qqq_df["Close"].rolling(200, min_periods=100).mean()
-            qc = float(qqq_df.loc[dt, "Close"]) if dt in qqq_df.index else np.nan
-            qm = float(ma200.loc[dt]) if dt in ma200.index else np.nan
-            if np.isfinite(qc) and np.isfinite(qm) and qc < qm:
-                print("  [cloud] QQQ below 200MA — no MR entries today")
+    vix_rising = False
+    if vix_close is not None:
+        vc = vix_close[vix_close.index <= dt]
+        if len(vc) >= 2:
+            vix_rising = bool(vc.iloc[-1] > vc.iloc[-2])
+            recent = vc.tail(6).pct_change().tail(5)   # last 5 day-over-day changes
+            if (recent > 0.30).any():
+                print("  [cloud] VIX shock blackout (30% spike in last 5d) — no MR entries")
                 return pd.DataFrame()
-        except Exception:
-            pass
 
-    # Compute per-ticker metrics
+    # ── Crash gate: skip ONLY when QQQ < 200MA AND VIX rising (REG2E) ────────
+    qqq_df = _CLOUD_HISTORY.get("QQQ")
+    qqq_below = False
+    if qqq_df is not None and "Close" in qqq_df.columns:
+        ma200 = qqq_df["Close"].rolling(200, min_periods=100).mean()
+        qc = float(qqq_df.loc[dt, "Close"]) if dt in qqq_df.index else np.nan
+        qm = float(ma200.loc[dt]) if dt in ma200.index else np.nan
+        qqq_below = bool(np.isfinite(qc) and np.isfinite(qm) and qc < qm)
+    if qqq_below and vix_rising:
+        print("  [cloud] crash gate (QQQ<200MA & VIX rising) — no MR entries today")
+        return pd.DataFrame()
+
+    # ── Per-ticker Wilder RSI-14 + 10d return; REG2E eligibility ─────────────
     rows = []
     for sym in nq100:
         df = _CLOUD_HISTORY.get(sym)
         if df is None or "Close" not in df.columns:
             continue
-        sub = df[df.index <= dt].tail(20)
-        if len(sub) < 12:
+        c = df[df.index <= dt]["Close"]
+        if len(c) < 16:
             continue
-        delta = sub["Close"].diff()
-        gain  = delta.clip(lower=0).ewm(com=13, adjust=False).mean()
-        loss  = (-delta.clip(upper=0)).ewm(com=13, adjust=False).mean()
-        rs    = gain / loss.replace(0, np.nan)
-        rsi14 = float(100 - 100 / (1 + rs.iloc[-1]))
-        if len(sub) < 11:
+        delta = c.diff()
+        gain  = delta.clip(lower=0).rolling(14, min_periods=14).mean()
+        loss  = (-delta.clip(upper=0)).rolling(14, min_periods=14).mean()
+        ln    = loss.iloc[-1]
+        rs    = gain.iloc[-1] / ln if (np.isfinite(ln) and ln != 0) else np.nan
+        rsi14 = float(100 - 100 / (1 + rs)) if np.isfinite(rs) else np.nan
+        close_px = float(c.iloc[-1])
+        ret_10d = float(c.iloc[-1] / c.iloc[-11] - 1)
+        # REG2E eligibility: RSI < 25 AND price >= 10
+        if not (np.isfinite(rsi14) and rsi14 < 25 and close_px >= 10):
             continue
-        ret_10d = float(sub["Close"].iloc[-1] / sub["Close"].iloc[-11] - 1)
         rows.append({"ticker": sym, "rsi14": rsi14, "ret_10d": ret_10d,
-                     "close": float(sub["Close"].iloc[-1]),
+                     "close": close_px,
                      "vix": vix_val if np.isfinite(vix_val) else 20.0,
                      "signal_date": date_str, "entry_date": date_str})
 
@@ -342,11 +360,11 @@ def _generate_today_signals_cloud(date_str: str) -> pd.DataFrame:
         return pd.DataFrame()
 
     df_sig = pd.DataFrame(rows)
-    df_sig["rank_10d"] = df_sig["ret_10d"].rank(ascending=True).astype(int)
-    # REG2E filter: oversold (RSI < 35) AND bottom-quintile momentum (rank ≤ 20)
-    df_sig = df_sig[(df_sig["rsi14"] < 35) & (df_sig["rank_10d"] <= 20)].copy()
+    # Cross-sectional rank: 1 = most oversold (most negative 10d return); take top 5
+    df_sig["rank_10d"] = df_sig["ret_10d"].rank(ascending=True, method="first").astype(int)
+    df_sig = df_sig[df_sig["rank_10d"] <= 5].sort_values("rank_10d").copy()
     if not df_sig.empty:
-        print(f"  [cloud] {len(df_sig)} new MR signal(s) for {date_str}: "
+        print(f"  [cloud] {len(df_sig)} REG2E MR signal(s) for {date_str}: "
               f"{df_sig['ticker'].tolist()}")
     return df_sig
 
@@ -675,48 +693,71 @@ def compute_vt12_scale(sym: str, date_str: str) -> float:
         return 1.0
 
 
+def _portfolio_vt12_scale(raw_weights: dict[str, float], date_str: str) -> float:
+    """Portfolio-level VT-12% scalar — matches the backtest's apply_vt().
+
+    The backtest scales the WHOLE book by min(1, 12% / annualised vol of the
+    *diversified* portfolio's 20-day returns), so cross-holding correlation keeps
+    the scalar near 1.0 for a normal book (B1 portfolio vol ≈ 12%). The old
+    per-symbol compute_vt12_scale() ignored diversification and shrank a normal
+    book to ~35% gross — a deviation from what was backtested.
+    """
+    dt = pd.Timestamp(date_str)
+    series: dict[str, pd.Series] = {}
+    for sym in raw_weights:
+        df = load_merged(sym)
+        if df is None or "Close" not in df.columns:
+            continue
+        sub = df[df.index <= dt]["Close"].tail(VT12_WINDOW + 2)
+        if len(sub) >= VT12_WINDOW:
+            series[sym] = sub.pct_change()
+    if not series:
+        return 1.0
+    R = pd.DataFrame(series).dropna()
+    if len(R) < VT12_WINDOW:
+        return 1.0
+    w = pd.Series({s: raw_weights[s] for s in R.columns})
+    port_ret = (R * w).sum(axis=1)                      # weighted daily portfolio return
+    vol_annual = float(port_ret.std()) * VT12_ANNUALISE
+    if vol_annual <= 0:
+        return 1.0
+    return min(1.0, VT12_TARGET / vol_annual)
+
+
 def generate_target_book(state: dict, equity: float, date_str: str,
                          strategy: str) -> pd.DataFrame:
     cfg = STRATEGY_CONFIG[strategy]
-    rows = []
 
-    # ── C7 Momentum sleeve ────────────────────────────────────────────────────
-    c7_tickers = state["c7"].get("tickers", [])
-    for sym in c7_tickers:
-        scale = compute_vt12_scale(sym, date_str)
-        raw_w = cfg["c7_alloc"] / C7_N_POSITIONS
-        rows.append({
-            "date": date_str, "ticker": sym,
-            "target_weight": round(raw_w * scale, 6),
-            "target_value":  round(equity * raw_w * scale, 2),
-            "sleeve": "C7_Momentum",
-        })
-
-    # ── MR_NQ100 sleeve ───────────────────────────────────────────────────────
-    for sym, pos in state["mr_positions"].items():
-        raw_w = MR_ALLOC_PCT
-        scale = compute_vt12_scale(sym, date_str)
-        rows.append({
-            "date": date_str, "ticker": sym,
-            "target_weight": round(raw_w * scale, 6),
-            "target_value":  round(equity * raw_w * scale, 2),
-            "sleeve": "MR_NQ100",
-        })
-
-    # ── Defensive ETF sleeve ──────────────────────────────────────────────────
+    # ── Collect raw (un-VT) sleeve weights ────────────────────────────────────
+    raw: list[tuple[str, float, str]] = []
+    for sym in state["c7"].get("tickers", []):
+        raw.append((sym, cfg["c7_alloc"] / C7_N_POSITIONS, "C7_Momentum"))
+    for sym in state["mr_positions"]:
+        raw.append((sym, MR_ALLOC_PCT, "MR_NQ100"))
     if cfg["def_tickers"] and cfg["def_alloc"] > 0:
         def_w = cfg["def_alloc"] / len(cfg["def_tickers"])
         for sym in cfg["def_tickers"]:
-            scale = compute_vt12_scale(sym, date_str)
-            rows.append({
-                "date": date_str, "ticker": sym,
-                "target_weight": round(def_w * scale, 6),
-                "target_value":  round(equity * def_w * scale, 2),
-                "sleeve": "Defensive_ETF",
-            })
+            raw.append((sym, def_w, "Defensive_ETF"))
 
-    if not rows:
+    if not raw:
         return pd.DataFrame()
+
+    # ── Portfolio-level VT-12% (single scalar, matches backtest apply_vt) ──────
+    raw_weights: dict[str, float] = {}
+    for sym, w, _ in raw:
+        raw_weights[sym] = raw_weights.get(sym, 0.0) + w
+    port_scale = _portfolio_vt12_scale(raw_weights, date_str)
+
+    rows = []
+    for sym, w, sleeve in raw:
+        tw = round(w * port_scale, 6)
+        rows.append({
+            "date": date_str, "ticker": sym,
+            "target_weight": tw,
+            "target_value":  round(equity * tw, 2),
+            "sleeve": sleeve,
+        })
+
     df = pd.DataFrame(rows)
     total_w = df["target_weight"].sum()
     if total_w > 1.0:
@@ -886,6 +927,13 @@ def main() -> None:
                                          inplace=True)
             else:
                 combined = new_signals
+            # Normalise date columns to datetime before writing — concatenating
+            # freshly-generated signals (str dates) with the existing parquet
+            # (datetime dates) leaves these columns object-typed, which pyarrow
+            # refuses to write ("cannot be converted to int").
+            for _dcol in ("signal_date", "entry_date"):
+                if _dcol in combined.columns:
+                    combined[_dcol] = pd.to_datetime(combined[_dcol], errors="coerce")
             combined.to_parquet(cloud_sig, index=False)
         signals = load_signals()
         today_signals_count = len(signals[signals["entry_date"] == pd.Timestamp(date_str)])
