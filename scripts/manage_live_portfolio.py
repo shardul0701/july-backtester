@@ -89,8 +89,11 @@ def reconcile_and_submit(strategy: str, weights: dict[str, float], env: dict,
     if "_err" in acct:
         return f"=== {ts} ET | {strategy} | ACCOUNT ERROR: {acct['_err']} ==="
     equity = float(acct["equity"])
-    cur = {p["symbol"].upper(): float(p["market_value"])
-           for p in alpaca("GET", "/v2/positions", kid, sec)}
+    _positions = alpaca("GET", "/v2/positions", kid, sec)
+    cur = {p["symbol"].upper(): float(p["market_value"]) for p in _positions}
+    # Exact sellable share count per held symbol (raw string — avoids float round-trip).
+    qty_avail = {p["symbol"].upper(): (p.get("qty_available") or p.get("qty") or "0")
+                 for p in _positions}
 
     if prune:
         weights = {s: w for s, w in weights.items() if w >= prune}
@@ -112,12 +115,24 @@ def reconcile_and_submit(strategy: str, weights: dict[str, float], env: dict,
         else:
             reason = "REBALANCE"
         flag = ""
+        # Full exits sell by available QTY, not notional: a notional sell of the
+        # whole position can request marginally more shares than held once the price
+        # ticks, triggering Alpaca 403 "insufficient qty available for order".
+        full_exit = side == "sell" and targets.get(sym, 0.0) == 0 and sym in cur
         if not dry_run:
-            r = alpaca("POST", "/v2/orders", kid, sec,
-                       {"symbol": sym, "side": side, "type": "market",
-                        "time_in_force": "day", "notional": str(round(abs(delta), 2))})
-            if "_err" in r:
-                flag = f"  [FAILED: {r['_err']}]"
+            if full_exit:
+                q = qty_avail.get(sym, "0")
+                body = ({"symbol": sym, "side": "sell", "type": "market",
+                         "time_in_force": "day", "qty": q} if float(q) > 0 else None)
+            else:
+                body = {"symbol": sym, "side": side, "type": "market",
+                        "time_in_force": "day", "notional": str(round(abs(delta), 2))}
+            if body is None:
+                flag = "  [SKIP: no qty available]"
+            else:
+                r = alpaca("POST", "/v2/orders", kid, sec, body)
+                if "_err" in r:
+                    flag = f"  [FAILED: {r['_err']}]"
             time.sleep(0.15)
         lines.append(f"  {side.upper():4s} {sym:6s} ${abs(delta):>11,.2f}  {reason}{flag}")
         n += 1
