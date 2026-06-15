@@ -129,6 +129,9 @@ KNOWN_KEYS: set[str] = {
     # Forward testing and broker adapter
     "forward_test_mode",
     "alpaca",
+    # SECTION 27: Deterministic Entry Queue
+    "entry_priority",
+    "entry_random_seed",
     # S3
     "s3_reports_bucket",
     "upload_to_s3",

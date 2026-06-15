@@ -684,7 +684,6 @@ def main():
                     )
             else:
                 logger.info(f"  -> All symbols passed quality checks (min score: {quality_df['score'].min():.1f})")
-
         # --- FETCH DELISTING DATES (if survivorship bias handling is enabled) ---
         delisting_dates = {}
         if CONFIG.get("include_delisted", False):
