@@ -780,6 +780,9 @@ def submit_orders_for_strategy(
     equity  = float(acct["equity"])
     raw_pos = alpaca_req("GET", "/v2/positions", key, secret)
     current = {p["symbol"].upper(): float(p["market_value"]) for p in raw_pos}
+    # Exact sellable share count per held symbol (raw string — avoids float round-trip).
+    qty_avail = {p["symbol"].upper(): (p.get("qty_available") or p.get("qty") or "0")
+                 for p in raw_pos}
 
     MIN_NOTIONAL = 25.0
     orders = []
@@ -793,26 +796,46 @@ def submit_orders_for_strategy(
         delta = tgt - cur
         if abs(delta) < MIN_NOTIONAL:
             continue
+        # Full exits (target dropped the symbol) sell by available QTY, not notional:
+        # a notional sell of the whole position can request marginally more shares than
+        # held once the price ticks, triggering Alpaca 403 "insufficient qty available".
+        full_exit = delta < 0 and tgt == 0.0 and sym in current
         orders.append({
-            "symbol":  sym,
-            "side":    "buy" if delta > 0 else "sell",
-            "notional": round(abs(delta), 2),
+            "symbol":    sym,
+            "side":      "buy" if delta > 0 else "sell",
+            "notional":  round(abs(delta), 2),
+            "full_exit": full_exit,
+            "qty":       qty_avail.get(sym, "0"),
         })
 
     print(f"\n  [{strategy}] equity=${equity:,.0f}  orders={len(orders)}")
+    submitted = 0
     for o in orders:
-        print(f"    {o['side'].upper():4s}  {o['symbol']:6s}  ${o['notional']:,.0f}")
-        if not dry_run:
-            alpaca_req("POST", "/v2/orders", key, secret, {
-                "symbol": o["symbol"], "side": o["side"],
-                "type": "market", "time_in_force": "day",
-                "notional": str(o["notional"]),
-            })
+        print(f"    {o['side'].upper():4s}  {o['symbol']:6s}  ${o['notional']:,.0f}"
+              f"{'  [FULL EXIT by qty]' if o['full_exit'] else ''}")
+        if dry_run:
+            continue
+        if o["full_exit"]:
+            if float(o["qty"]) <= 0:
+                print(f"      [SKIP: no qty available for {o['symbol']}]")
+                continue
+            body = {"symbol": o["symbol"], "side": "sell", "type": "market",
+                    "time_in_force": "day", "qty": o["qty"]}
+        else:
+            body = {"symbol": o["symbol"], "side": o["side"], "type": "market",
+                    "time_in_force": "day", "notional": str(o["notional"])}
+        # Isolate each order: a single rejection must NOT abort the whole strategy
+        # (and thus skip every subsequent strategy in the submit loop).
+        try:
+            alpaca_req("POST", "/v2/orders", key, secret, body)
+            submitted += 1
+        except Exception as e:  # noqa: BLE001
+            print(f"      [FAILED {o['symbol']}: {e}]")
 
     if dry_run:
         print("  [dry-run] No orders submitted.")
     else:
-        print(f"  [{strategy}] Submitted {len(orders)} orders.")
+        print(f"  [{strategy}] Submitted {submitted}/{len(orders)} orders.")
 
 
 # ── Save updated stock_level and unified target book ───────────────────────────
@@ -1025,7 +1048,10 @@ def main() -> None:
             equity = state["cash"] + mr_mkt
             print(f"  [{strategy}] Alpaca unreachable ({e}), using local estimate ${equity:,.0f}")
         target_book = generate_target_book(state, equity, date_str, strategy)
-        submit_orders_for_strategy(strategy, target_book, dry_run=args.dry_run)
+        try:
+            submit_orders_for_strategy(strategy, target_book, dry_run=args.dry_run)
+        except Exception as e:  # noqa: BLE001 — never let one strategy abort the rest
+            print(f"  [{strategy}] submit failed: {e}")
 
     print(f"\n{'═'*64}")
     print(f"  Pipeline complete. Run positions report:")
