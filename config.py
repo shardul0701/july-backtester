@@ -20,6 +20,8 @@ CONFIG = {
     "polygon_api_secret_name": "POLYGON_API_KEY",
     # Only used when data_provider = "csv":
     "csv_data_dir": "csv_data",
+    # Only used when data_provider = "norgate" and the merged dataset is present:
+    # "merged_data_root": os.environ.get("MERGED_DATA_ROOT", ""),
 
     # ============================================================
     # SECTION 2: BACKTEST PERIOD & CAPITAL
@@ -344,4 +346,12 @@ CONFIG = {
     # 0.0 = disabled (default). Set below the instrument's initial_margin_pct, e.g.
     # 0.07 with a 0.10 initial. Equities (cash_full) are never margin-called.
     "maintenance_margin_pct": 0.0,
+    # Reserved — the data-quality screen (provider.filter_universe) is NOT yet
+    # wired into the backtest path; these merged_quality_filter_* keys are inert
+    # until a future PR. See helpers/pit_enforcement.py "Integration status".
+    "merged_quality_filter_enabled": True,
+    "merged_exclude_statuses": [
+        "insufficient_history", "review_no_patch", "identity_review", "flagged",
+    ],
+    "merged_min_avg_dollar_volume": 0.0,  # opt-in liquidity floor (0 = off)
 }
