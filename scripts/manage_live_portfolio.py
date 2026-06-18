@@ -196,6 +196,13 @@ def main() -> int:
     with (LOGDIR / "daily_run.log").open("a", encoding="utf-8") as fh:
         fh.write(banner + "\n")
 
+    # ── Phase 0: refresh polygon_daily/ so S8/SSD target books use live data ─────
+    print("\n[Phase 0] Refreshing polygon_daily price data ...")
+    refresh_out = run(["scripts/_update_polygon_daily.py"], env)
+    print(refresh_out.strip() or "  (no output)")
+    with (LOGDIR / "daily_run.log").open("a", encoding="utf-8") as fh:
+        fh.write(refresh_out + "\n")
+
     # ── Phase 1: B1/B2/MR via daily_pipeline (its own exit/entry engine + submit) ──
     print("\n[Phase 1] B1/B2/MR — daily_pipeline.py")
     cmd = ["scripts/daily_pipeline.py", "--cloud"]

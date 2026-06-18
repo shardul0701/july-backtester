@@ -352,6 +352,19 @@ def simulate_momentum_weight_book(
     qqq_ma200 = qqq_close.rolling(MOM_QQQ_MA).mean()
     ret_126d = closes.pct_change(MOM_LOOKBACK, fill_method=None)
 
+    # Corporate-action filter: exclude any symbol that had a single-day upward move
+    # >30% within the trailing 126d window. Only upward jumps (mergers, spin-off
+    # exchanges) inflate the 126d return and produce false momentum signals — large
+    # downside moves are real price events that don't corrupt the ranking.
+    _daily_ret = closes.pct_change(1, fill_method=None)
+    _corp_action_flag = (_daily_ret > 0.50).rolling(MOM_LOOKBACK).max() > 0
+
+    # Spinoff / short-history filter: require at least MOM_LOOKBACK + 252 bars of
+    # data (≈ 1 year before the lookback start). Prevents newly listed spinoffs from
+    # entering C7 with artificially high 126d returns computed from low IPO pricing
+    # (e.g. SNDK +865% after spin-off from WDC).
+    _bar_count = closes.notna().cumsum()
+
     holdings: dict[str, float] = {}
     rows: list[dict] = []
     state_rows: list[dict] = []
@@ -364,7 +377,14 @@ def simulate_momentum_weight_book(
             q_ma = qqq_ma200.get(prev_date, np.nan)
             risk_on = (not pd.isna(q_px)) and (not pd.isna(q_ma)) and q_px > q_ma
             if risk_on:
-                top = ret_126d.loc[date].dropna().nlargest(MOM_TOP_N)
+                returns = ret_126d.loc[date].dropna()
+                if date in _corp_action_flag.index:
+                    clean = ~_corp_action_flag.loc[date].reindex(returns.index, fill_value=False)
+                    returns = returns[clean]
+                if date in _bar_count.index:
+                    old_enough = _bar_count.loc[date] >= (MOM_LOOKBACK + 252)
+                    returns = returns[old_enough.reindex(returns.index, fill_value=False)]
+                top = returns.nlargest(MOM_TOP_N)
                 holdings = {sym: 1.0 / len(top) for sym in top.index} if len(top) else {}
                 state = "top_momentum"
             else:

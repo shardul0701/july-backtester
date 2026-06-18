@@ -120,10 +120,14 @@ def b5_equity_curve(
 
 
 def dg20_scale(b5_eq: pd.Series, as_of: pd.Timestamp) -> tuple[float, float, bool]:
-    """Return (scale_b5, b5_vol_prior, in_b2_mode) using the PRIOR trading day's vol."""
+    """Return (scale_b5, b5_vol_20d, in_b2_mode) using the as-of day's vol.
+
+    Uses <= as_of (not <) to match the backtest: on day T the simulation computes
+    vol from T's own equity value before generating T's signal.
+    """
     dr = b5_eq.pct_change()
     vol = dr.rolling(SSD_VOL_LOOKBACK).std() * np.sqrt(252) * 100
-    prior = vol.index[vol.index < as_of]
+    prior = vol.index[vol.index <= as_of]
     if len(prior) == 0:
         return 1.0, float("nan"), False
     v = vol.loc[prior[-1]]
