@@ -255,7 +255,8 @@ CONFIG = {
     # SECTION 26: POINT-IN-TIME (PIT) MEMBERSHIP ENFORCEMENT
     # ============================================================
     # Only relevant for PIT portfolios ("pit:nq100" / "pit:sp500").
-    # When pit_enforce_daily=True each symbol is gated to its index-membership
+    # Each symbol is gated to its index-membership (pit_enforce_daily is the enable
+    # flag, currently always-on for PIT portfolios):
     # spells: warm-up bars (kept for indicator continuity) and gap bars (while it
     # was out of the index) stay in the frame but are NEVER traded.
     # _pit_force_exit marks the last available member bar when no timely post-leave
@@ -269,27 +270,4 @@ CONFIG = {
         "insufficient_history", "review_no_patch", "identity_review", "flagged",
     ],
     "merged_min_avg_dollar_volume": 0.0,  # opt-in liquidity floor (0 = off)
-
-    # ============================================================
-    # SECTION 22: FORWARD TESTING — CAPITAL ISOLATION MODEL
-    # ============================================================
-    # "isolated" (default): each strategy gets a fixed dollar slice so backtest
-    # P&L maps 1:1 to forward P&L.  "shared" is planned but not yet implemented.
-    "forward_test_mode": {
-        "capital_model": "isolated",
-        "strategy_capital_allocation": {},  # {} = initial_capital / N per strategy
-    },
-
-    # ============================================================
-    # SECTION 23: ALPACA PAPER TRADING
-    # ============================================================
-    # API keys are read from env vars / .env (never hardcoded here).
-    # Alpaca integration scripts (issues #163/#164) are blocked on the capital
-    # isolation architecture decision (#162) and live in a separate branch.
-    "alpaca": {
-        "api_key_env": "APCA_API_KEY_ID",
-        "secret_key_env": "APCA_API_SECRET_KEY",
-        "base_url": "https://paper-api.alpaca.markets",
-        "order_timeout_seconds": 300,
-    },
 }

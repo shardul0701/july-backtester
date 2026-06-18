@@ -8,8 +8,6 @@ validate_config(config: dict) -> list[str]
     Returns a list of warning messages for unrecognised keys.
     Each message includes a "did you mean?" suggestion if a close match exists.
 
-validate_forward_test_mode(ft: dict) -> list[str]
-    Returns a list of error strings for an invalid forward_test_mode config.
     Empty list means valid.
 
 validate_intraday_config(config: dict) -> list[str]
@@ -126,9 +124,6 @@ KNOWN_KEYS: set[str] = {
     "merged_quality_filter_enabled",
     "merged_exclude_statuses",
     "merged_min_avg_dollar_volume",
-    # Forward testing and broker adapter
-    "forward_test_mode",
-    "alpaca",
     # SECTION 27: Deterministic Entry Queue
     "entry_priority",
     "entry_random_seed",
@@ -137,32 +132,6 @@ KNOWN_KEYS: set[str] = {
     "upload_to_s3",
 }
 
-
-def validate_forward_test_mode(ft: dict) -> list[str]:
-    """Return a list of error strings for an invalid forward_test_mode config.
-
-    PR #187 Fix 6 — consolidated here from the former duplicate
-    helpers/config_validators.py (plural), which has been removed so all
-    config-validation logic lives in this single canonical module.
-
-    Empty list means valid.
-    """
-    if not ft:
-        return []
-    errors: list[str] = []
-    valid_models = ("isolated", "shared")
-    cm = ft.get("capital_model", "isolated")
-    if cm not in valid_models:
-        errors.append(
-            f"  - forward_test_mode.capital_model '{cm}' must be one of: {valid_models}"
-        )
-    for strat, amt in (ft.get("strategy_capital_allocation") or {}).items():
-        if amt < 0:
-            errors.append(
-                f"  - forward_test_mode.strategy_capital_allocation['{strat}']"
-                f" = {amt} must be >= 0"
-            )
-    return errors
 
 
 def validate_config(config: dict) -> list[str]:

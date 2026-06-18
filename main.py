@@ -310,16 +310,12 @@ def main():
     if not CONFIG.get("portfolios"):
         errors.append("  - portfolios is empty. Add at least one entry to run, e.g. \"My Symbols\": [\"AAPL\"].")
 
-    # PR #187 Fix 6 — validator consolidation (review item: duplicate module)
-    # validate_forward_test_mode and validate_config both now live in the single
-    # canonical helpers/config_validator.py; the duplicate config_validators.py
-    # (plural) was removed entirely.
-    from helpers.config_validator import validate_config, validate_forward_test_mode
+    # validate_config lives in the single canonical helpers/config_validator.py;
+    # the duplicate config_validators.py (plural) was removed entirely.
+    from helpers.config_validator import validate_config
     for _warn in validate_config(CONFIG):  # warns on typo'd / unknown config keys
         logger.warning(_warn)
 
-    # forward_test_mode structural validation: capital model name + allocation values ≥ 0.
-    errors.extend(validate_forward_test_mode(CONFIG.get("forward_test_mode", {})))
 
     if errors:
         print("\n[ERROR] Invalid configuration in config.py:")
