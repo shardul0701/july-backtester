@@ -646,6 +646,10 @@ def main():
                 df['Volume_Spike'] = df['Volume'] / df['Volume'].rolling(20).mean()
 
                 # --- END FEATURE ENGINEERING ---
+                # Stamp the symbol onto the frame so precomputed-signal plugins
+                # (e.g. FVG Trend-Launch) can recover which ticker they're handed.
+                # attrs survive .copy() and pickle into worker processes (pandas >= 1.0).
+                df.attrs["symbol"] = symbol
                 portfolio_data[symbol] = df
 
         if skipped_symbols:

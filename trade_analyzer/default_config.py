@@ -74,7 +74,11 @@ WFA_SPLIT_RATIO = None
 
 # --- Monte Carlo ---
 MC_SIMULATIONS = 1000  # Number of simulation paths to generate
-MC_USE_PERCENTAGE_RETURNS = False # CRITICAL: Revert to False to use $ P/L, matching Amibroker's likely default
+# Default False ($ P/L, Amibroker-style). Set env MC_USE_PCT_RETURNS=1 to resample
+# percentage returns instead — REQUIRED for portfolio-equity ("one synthetic trade
+# per day") tearsheets, where $ P/L resampling spuriously bankrupts high-compounding
+# curves (a sizing artifact, not real tail risk) and produces P1/P5 = $0 / -100%.
+MC_USE_PERCENTAGE_RETURNS = os.environ.get("MC_USE_PCT_RETURNS", "") == "1"
 MC_PERCENTILES = [1, 5, 10, 25, 50, 75, 90, 95, 99]
 MC_DRAWDOWN_AS_NEGATIVE = True # For display consistency with Amibroker's table
 
