@@ -1,47 +1,57 @@
 {
   "strategy": "B2_VG12_PIT",
-  "last_processed_date": "2026-06-08",
-  "cash": 70000.0030720512,
+  "last_processed_date": "2026-06-17",
+  "cash": 52221.929543952916,
   "c7": {
-    "bars_since_rebalance": 3,
-    "last_rebalance_date": "2026-06-03",
-    "tickers": [
-      "CIEN",
-      "DELL",
-      "LITE",
-      "MU",
-      "SNDK",
-      "STX",
-      "WDC"
-    ]
+    "bars_since_rebalance": 4,
+    "last_rebalance_date": "2026-06-11",
+    "tickers": []
   },
   "mr_positions": {
-    "GOOG": {
-      "entry_date": "2026-06-04",
-      "entry_px": 355.6177,
-      "stop_price": 334.1136,
-      "target_price": 398.0928,
-      "hold_bars": 3,
-      "shares": 28.120084,
-      "cost_basis": 9999.9995958868
-    },
-    "SBUX": {
-      "entry_date": "2026-06-02",
-      "entry_px": 96.4064,
-      "stop_price": 90.5767,
-      "target_price": 107.9212,
-      "hold_bars": 5,
-      "shares": 103.72754,
-      "cost_basis": 9999.998712256001
-    },
     "GOOGL": {
       "entry_date": "2026-06-04",
       "entry_px": 359.0794,
       "stop_price": 337.366,
       "target_price": 401.968,
-      "hold_bars": 3,
+      "hold_bars": 9,
       "shares": 27.84899,
       "cost_basis": 9999.998619806001
+    },
+    "CEG": {
+      "entry_date": "2026-06-10",
+      "entry_px": 249.14451,
+      "stop_price": 234.0788,
+      "target_price": 278.90240000000006,
+      "hold_bars": 5,
+      "shares": 40.13734840073337,
+      "cost_basis": 10000.080274696802
+    },
+    "NFLX": {
+      "entry_date": "2026-06-12",
+      "entry_px": 81.6157875,
+      "stop_price": 76.6805,
+      "target_price": 91.36400000000002,
+      "hold_bars": 3,
+      "shares": 122.52531411278731,
+      "cost_basis": 10000.245050628226
+    },
+    "ADSK": {
+      "entry_date": "2026-06-17",
+      "entry_px": 196.67829,
+      "stop_price": 184.7852,
+      "target_price": 220.16960000000003,
+      "hold_bars": 0,
+      "shares": 50.84445263379095,
+      "cost_basis": 10000.101688905268
+    },
+    "AMZN": {
+      "entry_date": "2026-06-17",
+      "entry_px": 245.02245,
+      "stop_price": 230.206,
+      "target_price": 274.288,
+      "hold_bars": 0,
+      "shares": 40.812586765008675,
+      "cost_basis": 10000.08162517353
     }
   },
   "def_tickers": [
