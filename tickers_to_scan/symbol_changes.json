@@ -1,0 +1,32 @@
+{
+  "_doc": "Symbol-change watch registry. When an index member changes ticker, the old symbol stops receiving bars (data goes stale / 404s) while the new symbol carries the continuation. Each record maps old->new so (a) sp-500.json / universe files can be remapped, and (b) a freshness check can flag any 'old' symbol still present in a universe. 'effective_date' = last complete bar observed under 'old' in our data store. 'data_symbol' = the symbol that carries the maintained continuous series in THIS data ecosystem (may differ from the live exchange ticker; e.g. Fiserv trades as FI on NYSE but our continuous series is keyed FISV).",
+  "changes": [
+    {
+      "old": "BK",
+      "new": "BNY",
+      "data_symbol": "BNY",
+      "effective_date": "2026-05-20",
+      "company": "The Bank of New York Mellon (rebranded 'BNY')",
+      "source": "Polygon ticker change; BK data ends 2026-05-20",
+      "remapped_in": "sp-500.json"
+    },
+    {
+      "old": "FI",
+      "new": "FISV",
+      "data_symbol": "FISV",
+      "effective_date": "2025-11-10",
+      "company": "Fiserv (NYSE ticker FI; our continuous series keyed FISV)",
+      "source": "FI fragment ends 2025-11-10; FISV is the maintained continuous series",
+      "remapped_in": "sp-500.json"
+    },
+    {
+      "old": "MMC",
+      "new": "MRSH",
+      "data_symbol": "MRSH",
+      "effective_date": "2026-01-13",
+      "company": "Marsh & McLennan (rebranded 'Marsh McLennan')",
+      "source": "Polygon ticker change; MMC data ends 2026-01-13",
+      "remapped_in": "sp-500.json"
+    }
+  ]
+}
