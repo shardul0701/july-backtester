@@ -1,0 +1,3470 @@
+{
+ "A": {
+  "sic_code": "3826",
+  "sic_description": "LABORATORY ANALYTICAL INSTRUMENTS"
+ },
+ "AABA": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "AAL": {
+  "sic_code": "4512",
+  "sic_description": "AIR TRANSPORTATION, SCHEDULED"
+ },
+ "AAP": {
+  "sic_code": "5531",
+  "sic_description": "RETAIL-AUTO & HOME SUPPLY STORES"
+ },
+ "AAPL": {
+  "sic_code": "3571",
+  "sic_description": "ELECTRONIC COMPUTERS"
+ },
+ "ABBV": {
+  "sic_code": "2834",
+  "sic_description": "PHARMACEUTICAL PREPARATIONS"
+ },
+ "ABI": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "ABKFQ": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "ABMD": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "ABNB": {
+  "sic_code": "7340",
+  "sic_description": "SERVICES-TO DWELLINGS & OTHER BUILDINGS"
+ },
+ "ABT": {
+  "sic_code": "2834",
+  "sic_description": "PHARMACEUTICAL PREPARATIONS"
+ },
+ "ACAS": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "ACGL": {
+  "sic_code": "6331",
+  "sic_description": "FIRE, MARINE & CASUALTY INSURANCE"
+ },
+ "ACN": {
+  "sic_code": "7389",
+  "sic_description": "SERVICES-BUSINESS SERVICES, NEC"
+ },
+ "ACS": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "ADBE": {
+  "sic_code": "7372",
+  "sic_description": "SERVICES-PREPACKAGED SOFTWARE"
+ },
+ "ADI": {
+  "sic_code": "3674",
+  "sic_description": "SEMICONDUCTORS & RELATED DEVICES"
+ },
+ "ADM": {
+  "sic_code": "2070",
+  "sic_description": "FATS & OILS"
+ },
+ "ADP": {
+  "sic_code": "7374",
+  "sic_description": "SERVICES-COMPUTER PROCESSING & DATA PREPARATION"
+ },
+ "ADSK": {
+  "sic_code": "7372",
+  "sic_description": "SERVICES-PREPACKAGED SOFTWARE"
+ },
+ "ADT": {
+  "sic_code": "7381",
+  "sic_description": "SERVICES-DETECTIVE, GUARD & ARMORED CAR SERVICES"
+ },
+ "AEE": {
+  "sic_code": "4931",
+  "sic_description": "ELECTRIC & OTHER SERVICES COMBINED"
+ },
+ "AEP": {
+  "sic_code": "4911",
+  "sic_description": "ELECTRIC SERVICES"
+ },
+ "AES": {
+  "sic_code": "4991",
+  "sic_description": "COGENERATION SERVICES & SMALL POWER PRODUCERS"
+ },
+ "AET": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "AFL": {
+  "sic_code": "6321",
+  "sic_description": "ACCIDENT & HEALTH INSURANCE"
+ },
+ "AGN": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "AIG": {
+  "sic_code": "6331",
+  "sic_description": "FIRE, MARINE & CASUALTY INSURANCE"
+ },
+ "AIV": {
+  "sic_code": "6798",
+  "sic_description": "REAL ESTATE INVESTMENT TRUSTS"
+ },
+ "AIZ": {
+  "sic_code": "6399",
+  "sic_description": "INSURANCE CARRIERS, NEC"
+ },
+ "AJG": {
+  "sic_code": "6411",
+  "sic_description": "INSURANCE AGENTS, BROKERS & SERVICE"
+ },
+ "AKAM": {
+  "sic_code": "7389",
+  "sic_description": "SERVICES-BUSINESS SERVICES, NEC"
+ },
+ "AKS": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "ALB": {
+  "sic_code": "2821",
+  "sic_description": "PLASTIC MATERIALS, SYNTH RESINS & NONVULCAN ELASTOMERS"
+ },
+ "ALGN": {
+  "sic_code": "3842",
+  "sic_description": "ORTHOPEDIC, PROSTHETIC & SURGICAL APPLIANCES & SUPPLIES"
+ },
+ "ALK": {
+  "sic_code": "4512",
+  "sic_description": "AIR TRANSPORTATION, SCHEDULED"
+ },
+ "ALL": {
+  "sic_code": "6331",
+  "sic_description": "FIRE, MARINE & CASUALTY INSURANCE"
+ },
+ "ALLE": {
+  "sic_code": "7381",
+  "sic_description": "SERVICES-DETECTIVE, GUARD & ARMORED CAR SERVICES"
+ },
+ "ALTR": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "ALXN": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "AMAT": {
+  "sic_code": "3674",
+  "sic_description": "SEMICONDUCTORS & RELATED DEVICES"
+ },
+ "AMCR": {
+  "sic_code": "3990",
+  "sic_description": "MISCELLANEOUS MANUFACTURING INDUSTRIES"
+ },
+ "AMD": {
+  "sic_code": "3674",
+  "sic_description": "SEMICONDUCTORS & RELATED DEVICES"
+ },
+ "AME": {
+  "sic_code": "3823",
+  "sic_description": "INDUSTRIAL INSTRUMENTS FOR MEASUREMENT, DISPLAY, AND CONTROL"
+ },
+ "AMG": {
+  "sic_code": "6282",
+  "sic_description": "INVESTMENT ADVICE"
+ },
+ "AMGN": {
+  "sic_code": "2836",
+  "sic_description": "BIOLOGICAL PRODUCTS, (NO DIAGNOSTIC SUBSTANCES)"
+ },
+ "AMP": {
+  "sic_code": "6282",
+  "sic_description": "INVESTMENT ADVICE"
+ },
+ "AMT": {
+  "sic_code": "6798",
+  "sic_description": "REAL ESTATE INVESTMENT TRUSTS"
+ },
+ "AMTM": {
+  "sic_code": "7389",
+  "sic_description": "SERVICES-BUSINESS SERVICES, NEC"
+ },
+ "AMZN": {
+  "sic_code": "5961",
+  "sic_description": "RETAIL-CATALOG & MAIL-ORDER HOUSES"
+ },
+ "AN": {
+  "sic_code": "5500",
+  "sic_description": "RETAIL-AUTO DEALERS & GASOLINE STATIONS"
+ },
+ "ANDV": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "ANET": {
+  "sic_code": "3576",
+  "sic_description": "COMPUTER COMMUNICATIONS EQUIPMENT"
+ },
+ "ANF": {
+  "sic_code": "5651",
+  "sic_description": "RETAIL-FAMILY CLOTHING STORES"
+ },
+ "ANRZQ": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "ANSS": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "AON": {
+  "sic_code": "6411",
+  "sic_description": "INSURANCE AGENTS, BROKERS & SERVICE"
+ },
+ "AOS": {
+  "sic_code": "3630",
+  "sic_description": "HOUSEHOLD APPLIANCES"
+ },
+ "APA": {
+  "sic_code": "1311",
+  "sic_description": "CRUDE PETROLEUM & NATURAL GAS"
+ },
+ "APC": {
+  "sic_code": "5172",
+  "sic_description": "WHOLESALE-PETROLEUM & PETROLEUM PRODUCTS (NO BULK STATIONS)"
+ },
+ "APD": {
+  "sic_code": "2810",
+  "sic_description": "INDUSTRIAL INORGANIC CHEMICALS"
+ },
+ "APH": {
+  "sic_code": "3678",
+  "sic_description": "ELECTRONIC CONNECTORS"
+ },
+ "APO": {
+  "sic_code": "6282",
+  "sic_description": "INVESTMENT ADVICE"
+ },
+ "APOL": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "APP": {
+  "sic_code": "7370",
+  "sic_description": "SERVICES-COMPUTER PROGRAMMING, DATA PROCESSING, ETC."
+ },
+ "APTV": {
+  "sic_code": "3714",
+  "sic_description": "MOTOR VEHICLE PARTS & ACCESSORIES"
+ },
+ "ARE": {
+  "sic_code": "6798",
+  "sic_description": "REAL ESTATE INVESTMENT TRUSTS"
+ },
+ "ARES": {
+  "sic_code": "6282",
+  "sic_description": "INVESTMENT ADVICE"
+ },
+ "ARG": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "ARNC": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "ASH": {
+  "sic_code": "5160",
+  "sic_description": "WHOLESALE-CHEMICALS & ALLIED PRODUCTS"
+ },
+ "ATGE": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "ATI": {
+  "sic_code": "3317",
+  "sic_description": "STEEL PIPE & TUBES"
+ },
+ "ATO": {
+  "sic_code": "4924",
+  "sic_description": "NATURAL GAS DISTRIBUTION"
+ },
+ "ATVI": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "AVB": {
+  "sic_code": "6798",
+  "sic_description": "REAL ESTATE INVESTMENT TRUSTS"
+ },
+ "AVGO": {
+  "sic_code": "3674",
+  "sic_description": "SEMICONDUCTORS & RELATED DEVICES"
+ },
+ "AVP": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "AVY": {
+  "sic_code": "2670",
+  "sic_description": "CONVERTED PAPER & PAPERBOARD PRODS (NO CONTANERS/BOXES)"
+ },
+ "AW": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "AWK": {
+  "sic_code": "4941",
+  "sic_description": "WATER SUPPLY"
+ },
+ "AXON": {
+  "sic_code": "3480",
+  "sic_description": "ORDNANCE & ACCESSORIES, (NO VEHICLES/GUIDED MISSILES)"
+ },
+ "AXP": {
+  "sic_code": "6199",
+  "sic_description": "FINANCE SERVICES"
+ },
+ "AYE": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "AYI": {
+  "sic_code": "3640",
+  "sic_description": "ELECTRIC LIGHTING & WIRING EQUIPMENT"
+ },
+ "AZO": {
+  "sic_code": "5531",
+  "sic_description": "RETAIL-AUTO & HOME SUPPLY STORES"
+ },
+ "BA": {
+  "sic_code": "3721",
+  "sic_description": "AIRCRAFT"
+ },
+ "BAC": {
+  "sic_code": "6021",
+  "sic_description": "NATIONAL COMMERCIAL BANKS"
+ },
+ "BALL": {
+  "sic_code": "3411",
+  "sic_description": "METAL CANS"
+ },
+ "BAX": {
+  "sic_code": "3841",
+  "sic_description": "SURGICAL & MEDICAL INSTRUMENTS & APPARATUS"
+ },
+ "BBBY": {
+  "sic_code": "5961",
+  "sic_description": "RETAIL-CATALOG & MAIL-ORDER HOUSES"
+ },
+ "BBT": {
+  "sic_code": "6036",
+  "sic_description": "SAVINGS INSTITUTIONS, NOT FEDERALLY CHARTERED"
+ },
+ "BBWI": {
+  "sic_code": "5990",
+  "sic_description": "RETAIL-RETAIL STORES, NEC"
+ },
+ "BBY": {
+  "sic_code": "5731",
+  "sic_description": "RETAIL-RADIO, TV & CONSUMER ELECTRONICS STORES"
+ },
+ "BC": {
+  "sic_code": "3510",
+  "sic_description": "ENGINES & TURBINES"
+ },
+ "BCR": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "BDK": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "BDX": {
+  "sic_code": "3841",
+  "sic_description": "SURGICAL & MEDICAL INSTRUMENTS & APPARATUS"
+ },
+ "BEAM": {
+  "sic_code": "2836",
+  "sic_description": "BIOLOGICAL PRODUCTS, (NO DIAGNOSTIC SUBSTANCES)"
+ },
+ "BEN": {
+  "sic_code": "6282",
+  "sic_description": "INVESTMENT ADVICE"
+ },
+ "BF-B": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "BFH": {
+  "sic_code": "6141",
+  "sic_description": "PERSONAL CREDIT INSTITUTIONS"
+ },
+ "BG": {
+  "sic_code": "2070",
+  "sic_description": "FATS & OILS"
+ },
+ "BHF": {
+  "sic_code": "6311",
+  "sic_description": "LIFE INSURANCE"
+ },
+ "BIG": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "BIIB": {
+  "sic_code": "2836",
+  "sic_description": "BIOLOGICAL PRODUCTS, (NO DIAGNOSTIC SUBSTANCES)"
+ },
+ "BIO": {
+  "sic_code": "3826",
+  "sic_description": "LABORATORY ANALYTICAL INSTRUMENTS"
+ },
+ "BJS": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "BK": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "BKNG": {
+  "sic_code": "4700",
+  "sic_description": "TRANSPORTATION SERVICES"
+ },
+ "BKR": {
+  "sic_code": "3533",
+  "sic_description": "OIL & GAS FIELD MACHINERY & EQUIPMENT"
+ },
+ "BLDR": {
+  "sic_code": "5211",
+  "sic_description": "RETAIL-LUMBER & OTHER BUILDING MATERIALS DEALERS"
+ },
+ "BLK": {
+  "sic_code": "6211",
+  "sic_description": "SECURITY BROKERS, DEALERS & FLOTATION COMPANIES"
+ },
+ "BMC": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "BMS": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "BMY": {
+  "sic_code": "2834",
+  "sic_description": "PHARMACEUTICAL PREPARATIONS"
+ },
+ "BNI": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "BR": {
+  "sic_code": "7389",
+  "sic_description": "SERVICES-BUSINESS SERVICES, NEC"
+ },
+ "BRCM": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "BRK-B": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "BRL": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "BRO": {
+  "sic_code": "6411",
+  "sic_description": "INSURANCE AGENTS, BROKERS & SERVICE"
+ },
+ "BSC": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "BSX": {
+  "sic_code": "3841",
+  "sic_description": "SURGICAL & MEDICAL INSTRUMENTS & APPARATUS"
+ },
+ "BTUUQ": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "BUD": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "BWA": {
+  "sic_code": "3714",
+  "sic_description": "MOTOR VEHICLE PARTS & ACCESSORIES"
+ },
+ "BX": {
+  "sic_code": "6282",
+  "sic_description": "INVESTMENT ADVICE"
+ },
+ "BXLT": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "BXP": {
+  "sic_code": "6798",
+  "sic_description": "REAL ESTATE INVESTMENT TRUSTS"
+ },
+ "C": {
+  "sic_code": "6021",
+  "sic_description": "NATIONAL COMMERCIAL BANKS"
+ },
+ "CA": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "CAG": {
+  "sic_code": "2000",
+  "sic_description": "FOOD AND KINDRED PRODUCTS"
+ },
+ "CAH": {
+  "sic_code": "5122",
+  "sic_description": "WHOLESALE-DRUGS, PROPRIETARIES & DRUGGISTS' SUNDRIES"
+ },
+ "CAM": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "CARR": {
+  "sic_code": "3585",
+  "sic_description": "AIR-COND & WARM AIR HEATG EQUIP & COMM & INDL REFRIG EQUIP"
+ },
+ "CASY": {
+  "sic_code": "5500",
+  "sic_description": "RETAIL-AUTO DEALERS & GASOLINE STATIONS"
+ },
+ "CAT": {
+  "sic_code": "3531",
+  "sic_description": "CONSTRUCTION MACHINERY & EQUIP"
+ },
+ "CB": {
+  "sic_code": "6331",
+  "sic_description": "FIRE, MARINE & CASUALTY INSURANCE"
+ },
+ "CBE": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "CBH": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "CBOE": {
+  "sic_code": "6200",
+  "sic_description": "SECURITY & COMMODITY BROKERS, DEALERS, EXCHANGES & SERVICES"
+ },
+ "CBRE": {
+  "sic_code": "6500",
+  "sic_description": "REAL ESTATE"
+ },
+ "CBS": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "CCEP": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "CCI": {
+  "sic_code": "6798",
+  "sic_description": "REAL ESTATE INVESTMENT TRUSTS"
+ },
+ "CCL": {
+  "sic_code": "4400",
+  "sic_description": "WATER TRANSPORTATION"
+ },
+ "CCTYQ": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "CCU": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "CDNS": {
+  "sic_code": "7372",
+  "sic_description": "SERVICES-PREPACKAGED SOFTWARE"
+ },
+ "CDW": {
+  "sic_code": "5961",
+  "sic_description": "RETAIL-CATALOG & MAIL-ORDER HOUSES"
+ },
+ "CE": {
+  "sic_code": "2820",
+  "sic_description": "PLASTIC MATERIAL, SYNTH RESIN/RUBBER, CELLULOS (NO GLASS)"
+ },
+ "CEG": {
+  "sic_code": "4911",
+  "sic_description": "ELECTRIC SERVICES"
+ },
+ "CELG": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "CEPH": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "CERN": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "CF": {
+  "sic_code": "2870",
+  "sic_description": "AGRICULTURAL CHEMICALS"
+ },
+ "CFC": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "CFG": {
+  "sic_code": "6022",
+  "sic_description": "STATE COMMERCIAL BANKS"
+ },
+ "CFN": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "CHD": {
+  "sic_code": "2840",
+  "sic_description": "SOAP, DETERGENTS, CLEANG PREPARATIONS, PERFUMES, COSMETICS"
+ },
+ "CHRW": {
+  "sic_code": "4731",
+  "sic_description": "ARRANGEMENT OF TRANSPORTATION OF FREIGHT & CARGO"
+ },
+ "CHTR": {
+  "sic_code": "4841",
+  "sic_description": "CABLE & OTHER PAY TELEVISION SERVICES"
+ },
+ "CI": {
+  "sic_code": "6324",
+  "sic_description": "HOSPITAL & MEDICAL SERVICE PLANS"
+ },
+ "CIEN": {
+  "sic_code": "3661",
+  "sic_description": "TELEPHONE & TELEGRAPH APPARATUS"
+ },
+ "CINF": {
+  "sic_code": "6331",
+  "sic_description": "FIRE, MARINE & CASUALTY INSURANCE"
+ },
+ "CITGQ": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "CL": {
+  "sic_code": "2844",
+  "sic_description": "PERFUMES, COSMETICS & OTHER TOILET PREPARATIONS"
+ },
+ "CLF": {
+  "sic_code": "1000",
+  "sic_description": "METAL MINING"
+ },
+ "CLX": {
+  "sic_code": "2842",
+  "sic_description": "SPECIALTY CLEANING, POLISHING AND SANITATION PREPARATIONS"
+ },
+ "CMA": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "CMCSA": {
+  "sic_code": "4841",
+  "sic_description": "CABLE & OTHER PAY TELEVISION SERVICES"
+ },
+ "CMCSK": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "CME": {
+  "sic_code": "6200",
+  "sic_description": "SECURITY & COMMODITY BROKERS, DEALERS, EXCHANGES & SERVICES"
+ },
+ "CMG": {
+  "sic_code": "5812",
+  "sic_description": "RETAIL-EATING PLACES"
+ },
+ "CMI": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "CMS": {
+  "sic_code": "4931",
+  "sic_description": "ELECTRIC & OTHER SERVICES COMBINED"
+ },
+ "CNC": {
+  "sic_code": "6324",
+  "sic_description": "HOSPITAL & MEDICAL SERVICE PLANS"
+ },
+ "CNP": {
+  "sic_code": "4911",
+  "sic_description": "ELECTRIC SERVICES"
+ },
+ "CNX": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "COF": {
+  "sic_code": "6021",
+  "sic_description": "NATIONAL COMMERCIAL BANKS"
+ },
+ "COHR": {
+  "sic_code": "3827",
+  "sic_description": "OPTICAL INSTRUMENTS & LENSES"
+ },
+ "COIN": {
+  "sic_code": "6199",
+  "sic_description": "FINANCE SERVICES"
+ },
+ "COL": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "COO": {
+  "sic_code": "3851",
+  "sic_description": "OPHTHALMIC GOODS"
+ },
+ "COP": {
+  "sic_code": "2911",
+  "sic_description": "PETROLEUM REFINING"
+ },
+ "COR": {
+  "sic_code": "5122",
+  "sic_description": "WHOLESALE-DRUGS, PROPRIETARIES & DRUGGISTS' SUNDRIES"
+ },
+ "COST": {
+  "sic_code": "5331",
+  "sic_description": "RETAIL-VARIETY STORES"
+ },
+ "COTY": {
+  "sic_code": "2844",
+  "sic_description": "PERFUMES, COSMETICS & OTHER TOILET PREPARATIONS"
+ },
+ "COV": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "CPAY": {
+  "sic_code": "7389",
+  "sic_description": "SERVICES-BUSINESS SERVICES, NEC"
+ },
+ "CPB": {
+  "sic_code": "2000",
+  "sic_description": "FOOD AND KINDRED PRODUCTS"
+ },
+ "CPGX": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "CPRI": {
+  "sic_code": "3100",
+  "sic_description": "LEATHER & LEATHER PRODUCTS"
+ },
+ "CPRT": {
+  "sic_code": "5500",
+  "sic_description": "RETAIL-AUTO DEALERS & GASOLINE STATIONS"
+ },
+ "CPT": {
+  "sic_code": "6798",
+  "sic_description": "REAL ESTATE INVESTMENT TRUSTS"
+ },
+ "CPWR": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "CRH": {
+  "sic_code": "3241",
+  "sic_description": "CEMENT, HYDRAULIC"
+ },
+ "CRL": {
+  "sic_code": "8731",
+  "sic_description": "SERVICES-COMMERCIAL PHYSICAL & BIOLOGICAL RESEARCH"
+ },
+ "CRM": {
+  "sic_code": "7372",
+  "sic_description": "SERVICES-PREPACKAGED SOFTWARE"
+ },
+ "CRWD": {
+  "sic_code": "7372",
+  "sic_description": "SERVICES-PREPACKAGED SOFTWARE"
+ },
+ "CSCO": {
+  "sic_code": "3576",
+  "sic_description": "COMPUTER COMMUNICATIONS EQUIPMENT"
+ },
+ "CSGP": {
+  "sic_code": "7389",
+  "sic_description": "SERVICES-BUSINESS SERVICES, NEC"
+ },
+ "CSRA": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "CSX": {
+  "sic_code": "4011",
+  "sic_description": "RAILROADS, LINE-HAUL OPERATING"
+ },
+ "CTAS": {
+  "sic_code": "2320",
+  "sic_description": "MEN'S & BOYS' FURNISHGS, WORK CLOTHG, & ALLIED GARMENTS"
+ },
+ "CTLT": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "CTRA": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "CTSH": {
+  "sic_code": "7371",
+  "sic_description": "SERVICES-COMPUTER PROGRAMMING SERVICES"
+ },
+ "CTVA": {
+  "sic_code": "0100",
+  "sic_description": null
+ },
+ "CTX": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "CTXS": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "CVC": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "CVG": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "CVH": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "CVNA": {
+  "sic_code": "5500",
+  "sic_description": "RETAIL-AUTO DEALERS & GASOLINE STATIONS"
+ },
+ "CVS": {
+  "sic_code": "5912",
+  "sic_description": "RETAIL-DRUG STORES AND PROPRIETARY STORES"
+ },
+ "CVX": {
+  "sic_code": "2911",
+  "sic_description": "PETROLEUM REFINING"
+ },
+ "CXO": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "CZR": {
+  "sic_code": "7011",
+  "sic_description": "HOTELS & MOTELS"
+ },
+ "D": {
+  "sic_code": "4911",
+  "sic_description": "ELECTRIC SERVICES"
+ },
+ "DAL": {
+  "sic_code": "4512",
+  "sic_description": "AIR TRANSPORTATION, SCHEDULED"
+ },
+ "DASH": {
+  "sic_code": "7389",
+  "sic_description": "SERVICES-BUSINESS SERVICES, NEC"
+ },
+ "DAY": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "DD": {
+  "sic_code": "2821",
+  "sic_description": "PLASTIC MATERIALS, SYNTH RESINS & NONVULCAN ELASTOMERS"
+ },
+ "DDOG": {
+  "sic_code": "7372",
+  "sic_description": "SERVICES-PREPACKAGED SOFTWARE"
+ },
+ "DDS": {
+  "sic_code": "5311",
+  "sic_description": "RETAIL-DEPARTMENT STORES"
+ },
+ "DE": {
+  "sic_code": "3523",
+  "sic_description": "FARM MACHINERY & EQUIPMENT"
+ },
+ "DECK": {
+  "sic_code": "3021",
+  "sic_description": "RUBBER & PLASTICS FOOTWEAR"
+ },
+ "DELL": {
+  "sic_code": "3571",
+  "sic_description": "ELECTRONIC COMPUTERS"
+ },
+ "DEN": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "DF": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "DFS": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "DG": {
+  "sic_code": "5331",
+  "sic_description": "RETAIL-VARIETY STORES"
+ },
+ "DGX": {
+  "sic_code": "8071",
+  "sic_description": "SERVICES-MEDICAL LABORATORIES"
+ },
+ "DHI": {
+  "sic_code": "1531",
+  "sic_description": "OPERATIVE BUILDERS"
+ },
+ "DHR": {
+  "sic_code": "3823",
+  "sic_description": "INDUSTRIAL INSTRUMENTS FOR MEASUREMENT, DISPLAY, AND CONTROL"
+ },
+ "DINO": {
+  "sic_code": "4610",
+  "sic_description": "PIPE LINES (NO NATURAL GAS)"
+ },
+ "DIS": {
+  "sic_code": "7990",
+  "sic_description": "SERVICES-MISCELLANEOUS AMUSEMENT & RECREATION"
+ },
+ "DISCK": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "DISH": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "DLR": {
+  "sic_code": "6798",
+  "sic_description": "REAL ESTATE INVESTMENT TRUSTS"
+ },
+ "DLTR": {
+  "sic_code": "5331",
+  "sic_description": "RETAIL-VARIETY STORES"
+ },
+ "DNB": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "DO": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "DOC": {
+  "sic_code": "6798",
+  "sic_description": "REAL ESTATE INVESTMENT TRUSTS"
+ },
+ "DOV": {
+  "sic_code": "3530",
+  "sic_description": "CONSTRUCTION, MINING & MATERIALS HANDLING MACHINERY & EQUIP"
+ },
+ "DOW": {
+  "sic_code": "2821",
+  "sic_description": "PLASTIC MATERIALS, SYNTH RESINS & NONVULCAN ELASTOMERS"
+ },
+ "DPZ": {
+  "sic_code": "5140",
+  "sic_description": "WHOLESALE-GROCERIES & RELATED PRODUCTS"
+ },
+ "DRE": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "DRI": {
+  "sic_code": "5812",
+  "sic_description": "RETAIL-EATING PLACES"
+ },
+ "DTE": {
+  "sic_code": "4911",
+  "sic_description": "ELECTRIC SERVICES"
+ },
+ "DTV": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "DUK": {
+  "sic_code": "4931",
+  "sic_description": "ELECTRIC & OTHER SERVICES COMBINED"
+ },
+ "DVA": {
+  "sic_code": "8090",
+  "sic_description": "SERVICES-MISC HEALTH & ALLIED SERVICES, NEC"
+ },
+ "DVN": {
+  "sic_code": "1311",
+  "sic_description": "CRUDE PETROLEUM & NATURAL GAS"
+ },
+ "DXC": {
+  "sic_code": "7374",
+  "sic_description": "SERVICES-COMPUTER PROCESSING & DATA PREPARATION"
+ },
+ "DXCM": {
+  "sic_code": "3841",
+  "sic_description": "SURGICAL & MEDICAL INSTRUMENTS & APPARATUS"
+ },
+ "DYN": {
+  "sic_code": "2834",
+  "sic_description": "PHARMACEUTICAL PREPARATIONS"
+ },
+ "EA": {
+  "sic_code": "7372",
+  "sic_description": "SERVICES-PREPACKAGED SOFTWARE"
+ },
+ "EBAY": {
+  "sic_code": "7389",
+  "sic_description": "SERVICES-BUSINESS SERVICES, NEC"
+ },
+ "ECL": {
+  "sic_code": "2840",
+  "sic_description": "SOAP, DETERGENTS, CLEANG PREPARATIONS, PERFUMES, COSMETICS"
+ },
+ "ED": {
+  "sic_code": "4931",
+  "sic_description": "ELECTRIC & OTHER SERVICES COMBINED"
+ },
+ "EDS": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "EFX": {
+  "sic_code": "7320",
+  "sic_description": "SERVICES-CONSUMER CREDIT REPORTING, COLLECTION AGENCIES"
+ },
+ "EG": {
+  "sic_code": "6331",
+  "sic_description": "FIRE, MARINE & CASUALTY INSURANCE"
+ },
+ "EIX": {
+  "sic_code": "4911",
+  "sic_description": "ELECTRIC SERVICES"
+ },
+ "EKDKQ": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "EL": {
+  "sic_code": "2844",
+  "sic_description": "PERFUMES, COSMETICS & OTHER TOILET PREPARATIONS"
+ },
+ "ELV": {
+  "sic_code": "6324",
+  "sic_description": "HOSPITAL & MEDICAL SERVICE PLANS"
+ },
+ "EMC": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "EME": {
+  "sic_code": "1731",
+  "sic_description": "ELECTRICAL WORK"
+ },
+ "EMN": {
+  "sic_code": "2821",
+  "sic_description": "PLASTIC MATERIALS, SYNTH RESINS & NONVULCAN ELASTOMERS"
+ },
+ "EMR": {
+  "sic_code": "3600",
+  "sic_description": "ELECTRONIC & OTHER ELECTRICAL EQUIPMENT (NO COMPUTER EQUIP)"
+ },
+ "ENDP": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "ENPH": {
+  "sic_code": "3674",
+  "sic_description": "SEMICONDUCTORS & RELATED DEVICES"
+ },
+ "EOG": {
+  "sic_code": "1311",
+  "sic_description": "CRUDE PETROLEUM & NATURAL GAS"
+ },
+ "EP": {
+  "sic_code": "1311",
+  "sic_description": "CRUDE PETROLEUM & NATURAL GAS"
+ },
+ "EPAM": {
+  "sic_code": "7371",
+  "sic_description": "SERVICES-COMPUTER PROGRAMMING SERVICES"
+ },
+ "EQ": {
+  "sic_code": "2834",
+  "sic_description": "PHARMACEUTICAL PREPARATIONS"
+ },
+ "EQIX": {
+  "sic_code": "6798",
+  "sic_description": "REAL ESTATE INVESTMENT TRUSTS"
+ },
+ "EQR": {
+  "sic_code": "6798",
+  "sic_description": "REAL ESTATE INVESTMENT TRUSTS"
+ },
+ "EQT": {
+  "sic_code": "1311",
+  "sic_description": "CRUDE PETROLEUM & NATURAL GAS"
+ },
+ "ERIE": {
+  "sic_code": "6411",
+  "sic_description": "INSURANCE AGENTS, BROKERS & SERVICE"
+ },
+ "ES": {
+  "sic_code": "4911",
+  "sic_description": "ELECTRIC SERVICES"
+ },
+ "ESRX": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "ESS": {
+  "sic_code": "6798",
+  "sic_description": "REAL ESTATE INVESTMENT TRUSTS"
+ },
+ "ETFC": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "ETN": {
+  "sic_code": "3590",
+  "sic_description": "MISC INDUSTRIAL & COMMERCIAL MACHINERY & EQUIPMENT"
+ },
+ "ETR": {
+  "sic_code": "4911",
+  "sic_description": "ELECTRIC SERVICES"
+ },
+ "ETSY": {
+  "sic_code": "7389",
+  "sic_description": "SERVICES-BUSINESS SERVICES, NEC"
+ },
+ "EVHC": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "EVRG": {
+  "sic_code": "4931",
+  "sic_description": "ELECTRIC & OTHER SERVICES COMBINED"
+ },
+ "EW": {
+  "sic_code": "3842",
+  "sic_description": "ORTHOPEDIC, PROSTHETIC & SURGICAL APPLIANCES & SUPPLIES"
+ },
+ "EXC": {
+  "sic_code": "4931",
+  "sic_description": "ELECTRIC & OTHER SERVICES COMBINED"
+ },
+ "EXE": {
+  "sic_code": "1311",
+  "sic_description": "CRUDE PETROLEUM & NATURAL GAS"
+ },
+ "EXPD": {
+  "sic_code": "4731",
+  "sic_description": "ARRANGEMENT OF TRANSPORTATION OF FREIGHT & CARGO"
+ },
+ "EXPE": {
+  "sic_code": "4700",
+  "sic_description": "TRANSPORTATION SERVICES"
+ },
+ "EXR": {
+  "sic_code": "6798",
+  "sic_description": "REAL ESTATE INVESTMENT TRUSTS"
+ },
+ "F": {
+  "sic_code": "3711",
+  "sic_description": "MOTOR VEHICLES & PASSENGER CAR BODIES"
+ },
+ "FANG": {
+  "sic_code": "1311",
+  "sic_description": "CRUDE PETROLEUM & NATURAL GAS"
+ },
+ "FAST": {
+  "sic_code": "5200",
+  "sic_description": "RETAIL-BUILDING MATERIALS, HARDWARE, GARDEN SUPPLY"
+ },
+ "FBIN": {
+  "sic_code": "2430",
+  "sic_description": "MILLWOOD, VENEER, PLYWOOD, & STRUCTURAL WOOD MEMBERS"
+ },
+ "FCPT": {
+  "sic_code": "6798",
+  "sic_description": "REAL ESTATE INVESTMENT TRUSTS"
+ },
+ "FCX": {
+  "sic_code": "1000",
+  "sic_description": "METAL MINING"
+ },
+ "FDO": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "FDS": {
+  "sic_code": "7370",
+  "sic_description": "SERVICES-COMPUTER PROGRAMMING, DATA PROCESSING, ETC."
+ },
+ "FDX": {
+  "sic_code": "4513",
+  "sic_description": "AIR COURIER SERVICES"
+ },
+ "FE": {
+  "sic_code": "4911",
+  "sic_description": "ELECTRIC SERVICES"
+ },
+ "FFIV": {
+  "sic_code": "3576",
+  "sic_description": "COMPUTER COMMUNICATIONS EQUIPMENT"
+ },
+ "FHI": {
+  "sic_code": "6282",
+  "sic_description": "INVESTMENT ADVICE"
+ },
+ "FHN": {
+  "sic_code": "6021",
+  "sic_description": "NATIONAL COMMERCIAL BANKS"
+ },
+ "FI": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "FICO": {
+  "sic_code": "7389",
+  "sic_description": "SERVICES-BUSINESS SERVICES, NEC"
+ },
+ "FIS": {
+  "sic_code": "7389",
+  "sic_description": "SERVICES-BUSINESS SERVICES, NEC"
+ },
+ "FISV": {
+  "sic_code": "7389",
+  "sic_description": "SERVICES-BUSINESS SERVICES, NEC"
+ },
+ "FITB": {
+  "sic_code": "6022",
+  "sic_description": "STATE COMMERCIAL BANKS"
+ },
+ "FIX": {
+  "sic_code": "1731",
+  "sic_description": "ELECTRICAL WORK"
+ },
+ "FL": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "FLIR": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "FLR": {
+  "sic_code": "1600",
+  "sic_description": "HEAVY CONSTRUCTION OTHER THAN BLDG CONST - CONTRACTORS"
+ },
+ "FLS": {
+  "sic_code": "3561",
+  "sic_description": "PUMPS & PUMPING EQUIPMENT"
+ },
+ "FMC": {
+  "sic_code": "2800",
+  "sic_description": "CHEMICALS & ALLIED PRODUCTS"
+ },
+ "FMCC": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "FNMA": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "FOSL": {
+  "sic_code": "3873",
+  "sic_description": "WATCHES, CLOCKS, CLOCKWORK OPERATED DEVICES/PARTS"
+ },
+ "FOX": {
+  "sic_code": "4833",
+  "sic_description": "TELEVISION BROADCASTING STATIONS"
+ },
+ "FOXA": {
+  "sic_code": "4833",
+  "sic_description": "TELEVISION BROADCASTING STATIONS"
+ },
+ "FRC": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "FRT": {
+  "sic_code": "6798",
+  "sic_description": "REAL ESTATE INVESTMENT TRUSTS"
+ },
+ "FRX": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "FSLR": {
+  "sic_code": "3674",
+  "sic_description": "SEMICONDUCTORS & RELATED DEVICES"
+ },
+ "FTI": {
+  "sic_code": "3533",
+  "sic_description": "OIL & GAS FIELD MACHINERY & EQUIPMENT"
+ },
+ "FTNT": {
+  "sic_code": "3577",
+  "sic_description": "COMPUTER PERIPHERAL EQUIPMENT, NEC"
+ },
+ "FTR": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "FTV": {
+  "sic_code": "3823",
+  "sic_description": "INDUSTRIAL INSTRUMENTS FOR MEASUREMENT, DISPLAY, AND CONTROL"
+ },
+ "GAP": {
+  "sic_code": "5651",
+  "sic_description": "RETAIL-FAMILY CLOTHING STORES"
+ },
+ "GAS": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "GD": {
+  "sic_code": "3730",
+  "sic_description": "SHIP & BOAT BUILDING & REPAIRING"
+ },
+ "GDDY": {
+  "sic_code": "7373",
+  "sic_description": "SERVICES-COMPUTER INTEGRATED SYSTEMS DESIGN"
+ },
+ "GE": {
+  "sic_code": "3600",
+  "sic_description": "ELECTRONIC & OTHER ELECTRICAL EQUIPMENT (NO COMPUTER EQUIP)"
+ },
+ "GEHC": {
+  "sic_code": "3844",
+  "sic_description": "X-RAY APPARATUS & TUBES & RELATED IRRADIATION APPARATUS"
+ },
+ "GEN": {
+  "sic_code": "7372",
+  "sic_description": "SERVICES-PREPACKAGED SOFTWARE"
+ },
+ "GENZ": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "GEV": {
+  "sic_code": "3600",
+  "sic_description": "ELECTRONIC & OTHER ELECTRICAL EQUIPMENT (NO COMPUTER EQUIP)"
+ },
+ "GGP": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "GHC": {
+  "sic_code": "8200",
+  "sic_description": "SERVICES-EDUCATIONAL SERVICES"
+ },
+ "GILD": {
+  "sic_code": "2836",
+  "sic_description": "BIOLOGICAL PRODUCTS, (NO DIAGNOSTIC SUBSTANCES)"
+ },
+ "GIS": {
+  "sic_code": "2040",
+  "sic_description": "GRAIN MILL PRODUCTS"
+ },
+ "GL": {
+  "sic_code": "6311",
+  "sic_description": "LIFE INSURANCE"
+ },
+ "GLW": {
+  "sic_code": "3357",
+  "sic_description": "DRAWING & INSULATING OF NONFERROUS WIRE"
+ },
+ "GM": {
+  "sic_code": "3711",
+  "sic_description": "MOTOR VEHICLES & PASSENGER CAR BODIES"
+ },
+ "GMCR": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "GME": {
+  "sic_code": "5734",
+  "sic_description": "RETAIL-COMPUTER & COMPUTER SOFTWARE STORES"
+ },
+ "GNRC": {
+  "sic_code": "3621",
+  "sic_description": "MOTORS & GENERATORS"
+ },
+ "GNW": {
+  "sic_code": "6311",
+  "sic_description": "LIFE INSURANCE"
+ },
+ "GOOG": {
+  "sic_code": "7370",
+  "sic_description": "SERVICES-COMPUTER PROGRAMMING, DATA PROCESSING, ETC."
+ },
+ "GOOGL": {
+  "sic_code": "7370",
+  "sic_description": "SERVICES-COMPUTER PROGRAMMING, DATA PROCESSING, ETC."
+ },
+ "GPC": {
+  "sic_code": "5013",
+  "sic_description": "WHOLESALE-MOTOR VEHICLE SUPPLIES & NEW PARTS"
+ },
+ "GPN": {
+  "sic_code": "7389",
+  "sic_description": "SERVICES-BUSINESS SERVICES, NEC"
+ },
+ "GR": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "GRMN": {
+  "sic_code": "3812",
+  "sic_description": "SEARCH, DETECTION, NAVIGATION, GUIDANCE, AERONAUTICAL SYS"
+ },
+ "GS": {
+  "sic_code": "6211",
+  "sic_description": "SECURITY BROKERS, DEALERS & FLOTATION COMPANIES"
+ },
+ "GT": {
+  "sic_code": "3011",
+  "sic_description": "TIRES & INNER TUBES"
+ },
+ "GWW": {
+  "sic_code": "5000",
+  "sic_description": "WHOLESALE-DURABLE GOODS"
+ },
+ "HAL": {
+  "sic_code": "1389",
+  "sic_description": "OIL & GAS FIELD SERVICES, NEC"
+ },
+ "HAR": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "HAS": {
+  "sic_code": "3944",
+  "sic_description": "GAMES, TOYS & CHILDREN'S VEHICLES (NO DOLLS & BICYCLES)"
+ },
+ "HBAN": {
+  "sic_code": "6021",
+  "sic_description": "NATIONAL COMMERCIAL BANKS"
+ },
+ "HBI": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "HCA": {
+  "sic_code": "8062",
+  "sic_description": "SERVICES-GENERAL MEDICAL & SURGICAL HOSPITALS, NEC"
+ },
+ "HCBK": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "HCP": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "HD": {
+  "sic_code": "5211",
+  "sic_description": "RETAIL-LUMBER & OTHER BUILDING MATERIALS DEALERS"
+ },
+ "HES": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "HET": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "HIG": {
+  "sic_code": "6331",
+  "sic_description": "FIRE, MARINE & CASUALTY INSURANCE"
+ },
+ "HII": {
+  "sic_code": "3730",
+  "sic_description": "SHIP & BOAT BUILDING & REPAIRING"
+ },
+ "HLT": {
+  "sic_code": "7011",
+  "sic_description": "HOTELS & MOTELS"
+ },
+ "HNZ": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "HOG": {
+  "sic_code": "3751",
+  "sic_description": "MOTORCYCLES, BICYCLES & PARTS"
+ },
+ "HOLX": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "HON": {
+  "sic_code": "3724",
+  "sic_description": "AIRCRAFT ENGINES & ENGINE PARTS"
+ },
+ "HOOD": {
+  "sic_code": "6211",
+  "sic_description": "SECURITY BROKERS, DEALERS & FLOTATION COMPANIES"
+ },
+ "HOT": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "HP": {
+  "sic_code": "1381",
+  "sic_description": "DRILLING OIL & GAS WELLS"
+ },
+ "HPC": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "HPE": {
+  "sic_code": "3570",
+  "sic_description": "COMPUTER & OFFICE EQUIPMENT"
+ },
+ "HPQ": {
+  "sic_code": "3570",
+  "sic_description": "COMPUTER & OFFICE EQUIPMENT"
+ },
+ "HRB": {
+  "sic_code": "7200",
+  "sic_description": "SERVICES-PERSONAL SERVICES"
+ },
+ "HRL": {
+  "sic_code": "2011",
+  "sic_description": "MEAT PACKING PLANTS"
+ },
+ "HSH": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "HSIC": {
+  "sic_code": "5047",
+  "sic_description": "WHOLESALE-MEDICAL, DENTAL & HOSPITAL EQUIPMENT & SUPPLIES"
+ },
+ "HSP": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "HST": {
+  "sic_code": "6798",
+  "sic_description": "REAL ESTATE INVESTMENT TRUSTS"
+ },
+ "HSY": {
+  "sic_code": "2060",
+  "sic_description": "SUGAR & CONFECTIONERY PRODUCTS"
+ },
+ "HUBB": {
+  "sic_code": "3670",
+  "sic_description": "ELECTRONIC COMPONENTS & ACCESSORIES"
+ },
+ "HUM": {
+  "sic_code": "6324",
+  "sic_description": "HOSPITAL & MEDICAL SERVICE PLANS"
+ },
+ "HWM": {
+  "sic_code": "3350",
+  "sic_description": "ROLLING DRAWING & EXTRUDING OF NONFERROUS METALS"
+ },
+ "IAC": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "IBKR": {
+  "sic_code": "6211",
+  "sic_description": "SECURITY BROKERS, DEALERS & FLOTATION COMPANIES"
+ },
+ "IBM": {
+  "sic_code": "3570",
+  "sic_description": "COMPUTER & OFFICE EQUIPMENT"
+ },
+ "ICE": {
+  "sic_code": "6200",
+  "sic_description": "SECURITY & COMMODITY BROKERS, DEALERS, EXCHANGES & SERVICES"
+ },
+ "IDXX": {
+  "sic_code": "2835",
+  "sic_description": "IN VITRO & IN VIVO DIAGNOSTIC SUBSTANCES"
+ },
+ "IEX": {
+  "sic_code": "3561",
+  "sic_description": "PUMPS & PUMPING EQUIPMENT"
+ },
+ "IFF": {
+  "sic_code": "2860",
+  "sic_description": "INDUSTRIAL ORGANIC CHEMICALS"
+ },
+ "IGT": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "ILMN": {
+  "sic_code": "3826",
+  "sic_description": "LABORATORY ANALYTICAL INSTRUMENTS"
+ },
+ "INCY": {
+  "sic_code": "8731",
+  "sic_description": "SERVICES-COMMERCIAL PHYSICAL & BIOLOGICAL RESEARCH"
+ },
+ "INFO": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "INTC": {
+  "sic_code": "3674",
+  "sic_description": "SEMICONDUCTORS & RELATED DEVICES"
+ },
+ "INTU": {
+  "sic_code": "7372",
+  "sic_description": "SERVICES-PREPACKAGED SOFTWARE"
+ },
+ "INVH": {
+  "sic_code": "6510",
+  "sic_description": "REAL ESTATE OPERATORS (NO DEVELOPERS) & LESSORS"
+ },
+ "IP": {
+  "sic_code": "2621",
+  "sic_description": "PAPER MILLS"
+ },
+ "IPG": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "IPGP": {
+  "sic_code": "3674",
+  "sic_description": "SEMICONDUCTORS & RELATED DEVICES"
+ },
+ "IQV": {
+  "sic_code": "8731",
+  "sic_description": "SERVICES-COMMERCIAL PHYSICAL & BIOLOGICAL RESEARCH"
+ },
+ "IR": {
+  "sic_code": "3560",
+  "sic_description": "GENERAL INDUSTRIAL MACHINERY & EQUIPMENT"
+ },
+ "IRM": {
+  "sic_code": "6798",
+  "sic_description": "REAL ESTATE INVESTMENT TRUSTS"
+ },
+ "ISRG": {
+  "sic_code": "3842",
+  "sic_description": "ORTHOPEDIC, PROSTHETIC & SURGICAL APPLIANCES & SUPPLIES"
+ },
+ "IT": {
+  "sic_code": "8741",
+  "sic_description": "SERVICES-MANAGEMENT SERVICES"
+ },
+ "ITT": {
+  "sic_code": "3561",
+  "sic_description": "PUMPS & PUMPING EQUIPMENT"
+ },
+ "ITW": {
+  "sic_code": "3560",
+  "sic_description": "GENERAL INDUSTRIAL MACHINERY & EQUIPMENT"
+ },
+ "IVZ": {
+  "sic_code": "6282",
+  "sic_description": "INVESTMENT ADVICE"
+ },
+ "J": {
+  "sic_code": "1600",
+  "sic_description": "HEAVY CONSTRUCTION OTHER THAN BLDG CONST - CONTRACTORS"
+ },
+ "JAVA": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "JBHT": {
+  "sic_code": "4213",
+  "sic_description": "TRUCKING (NO LOCAL)"
+ },
+ "JBL": {
+  "sic_code": "3672",
+  "sic_description": "PRINTED CIRCUIT BOARDS"
+ },
+ "JCI": {
+  "sic_code": "3585",
+  "sic_description": "AIR-COND & WARM AIR HEATG EQUIP & COMM & INDL REFRIG EQUIP"
+ },
+ "JCP": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "JEF": {
+  "sic_code": "6211",
+  "sic_description": "SECURITY BROKERS, DEALERS & FLOTATION COMPANIES"
+ },
+ "JKHY": {
+  "sic_code": "7373",
+  "sic_description": "SERVICES-COMPUTER INTEGRATED SYSTEMS DESIGN"
+ },
+ "JNJ": {
+  "sic_code": "2834",
+  "sic_description": "PHARMACEUTICAL PREPARATIONS"
+ },
+ "JNPR": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "JNS": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "JNY": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "JOY": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "JPM": {
+  "sic_code": "6021",
+  "sic_description": "NATIONAL COMMERCIAL BANKS"
+ },
+ "JWN": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "K": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "KATE": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "KBH": {
+  "sic_code": "1531",
+  "sic_description": "OPERATIVE BUILDERS"
+ },
+ "KDP": {
+  "sic_code": "2080",
+  "sic_description": "BEVERAGES"
+ },
+ "KEY": {
+  "sic_code": "6021",
+  "sic_description": "NATIONAL COMMERCIAL BANKS"
+ },
+ "KEYS": {
+  "sic_code": "3823",
+  "sic_description": "INDUSTRIAL INSTRUMENTS FOR MEASUREMENT, DISPLAY, AND CONTROL"
+ },
+ "KG": {
+  "sic_code": "6331",
+  "sic_description": "FIRE, MARINE & CASUALTY INSURANCE"
+ },
+ "KHC": {
+  "sic_code": "2030",
+  "sic_description": "CANNED, FROZEN & PRESERVD FRUIT, VEG & FOOD SPECIALTIES"
+ },
+ "KIM": {
+  "sic_code": "6798",
+  "sic_description": "REAL ESTATE INVESTMENT TRUSTS"
+ },
+ "KKR": {
+  "sic_code": "6282",
+  "sic_description": "INVESTMENT ADVICE"
+ },
+ "KLAC": {
+  "sic_code": "3827",
+  "sic_description": "OPTICAL INSTRUMENTS & LENSES"
+ },
+ "KMB": {
+  "sic_code": "2670",
+  "sic_description": "CONVERTED PAPER & PAPERBOARD PRODS (NO CONTANERS/BOXES)"
+ },
+ "KMI": {
+  "sic_code": "4922",
+  "sic_description": "NATURAL GAS TRANSMISSION"
+ },
+ "KMX": {
+  "sic_code": "5500",
+  "sic_description": "RETAIL-AUTO DEALERS & GASOLINE STATIONS"
+ },
+ "KO": {
+  "sic_code": "2080",
+  "sic_description": "BEVERAGES"
+ },
+ "KR": {
+  "sic_code": "5411",
+  "sic_description": "RETAIL-GROCERY STORES"
+ },
+ "KRFT": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "KSS": {
+  "sic_code": "5311",
+  "sic_description": "RETAIL-DEPARTMENT STORES"
+ },
+ "KSU": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "KVUE": {
+  "sic_code": "2844",
+  "sic_description": "PERFUMES, COSMETICS & OTHER TOILET PREPARATIONS"
+ },
+ "L": {
+  "sic_code": "6331",
+  "sic_description": "FIRE, MARINE & CASUALTY INSURANCE"
+ },
+ "LB": {
+  "sic_code": "6792",
+  "sic_description": "OIL ROYALTY TRADERS"
+ },
+ "LDOS": {
+  "sic_code": "7373",
+  "sic_description": "SERVICES-COMPUTER INTEGRATED SYSTEMS DESIGN"
+ },
+ "LEG": {
+  "sic_code": "2510",
+  "sic_description": "HOUSEHOLD FURNITURE"
+ },
+ "LEHMQ": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "LEN": {
+  "sic_code": "1520",
+  "sic_description": "GENERAL BLDG CONTRACTORS - RESIDENTIAL BLDGS"
+ },
+ "LH": {
+  "sic_code": "8071",
+  "sic_description": "SERVICES-MEDICAL LABORATORIES"
+ },
+ "LHX": {
+  "sic_code": "3812",
+  "sic_description": "SEARCH, DETECTION, NAVIGATION, GUIDANCE, AERONAUTICAL SYS"
+ },
+ "LIFE": {
+  "sic_code": "6411",
+  "sic_description": "INSURANCE AGENTS, BROKERS & SERVICE"
+ },
+ "LII": {
+  "sic_code": "3585",
+  "sic_description": "AIR-COND & WARM AIR HEATG EQUIP & COMM & INDL REFRIG EQUIP"
+ },
+ "LIN": {
+  "sic_code": "2810",
+  "sic_description": "INDUSTRIAL INORGANIC CHEMICALS"
+ },
+ "LITE": {
+  "sic_code": "3669",
+  "sic_description": "COMMUNICATIONS EQUIPMENT, NEC"
+ },
+ "LKQ": {
+  "sic_code": "5010",
+  "sic_description": "WHOLESALE-MOTOR VEHICLES & MOTOR VEHICLE PARTS & SUPPLIES"
+ },
+ "LLL": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "LLTC": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "LLY": {
+  "sic_code": "2834",
+  "sic_description": "PHARMACEUTICAL PREPARATIONS"
+ },
+ "LM": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "LMT": {
+  "sic_code": "3760",
+  "sic_description": "GUIDED MISSILES & SPACE VEHICLES & PARTS"
+ },
+ "LNC": {
+  "sic_code": "6311",
+  "sic_description": "LIFE INSURANCE"
+ },
+ "LNT": {
+  "sic_code": "4931",
+  "sic_description": "ELECTRIC & OTHER SERVICES COMBINED"
+ },
+ "LO": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "LOW": {
+  "sic_code": "5211",
+  "sic_description": "RETAIL-LUMBER & OTHER BUILDING MATERIALS DEALERS"
+ },
+ "LRCX": {
+  "sic_code": "3559",
+  "sic_description": "SPECIAL INDUSTRY MACHINERY, NEC"
+ },
+ "LSI": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "LULU": {
+  "sic_code": "2300",
+  "sic_description": "APPAREL & OTHER FINISHD PRODS OF FABRICS & SIMILAR MATL"
+ },
+ "LUMN": {
+  "sic_code": "4813",
+  "sic_description": "TELEPHONE COMMUNICATIONS (NO RADIOTELEPHONE)"
+ },
+ "LUV": {
+  "sic_code": "4512",
+  "sic_description": "AIR TRANSPORTATION, SCHEDULED"
+ },
+ "LVLT": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "LVS": {
+  "sic_code": "7011",
+  "sic_description": "HOTELS & MOTELS"
+ },
+ "LW": {
+  "sic_code": "2030",
+  "sic_description": "CANNED, FROZEN & PRESERVD FRUIT, VEG & FOOD SPECIALTIES"
+ },
+ "LXK": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "LYB": {
+  "sic_code": "2860",
+  "sic_description": "INDUSTRIAL ORGANIC CHEMICALS"
+ },
+ "LYV": {
+  "sic_code": "7900",
+  "sic_description": "SERVICES-AMUSEMENT & RECREATION SERVICES"
+ },
+ "M": {
+  "sic_code": "5311",
+  "sic_description": "RETAIL-DEPARTMENT STORES"
+ },
+ "MA": {
+  "sic_code": "7389",
+  "sic_description": "SERVICES-BUSINESS SERVICES, NEC"
+ },
+ "MAA": {
+  "sic_code": "6798",
+  "sic_description": "REAL ESTATE INVESTMENT TRUSTS"
+ },
+ "MAC": {
+  "sic_code": "6798",
+  "sic_description": "REAL ESTATE INVESTMENT TRUSTS"
+ },
+ "MAR": {
+  "sic_code": "7011",
+  "sic_description": "HOTELS & MOTELS"
+ },
+ "MAS": {
+  "sic_code": "3430",
+  "sic_description": "HEATING EQUIP, EXCEPT ELEC & WARM AIR; & PLUMBING FIXTURES"
+ },
+ "MAT": {
+  "sic_code": "3942",
+  "sic_description": "DOLLS & STUFFED TOYS"
+ },
+ "MBC": {
+  "sic_code": "2511",
+  "sic_description": "WOOD HOUSEHOLD FURNITURE, (NO UPHOLSTERED)"
+ },
+ "MBI": {
+  "sic_code": "6351",
+  "sic_description": "SURETY INSURANCE"
+ },
+ "MCD": {
+  "sic_code": "5812",
+  "sic_description": "RETAIL-EATING PLACES"
+ },
+ "MCHP": {
+  "sic_code": "3674",
+  "sic_description": "SEMICONDUCTORS & RELATED DEVICES"
+ },
+ "MCK": {
+  "sic_code": "5122",
+  "sic_description": "WHOLESALE-DRUGS, PROPRIETARIES & DRUGGISTS' SUNDRIES"
+ },
+ "MCO": {
+  "sic_code": "7320",
+  "sic_description": "SERVICES-CONSUMER CREDIT REPORTING, COLLECTION AGENCIES"
+ },
+ "MDLZ": {
+  "sic_code": "2000",
+  "sic_description": "FOOD AND KINDRED PRODUCTS"
+ },
+ "MDP": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "MDT": {
+  "sic_code": "3845",
+  "sic_description": "ELECTROMEDICAL & ELECTROTHERAPEUTIC APPARATUS"
+ },
+ "MEE": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "MER": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "MET": {
+  "sic_code": "6311",
+  "sic_description": "LIFE INSURANCE"
+ },
+ "META": {
+  "sic_code": "7370",
+  "sic_description": "SERVICES-COMPUTER PROGRAMMING, DATA PROCESSING, ETC."
+ },
+ "MFE": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "MGM": {
+  "sic_code": "7011",
+  "sic_description": "HOTELS & MOTELS"
+ },
+ "MHK": {
+  "sic_code": "2273",
+  "sic_description": "CARPETS & RUGS"
+ },
+ "MHS": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "MI": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "MIL": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "MJN": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "MKC": {
+  "sic_code": "2090",
+  "sic_description": "MISCELLANEOUS FOOD PREPARATIONS & KINDRED PRODUCTS"
+ },
+ "MKTX": {
+  "sic_code": "6211",
+  "sic_description": "SECURITY BROKERS, DEALERS & FLOTATION COMPANIES"
+ },
+ "MLM": {
+  "sic_code": "1400",
+  "sic_description": "MINING & QUARRYING OF NONMETALLIC MINERALS (NO FUELS)"
+ },
+ "MMC": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "MMI": {
+  "sic_code": "6531",
+  "sic_description": "REAL ESTATE AGENTS & MANAGERS (FOR OTHERS)"
+ },
+ "MMM": {
+  "sic_code": "3841",
+  "sic_description": "SURGICAL & MEDICAL INSTRUMENTS & APPARATUS"
+ },
+ "MNK": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "MNST": {
+  "sic_code": "2086",
+  "sic_description": "BOTTLED & CANNED SOFT DRINKS & CARBONATED WATERS"
+ },
+ "MO": {
+  "sic_code": "2111",
+  "sic_description": "CIGARETTES"
+ },
+ "MOH": {
+  "sic_code": "6324",
+  "sic_description": "HOSPITAL & MEDICAL SERVICE PLANS"
+ },
+ "MOLX": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "MON": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "MOS": {
+  "sic_code": "2870",
+  "sic_description": "AGRICULTURAL CHEMICALS"
+ },
+ "MPC": {
+  "sic_code": "2911",
+  "sic_description": "PETROLEUM REFINING"
+ },
+ "MPWR": {
+  "sic_code": "3674",
+  "sic_description": "SEMICONDUCTORS & RELATED DEVICES"
+ },
+ "MRK": {
+  "sic_code": "2834",
+  "sic_description": "PHARMACEUTICAL PREPARATIONS"
+ },
+ "MRNA": {
+  "sic_code": "2836",
+  "sic_description": "BIOLOGICAL PRODUCTS, (NO DIAGNOSTIC SUBSTANCES)"
+ },
+ "MRO": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "MRSH": {
+  "sic_code": "6411",
+  "sic_description": "INSURANCE AGENTS, BROKERS & SERVICE"
+ },
+ "MS": {
+  "sic_code": "6211",
+  "sic_description": "SECURITY BROKERS, DEALERS & FLOTATION COMPANIES"
+ },
+ "MSCI": {
+  "sic_code": "7389",
+  "sic_description": "SERVICES-BUSINESS SERVICES, NEC"
+ },
+ "MSFT": {
+  "sic_code": "7372",
+  "sic_description": "SERVICES-PREPACKAGED SOFTWARE"
+ },
+ "MSI": {
+  "sic_code": "3663",
+  "sic_description": "RADIO & TV BROADCASTING & COMMUNICATIONS EQUIPMENT"
+ },
+ "MTB": {
+  "sic_code": "6022",
+  "sic_description": "STATE COMMERCIAL BANKS"
+ },
+ "MTCH": {
+  "sic_code": "7370",
+  "sic_description": "SERVICES-COMPUTER PROGRAMMING, DATA PROCESSING, ETC."
+ },
+ "MTD": {
+  "sic_code": "3826",
+  "sic_description": "LABORATORY ANALYTICAL INSTRUMENTS"
+ },
+ "MTG": {
+  "sic_code": "6351",
+  "sic_description": "SURETY INSURANCE"
+ },
+ "MTLQQ": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "MTW": {
+  "sic_code": "3531",
+  "sic_description": "CONSTRUCTION MACHINERY & EQUIP"
+ },
+ "MU": {
+  "sic_code": "3674",
+  "sic_description": "SEMICONDUCTORS & RELATED DEVICES"
+ },
+ "MUR": {
+  "sic_code": "1311",
+  "sic_description": "CRUDE PETROLEUM & NATURAL GAS"
+ },
+ "MWV": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "MWW": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "MXIM": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "NAVI": {
+  "sic_code": "6211",
+  "sic_description": "SECURITY BROKERS, DEALERS & FLOTATION COMPANIES"
+ },
+ "NBL": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "NBR": {
+  "sic_code": "1381",
+  "sic_description": "DRILLING OIL & GAS WELLS"
+ },
+ "NCC": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "NCLH": {
+  "sic_code": "4400",
+  "sic_description": "WATER TRANSPORTATION"
+ },
+ "NDAQ": {
+  "sic_code": "6200",
+  "sic_description": "SECURITY & COMMODITY BROKERS, DEALERS, EXCHANGES & SERVICES"
+ },
+ "NDSN": {
+  "sic_code": "3569",
+  "sic_description": "GENERAL INDUSTRIAL MACHINERY & EQUIPMENT, NEC"
+ },
+ "NE": {
+  "sic_code": "1381",
+  "sic_description": "DRILLING OIL & GAS WELLS"
+ },
+ "NEE": {
+  "sic_code": "4911",
+  "sic_description": "ELECTRIC SERVICES"
+ },
+ "NEM": {
+  "sic_code": "1040",
+  "sic_description": "GOLD AND SILVER ORES"
+ },
+ "NFLX": {
+  "sic_code": "7841",
+  "sic_description": "SERVICES-VIDEO TAPE RENTAL"
+ },
+ "NFX": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "NI": {
+  "sic_code": "4931",
+  "sic_description": "ELECTRIC & OTHER SERVICES COMBINED"
+ },
+ "NKE": {
+  "sic_code": "3021",
+  "sic_description": "RUBBER & PLASTICS FOOTWEAR"
+ },
+ "NKTR": {
+  "sic_code": "2834",
+  "sic_description": "PHARMACEUTICAL PREPARATIONS"
+ },
+ "NLSN": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "NOC": {
+  "sic_code": "3812",
+  "sic_description": "SEARCH, DETECTION, NAVIGATION, GUIDANCE, AERONAUTICAL SYS"
+ },
+ "NOV": {
+  "sic_code": "3533",
+  "sic_description": "OIL & GAS FIELD MACHINERY & EQUIPMENT"
+ },
+ "NOVL": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "NOW": {
+  "sic_code": "7372",
+  "sic_description": "SERVICES-PREPACKAGED SOFTWARE"
+ },
+ "NRG": {
+  "sic_code": "4911",
+  "sic_description": "ELECTRIC SERVICES"
+ },
+ "NSC": {
+  "sic_code": "4011",
+  "sic_description": "RAILROADS, LINE-HAUL OPERATING"
+ },
+ "NSM": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "NTAP": {
+  "sic_code": "3572",
+  "sic_description": "COMPUTER STORAGE DEVICES"
+ },
+ "NTRS": {
+  "sic_code": "6022",
+  "sic_description": "STATE COMMERCIAL BANKS"
+ },
+ "NUE": {
+  "sic_code": "3312",
+  "sic_description": "STEEL WORKS, BLAST FURNACES & ROLLING MILLS (COKE OVENS)"
+ },
+ "NVDA": {
+  "sic_code": "3674",
+  "sic_description": "SEMICONDUCTORS & RELATED DEVICES"
+ },
+ "NVLS": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "NVR": {
+  "sic_code": "1531",
+  "sic_description": "OPERATIVE BUILDERS"
+ },
+ "NWL": {
+  "sic_code": "3089",
+  "sic_description": "PLASTICS PRODUCTS, NEC"
+ },
+ "NWS": {
+  "sic_code": "2711",
+  "sic_description": "NEWSPAPERS: PUBLISHING OR PUBLISHING & PRINTING"
+ },
+ "NWSA": {
+  "sic_code": "2711",
+  "sic_description": "NEWSPAPERS: PUBLISHING OR PUBLISHING & PRINTING"
+ },
+ "NXPI": {
+  "sic_code": "3674",
+  "sic_description": "SEMICONDUCTORS & RELATED DEVICES"
+ },
+ "NYT": {
+  "sic_code": "2711",
+  "sic_description": "NEWSPAPERS: PUBLISHING OR PUBLISHING & PRINTING"
+ },
+ "NYX": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "O": {
+  "sic_code": "6798",
+  "sic_description": "REAL ESTATE INVESTMENT TRUSTS"
+ },
+ "ODFL": {
+  "sic_code": "4213",
+  "sic_description": "TRUCKING (NO LOCAL)"
+ },
+ "ODP": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "OGN": {
+  "sic_code": "2834",
+  "sic_description": "PHARMACEUTICAL PREPARATIONS"
+ },
+ "OI": {
+  "sic_code": "3221",
+  "sic_description": "GLASS CONTAINERS"
+ },
+ "OKE": {
+  "sic_code": "4923",
+  "sic_description": "NATURAL GAS TRANSMISSION & DISTRIBUTION"
+ },
+ "OMC": {
+  "sic_code": "7311",
+  "sic_description": "SERVICES-ADVERTISING AGENCIES"
+ },
+ "OMX": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "ON": {
+  "sic_code": "3674",
+  "sic_description": "SEMICONDUCTORS & RELATED DEVICES"
+ },
+ "ORCL": {
+  "sic_code": "7372",
+  "sic_description": "SERVICES-PREPACKAGED SOFTWARE"
+ },
+ "ORLY": {
+  "sic_code": "5531",
+  "sic_description": "RETAIL-AUTO & HOME SUPPLY STORES"
+ },
+ "OTIS": {
+  "sic_code": "3600",
+  "sic_description": "ELECTRONIC & OTHER ELECTRICAL EQUIPMENT (NO COMPUTER EQUIP)"
+ },
+ "OXY": {
+  "sic_code": "1311",
+  "sic_description": "CRUDE PETROLEUM & NATURAL GAS"
+ },
+ "PANW": {
+  "sic_code": "3577",
+  "sic_description": "COMPUTER PERIPHERAL EQUIPMENT, NEC"
+ },
+ "PARA": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "PAYC": {
+  "sic_code": "7372",
+  "sic_description": "SERVICES-PREPACKAGED SOFTWARE"
+ },
+ "PAYX": {
+  "sic_code": "8700",
+  "sic_description": "SERVICES-ENGINEERING, ACCOUNTING, RESEARCH, MANAGEMENT"
+ },
+ "PBCT": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "PBG": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "PBI": {
+  "sic_code": "3579",
+  "sic_description": "OFFICE MACHINES, NEC"
+ },
+ "PCAR": {
+  "sic_code": "3711",
+  "sic_description": "MOTOR VEHICLES & PASSENGER CAR BODIES"
+ },
+ "PCG": {
+  "sic_code": "4931",
+  "sic_description": "ELECTRIC & OTHER SERVICES COMBINED"
+ },
+ "PCL": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "PCP": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "PDCO": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "PEAK": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "PEG": {
+  "sic_code": "4931",
+  "sic_description": "ELECTRIC & OTHER SERVICES COMBINED"
+ },
+ "PENN": {
+  "sic_code": "7011",
+  "sic_description": "HOTELS & MOTELS"
+ },
+ "PEP": {
+  "sic_code": "2080",
+  "sic_description": "BEVERAGES"
+ },
+ "PETM": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "PFE": {
+  "sic_code": "2834",
+  "sic_description": "PHARMACEUTICAL PREPARATIONS"
+ },
+ "PFG": {
+  "sic_code": "6321",
+  "sic_description": "ACCIDENT & HEALTH INSURANCE"
+ },
+ "PG": {
+  "sic_code": "2840",
+  "sic_description": "SOAP, DETERGENTS, CLEANG PREPARATIONS, PERFUMES, COSMETICS"
+ },
+ "PGN": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "PGR": {
+  "sic_code": "6331",
+  "sic_description": "FIRE, MARINE & CASUALTY INSURANCE"
+ },
+ "PH": {
+  "sic_code": "3490",
+  "sic_description": "MISCELLANEOUS FABRICATED METAL PRODUCTS"
+ },
+ "PHM": {
+  "sic_code": "1531",
+  "sic_description": "OPERATIVE BUILDERS"
+ },
+ "PKG": {
+  "sic_code": "2650",
+  "sic_description": "PAPERBOARD CONTAINERS & BOXES"
+ },
+ "PLD": {
+  "sic_code": "6798",
+  "sic_description": "REAL ESTATE INVESTMENT TRUSTS"
+ },
+ "PLL": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "PLTR": {
+  "sic_code": "7372",
+  "sic_description": "SERVICES-PREPACKAGED SOFTWARE"
+ },
+ "PM": {
+  "sic_code": "2111",
+  "sic_description": "CIGARETTES"
+ },
+ "PNC": {
+  "sic_code": "6021",
+  "sic_description": "NATIONAL COMMERCIAL BANKS"
+ },
+ "PNR": {
+  "sic_code": "3550",
+  "sic_description": "SPECIAL INDUSTRY MACHINERY (NO METALWORKING MACHINERY)"
+ },
+ "PNW": {
+  "sic_code": "4911",
+  "sic_description": "ELECTRIC SERVICES"
+ },
+ "PODD": {
+  "sic_code": "3841",
+  "sic_description": "SURGICAL & MEDICAL INSTRUMENTS & APPARATUS"
+ },
+ "POM": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "POOL": {
+  "sic_code": "5090",
+  "sic_description": "WHOLESALE-MISC DURABLE GOODS"
+ },
+ "PPG": {
+  "sic_code": "2851",
+  "sic_description": "PAINTS, VARNISHES, LACQUERS, ENAMELS & ALLIED PRODS"
+ },
+ "PPL": {
+  "sic_code": "4911",
+  "sic_description": "ELECTRIC SERVICES"
+ },
+ "PRGO": {
+  "sic_code": "2834",
+  "sic_description": "PHARMACEUTICAL PREPARATIONS"
+ },
+ "PRU": {
+  "sic_code": "6311",
+  "sic_description": "LIFE INSURANCE"
+ },
+ "PSA": {
+  "sic_code": "6798",
+  "sic_description": "REAL ESTATE INVESTMENT TRUSTS"
+ },
+ "PSKY": {
+  "sic_code": "4833",
+  "sic_description": "TELEVISION BROADCASTING STATIONS"
+ },
+ "PSX": {
+  "sic_code": "2911",
+  "sic_description": "PETROLEUM REFINING"
+ },
+ "PTC": {
+  "sic_code": "7372",
+  "sic_description": "SERVICES-PREPACKAGED SOFTWARE"
+ },
+ "PTV": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "PVH": {
+  "sic_code": "2320",
+  "sic_description": "MEN'S & BOYS' FURNISHGS, WORK CLOTHG, & ALLIED GARMENTS"
+ },
+ "PWR": {
+  "sic_code": "1731",
+  "sic_description": "ELECTRICAL WORK"
+ },
+ "PX": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "PXD": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "PYPL": {
+  "sic_code": "7389",
+  "sic_description": "SERVICES-BUSINESS SERVICES, NEC"
+ },
+ "Q": {
+  "sic_code": "3674",
+  "sic_description": "SEMICONDUCTORS & RELATED DEVICES"
+ },
+ "QCOM": {
+  "sic_code": "3663",
+  "sic_description": "RADIO & TV BROADCASTING & COMMUNICATIONS EQUIPMENT"
+ },
+ "QEP": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "QLGC": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "QRVO": {
+  "sic_code": "3674",
+  "sic_description": "SEMICONDUCTORS & RELATED DEVICES"
+ },
+ "R": {
+  "sic_code": "7510",
+  "sic_description": "SERVICES-AUTO RENTAL & LEASING (NO DRIVERS)"
+ },
+ "RAI": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "RCL": {
+  "sic_code": "4400",
+  "sic_description": "WATER TRANSPORTATION"
+ },
+ "RDC": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "REG": {
+  "sic_code": "6798",
+  "sic_description": "REAL ESTATE INVESTMENT TRUSTS"
+ },
+ "REGN": {
+  "sic_code": "2834",
+  "sic_description": "PHARMACEUTICAL PREPARATIONS"
+ },
+ "RF": {
+  "sic_code": "6021",
+  "sic_description": "NATIONAL COMMERCIAL BANKS"
+ },
+ "RHI": {
+  "sic_code": "7363",
+  "sic_description": "SERVICES-HELP SUPPLY SERVICES"
+ },
+ "RHT": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "RIG": {
+  "sic_code": "1381",
+  "sic_description": "DRILLING OIL & GAS WELLS"
+ },
+ "RJF": {
+  "sic_code": "6211",
+  "sic_description": "SECURITY BROKERS, DEALERS & FLOTATION COMPANIES"
+ },
+ "RL": {
+  "sic_code": "2320",
+  "sic_description": "MEN'S & BOYS' FURNISHGS, WORK CLOTHG, & ALLIED GARMENTS"
+ },
+ "RMD": {
+  "sic_code": "3841",
+  "sic_description": "SURGICAL & MEDICAL INSTRUMENTS & APPARATUS"
+ },
+ "ROH": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "ROK": {
+  "sic_code": "3829",
+  "sic_description": "MEASURING & CONTROLLING DEVICES, NEC"
+ },
+ "ROL": {
+  "sic_code": "7340",
+  "sic_description": "SERVICES-TO DWELLINGS & OTHER BUILDINGS"
+ },
+ "ROP": {
+  "sic_code": "3823",
+  "sic_description": "INDUSTRIAL INSTRUMENTS FOR MEASUREMENT, DISPLAY, AND CONTROL"
+ },
+ "ROST": {
+  "sic_code": "5651",
+  "sic_description": "RETAIL-FAMILY CLOTHING STORES"
+ },
+ "RRC": {
+  "sic_code": "1311",
+  "sic_description": "CRUDE PETROLEUM & NATURAL GAS"
+ },
+ "RRD": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "RSG": {
+  "sic_code": "4953",
+  "sic_description": "REFUSE SYSTEMS"
+ },
+ "RSHCQ": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "RTN": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "RTX": {
+  "sic_code": "3724",
+  "sic_description": "AIRCRAFT ENGINES & ENGINE PARTS"
+ },
+ "RVTY": {
+  "sic_code": "3826",
+  "sic_description": "LABORATORY ANALYTICAL INSTRUMENTS"
+ },
+ "RX": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "S": {
+  "sic_code": "7372",
+  "sic_description": "SERVICES-PREPACKAGED SOFTWARE"
+ },
+ "SAF": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "SATS": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "SBAC": {
+  "sic_code": "6798",
+  "sic_description": "REAL ESTATE INVESTMENT TRUSTS"
+ },
+ "SBNY": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "SBUX": {
+  "sic_code": "5810",
+  "sic_description": "RETAIL-EATING & DRINKING PLACES"
+ },
+ "SCG": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "SCHW": {
+  "sic_code": "6211",
+  "sic_description": "SECURITY BROKERS, DEALERS & FLOTATION COMPANIES"
+ },
+ "SE": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "SEDG": {
+  "sic_code": "3674",
+  "sic_description": "SEMICONDUCTORS & RELATED DEVICES"
+ },
+ "SEE": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "SGP": {
+  "sic_code": "3841",
+  "sic_description": "SURGICAL & MEDICAL INSTRUMENTS & APPARATUS"
+ },
+ "SHLD": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "SHW": {
+  "sic_code": "5200",
+  "sic_description": "RETAIL-BUILDING MATERIALS, HARDWARE, GARDEN SUPPLY"
+ },
+ "SIAL": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "SIG": {
+  "sic_code": "5944",
+  "sic_description": "RETAIL-JEWELRY STORES"
+ },
+ "SII": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "SITC": {
+  "sic_code": "6798",
+  "sic_description": "REAL ESTATE INVESTMENT TRUSTS"
+ },
+ "SIVB": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "SJM": {
+  "sic_code": "2033",
+  "sic_description": "CANNED, FRUITS, VEG, PRESERVES, JAMS & JELLIES"
+ },
+ "SLB": {
+  "sic_code": "1389",
+  "sic_description": "OIL & GAS FIELD SERVICES, NEC"
+ },
+ "SLG": {
+  "sic_code": "6798",
+  "sic_description": "REAL ESTATE INVESTMENT TRUSTS"
+ },
+ "SLM": {
+  "sic_code": "6141",
+  "sic_description": "PERSONAL CREDIT INSTITUTIONS"
+ },
+ "SMCI": {
+  "sic_code": "3571",
+  "sic_description": "ELECTRONIC COMPUTERS"
+ },
+ "SNA": {
+  "sic_code": "3420",
+  "sic_description": "CUTLERY, HANDTOOLS & GENERAL HARDWARE"
+ },
+ "SNDK": {
+  "sic_code": "3572",
+  "sic_description": "COMPUTER STORAGE DEVICES"
+ },
+ "SNI": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "SNPS": {
+  "sic_code": "7372",
+  "sic_description": "SERVICES-PREPACKAGED SOFTWARE"
+ },
+ "SNV": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "SO": {
+  "sic_code": "4911",
+  "sic_description": "ELECTRIC SERVICES"
+ },
+ "SOLS": {
+  "sic_code": "2800",
+  "sic_description": "CHEMICALS & ALLIED PRODUCTS"
+ },
+ "SOLV": {
+  "sic_code": "3841",
+  "sic_description": "SURGICAL & MEDICAL INSTRUMENTS & APPARATUS"
+ },
+ "SOV": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "SPG": {
+  "sic_code": "6798",
+  "sic_description": "REAL ESTATE INVESTMENT TRUSTS"
+ },
+ "SPGI": {
+  "sic_code": "7320",
+  "sic_description": "SERVICES-CONSUMER CREDIT REPORTING, COLLECTION AGENCIES"
+ },
+ "SPLS": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "SRCL": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "SRE": {
+  "sic_code": "4932",
+  "sic_description": "GAS & OTHER SERVICES COMBINED"
+ },
+ "SSP": {
+  "sic_code": "4833",
+  "sic_description": "TELEVISION BROADCASTING STATIONS"
+ },
+ "STE": {
+  "sic_code": "3842",
+  "sic_description": "ORTHOPEDIC, PROSTHETIC & SURGICAL APPLIANCES & SUPPLIES"
+ },
+ "STI": {
+  "sic_code": "3690",
+  "sic_description": "MISCELLANEOUS ELECTRICAL MACHINERY, EQUIPMENT & SUPPLIES"
+ },
+ "STJ": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "STLD": {
+  "sic_code": "3312",
+  "sic_description": "STEEL WORKS, BLAST FURNACES & ROLLING MILLS (COKE OVENS)"
+ },
+ "STR": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "STT": {
+  "sic_code": "6022",
+  "sic_description": "STATE COMMERCIAL BANKS"
+ },
+ "STX": {
+  "sic_code": "3572",
+  "sic_description": "COMPUTER STORAGE DEVICES"
+ },
+ "STZ": {
+  "sic_code": "2080",
+  "sic_description": "BEVERAGES"
+ },
+ "SUN": {
+  "sic_code": "2911",
+  "sic_description": "PETROLEUM REFINING"
+ },
+ "SUNEQ": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "SVU": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "SW": {
+  "sic_code": "2650",
+  "sic_description": "PAPERBOARD CONTAINERS & BOXES"
+ },
+ "SWK": {
+  "sic_code": "3420",
+  "sic_description": "CUTLERY, HANDTOOLS & GENERAL HARDWARE"
+ },
+ "SWKS": {
+  "sic_code": "3674",
+  "sic_description": "SEMICONDUCTORS & RELATED DEVICES"
+ },
+ "SWN": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "SWY": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "SYF": {
+  "sic_code": "6199",
+  "sic_description": "FINANCE SERVICES"
+ },
+ "SYK": {
+  "sic_code": "3841",
+  "sic_description": "SURGICAL & MEDICAL INSTRUMENTS & APPARATUS"
+ },
+ "SYY": {
+  "sic_code": "5140",
+  "sic_description": "WHOLESALE-GROCERIES & RELATED PRODUCTS"
+ },
+ "T": {
+  "sic_code": "4813",
+  "sic_description": "TELEPHONE COMMUNICATIONS (NO RADIOTELEPHONE)"
+ },
+ "TAP": {
+  "sic_code": "2082",
+  "sic_description": "MALT BEVERAGES"
+ },
+ "TDC": {
+  "sic_code": "7372",
+  "sic_description": "SERVICES-PREPACKAGED SOFTWARE"
+ },
+ "TDG": {
+  "sic_code": "3728",
+  "sic_description": "AIRCRAFT PARTS & AUXILIARY EQUIPMENT, NEC"
+ },
+ "TDY": {
+  "sic_code": "3812",
+  "sic_description": "SEARCH, DETECTION, NAVIGATION, GUIDANCE, AERONAUTICAL SYS"
+ },
+ "TE": {
+  "sic_code": "3674",
+  "sic_description": "SEMICONDUCTORS & RELATED DEVICES"
+ },
+ "TECH": {
+  "sic_code": "2836",
+  "sic_description": "BIOLOGICAL PRODUCTS, (NO DIAGNOSTIC SUBSTANCES)"
+ },
+ "TEG": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "TEL": {
+  "sic_code": "5065",
+  "sic_description": "WHOLESALE-ELECTRONIC PARTS & EQUIPMENT, NEC"
+ },
+ "TER": {
+  "sic_code": "3825",
+  "sic_description": "INSTRUMENTS FOR MEAS & TESTING OF ELECTRICITY & ELEC SIGNALS"
+ },
+ "TEX": {
+  "sic_code": "3537",
+  "sic_description": "INDUSTRIAL TRUCKS, TRACTORS, TRAILERS & STACKERS"
+ },
+ "TFC": {
+  "sic_code": "6021",
+  "sic_description": "NATIONAL COMMERCIAL BANKS"
+ },
+ "TFX": {
+  "sic_code": "3841",
+  "sic_description": "SURGICAL & MEDICAL INSTRUMENTS & APPARATUS"
+ },
+ "TGNA": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "TGT": {
+  "sic_code": "5331",
+  "sic_description": "RETAIL-VARIETY STORES"
+ },
+ "THC": {
+  "sic_code": "8062",
+  "sic_description": "SERVICES-GENERAL MEDICAL & SURGICAL HOSPITALS, NEC"
+ },
+ "TIE": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "TIF": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "TJX": {
+  "sic_code": "5651",
+  "sic_description": "RETAIL-FAMILY CLOTHING STORES"
+ },
+ "TKO": {
+  "sic_code": "7900",
+  "sic_description": "SERVICES-AMUSEMENT & RECREATION SERVICES"
+ },
+ "TLAB": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "TMO": {
+  "sic_code": "3829",
+  "sic_description": "MEASURING & CONTROLLING DEVICES, NEC"
+ },
+ "TMUS": {
+  "sic_code": "4812",
+  "sic_description": "RADIOTELEPHONE COMMUNICATIONS"
+ },
+ "TNL": {
+  "sic_code": "7011",
+  "sic_description": "HOTELS & MOTELS"
+ },
+ "TPL": {
+  "sic_code": "6792",
+  "sic_description": "OIL ROYALTY TRADERS"
+ },
+ "TPR": {
+  "sic_code": "3100",
+  "sic_description": "LEATHER & LEATHER PRODUCTS"
+ },
+ "TRGP": {
+  "sic_code": "4922",
+  "sic_description": "NATURAL GAS TRANSMISSION"
+ },
+ "TRIP": {
+  "sic_code": "7370",
+  "sic_description": "SERVICES-COMPUTER PROGRAMMING, DATA PROCESSING, ETC."
+ },
+ "TRMB": {
+  "sic_code": "3829",
+  "sic_description": "MEASURING & CONTROLLING DEVICES, NEC"
+ },
+ "TROW": {
+  "sic_code": "6282",
+  "sic_description": "INVESTMENT ADVICE"
+ },
+ "TRV": {
+  "sic_code": "6331",
+  "sic_description": "FIRE, MARINE & CASUALTY INSURANCE"
+ },
+ "TSCO": {
+  "sic_code": "5200",
+  "sic_description": "RETAIL-BUILDING MATERIALS, HARDWARE, GARDEN SUPPLY"
+ },
+ "TSLA": {
+  "sic_code": "3711",
+  "sic_description": "MOTOR VEHICLES & PASSENGER CAR BODIES"
+ },
+ "TSN": {
+  "sic_code": "2015",
+  "sic_description": "POULTRY SLAUGHTERING AND PROCESSING"
+ },
+ "TSS": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "TT": {
+  "sic_code": "3822",
+  "sic_description": "AUTO CONTROLS FOR REGULATING RESIDENTIAL & COMML ENVIRONMENTS"
+ },
+ "TTD": {
+  "sic_code": "7370",
+  "sic_description": "SERVICES-COMPUTER PROGRAMMING, DATA PROCESSING, ETC."
+ },
+ "TTWO": {
+  "sic_code": "7372",
+  "sic_description": "SERVICES-PREPACKAGED SOFTWARE"
+ },
+ "TWC": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "TWTR": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "TWX": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "TXN": {
+  "sic_code": "3674",
+  "sic_description": "SEMICONDUCTORS & RELATED DEVICES"
+ },
+ "TXT": {
+  "sic_code": "3720",
+  "sic_description": "AIRCRAFT & PARTS"
+ },
+ "TYL": {
+  "sic_code": "7372",
+  "sic_description": "SERVICES-PREPACKAGED SOFTWARE"
+ },
+ "UA": {
+  "sic_code": "2300",
+  "sic_description": "APPAREL & OTHER FINISHD PRODS OF FABRICS & SIMILAR MATL"
+ },
+ "UAA": {
+  "sic_code": "2300",
+  "sic_description": "APPAREL & OTHER FINISHD PRODS OF FABRICS & SIMILAR MATL"
+ },
+ "UAL": {
+  "sic_code": "4512",
+  "sic_description": "AIR TRANSPORTATION, SCHEDULED"
+ },
+ "UBER": {
+  "sic_code": "7389",
+  "sic_description": "SERVICES-BUSINESS SERVICES, NEC"
+ },
+ "UDR": {
+  "sic_code": "6798",
+  "sic_description": "REAL ESTATE INVESTMENT TRUSTS"
+ },
+ "UHS": {
+  "sic_code": "8062",
+  "sic_description": "SERVICES-GENERAL MEDICAL & SURGICAL HOSPITALS, NEC"
+ },
+ "UIS": {
+  "sic_code": "7373",
+  "sic_description": "SERVICES-COMPUTER INTEGRATED SYSTEMS DESIGN"
+ },
+ "ULTA": {
+  "sic_code": "5990",
+  "sic_description": "RETAIL-RETAIL STORES, NEC"
+ },
+ "UNH": {
+  "sic_code": "6324",
+  "sic_description": "HOSPITAL & MEDICAL SERVICE PLANS"
+ },
+ "UNM": {
+  "sic_code": "6321",
+  "sic_description": "ACCIDENT & HEALTH INSURANCE"
+ },
+ "UNP": {
+  "sic_code": "4011",
+  "sic_description": "RAILROADS, LINE-HAUL OPERATING"
+ },
+ "UPS": {
+  "sic_code": "4210",
+  "sic_description": "TRUCKING & COURIER SERVICES (NO AIR)"
+ },
+ "URBN": {
+  "sic_code": "5651",
+  "sic_description": "RETAIL-FAMILY CLOTHING STORES"
+ },
+ "URI": {
+  "sic_code": "7359",
+  "sic_description": "SERVICES-EQUIPMENT RENTAL & LEASING, NEC"
+ },
+ "USB": {
+  "sic_code": "6021",
+  "sic_description": "NATIONAL COMMERCIAL BANKS"
+ },
+ "UST": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "V": {
+  "sic_code": "7389",
+  "sic_description": "SERVICES-BUSINESS SERVICES, NEC"
+ },
+ "VAL": {
+  "sic_code": "1381",
+  "sic_description": "DRILLING OIL & GAS WELLS"
+ },
+ "VAR": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "VFC": {
+  "sic_code": "2320",
+  "sic_description": "MEN'S & BOYS' FURNISHGS, WORK CLOTHG, & ALLIED GARMENTS"
+ },
+ "VIAB": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "VIAC": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "VIAV": {
+  "sic_code": "3674",
+  "sic_description": "SEMICONDUCTORS & RELATED DEVICES"
+ },
+ "VICI": {
+  "sic_code": "6798",
+  "sic_description": "REAL ESTATE INVESTMENT TRUSTS"
+ },
+ "VLO": {
+  "sic_code": "2911",
+  "sic_description": "PETROLEUM REFINING"
+ },
+ "VLTO": {
+  "sic_code": "3825",
+  "sic_description": "INSTRUMENTS FOR MEAS & TESTING OF ELECTRICITY & ELEC SIGNALS"
+ },
+ "VMC": {
+  "sic_code": "1400",
+  "sic_description": "MINING & QUARRYING OF NONMETALLIC MINERALS (NO FUELS)"
+ },
+ "VNO": {
+  "sic_code": "6798",
+  "sic_description": "REAL ESTATE INVESTMENT TRUSTS"
+ },
+ "VNT": {
+  "sic_code": "3824",
+  "sic_description": "TOTALIZING FLUID METERS & COUNTING DEVICES"
+ },
+ "VRSK": {
+  "sic_code": "7374",
+  "sic_description": "SERVICES-COMPUTER PROCESSING & DATA PREPARATION"
+ },
+ "VRSN": {
+  "sic_code": "7371",
+  "sic_description": "SERVICES-COMPUTER PROGRAMMING SERVICES"
+ },
+ "VRT": {
+  "sic_code": "3679",
+  "sic_description": "ELECTRONIC COMPONENTS, NEC"
+ },
+ "VRTX": {
+  "sic_code": "2834",
+  "sic_description": "PHARMACEUTICAL PREPARATIONS"
+ },
+ "VST": {
+  "sic_code": "4911",
+  "sic_description": "ELECTRIC SERVICES"
+ },
+ "VTR": {
+  "sic_code": "6798",
+  "sic_description": "REAL ESTATE INVESTMENT TRUSTS"
+ },
+ "VTRS": {
+  "sic_code": "2834",
+  "sic_description": "PHARMACEUTICAL PREPARATIONS"
+ },
+ "VZ": {
+  "sic_code": "4813",
+  "sic_description": "TELEPHONE COMMUNICATIONS (NO RADIOTELEPHONE)"
+ },
+ "WAB": {
+  "sic_code": "3743",
+  "sic_description": "RAILROAD EQUIPMENT"
+ },
+ "WAMUQ": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "WAT": {
+  "sic_code": "3826",
+  "sic_description": "LABORATORY ANALYTICAL INSTRUMENTS"
+ },
+ "WB": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "WBA": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "WBD": {
+  "sic_code": "4841",
+  "sic_description": "CABLE & OTHER PAY TELEVISION SERVICES"
+ },
+ "WCG": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "WDAY": {
+  "sic_code": "7374",
+  "sic_description": "SERVICES-COMPUTER PROCESSING & DATA PREPARATION"
+ },
+ "WDC": {
+  "sic_code": "3572",
+  "sic_description": "COMPUTER STORAGE DEVICES"
+ },
+ "WEC": {
+  "sic_code": "4931",
+  "sic_description": "ELECTRIC & OTHER SERVICES COMBINED"
+ },
+ "WELL": {
+  "sic_code": "6798",
+  "sic_description": "REAL ESTATE INVESTMENT TRUSTS"
+ },
+ "WEN": {
+  "sic_code": "5810",
+  "sic_description": "RETAIL-EATING & DRINKING PLACES"
+ },
+ "WFC": {
+  "sic_code": "6021",
+  "sic_description": "NATIONAL COMMERCIAL BANKS"
+ },
+ "WFM": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "WFRD": {
+  "sic_code": "3533",
+  "sic_description": "OIL & GAS FIELD MACHINERY & EQUIPMENT"
+ },
+ "WHR": {
+  "sic_code": "3630",
+  "sic_description": "HOUSEHOLD APPLIANCES"
+ },
+ "WIN": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "WM": {
+  "sic_code": "4953",
+  "sic_description": "REFUSE SYSTEMS"
+ },
+ "WMB": {
+  "sic_code": "4922",
+  "sic_description": "NATURAL GAS TRANSMISSION"
+ },
+ "WMT": {
+  "sic_code": "5331",
+  "sic_description": "RETAIL-VARIETY STORES"
+ },
+ "WPX": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "WRB": {
+  "sic_code": "6331",
+  "sic_description": "FIRE, MARINE & CASUALTY INSURANCE"
+ },
+ "WRK": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "WSM": {
+  "sic_code": "5700",
+  "sic_description": "RETAIL-HOME FURNITURE, FURNISHINGS & EQUIPMENT STORES"
+ },
+ "WST": {
+  "sic_code": "3841",
+  "sic_description": "SURGICAL & MEDICAL INSTRUMENTS & APPARATUS"
+ },
+ "WTW": {
+  "sic_code": "6411",
+  "sic_description": "INSURANCE AGENTS, BROKERS & SERVICE"
+ },
+ "WU": {
+  "sic_code": "7389",
+  "sic_description": "SERVICES-BUSINESS SERVICES, NEC"
+ },
+ "WWY": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "WY": {
+  "sic_code": "6798",
+  "sic_description": "REAL ESTATE INVESTMENT TRUSTS"
+ },
+ "WYE": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "WYNN": {
+  "sic_code": "7011",
+  "sic_description": "HOTELS & MOTELS"
+ },
+ "X": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "XEC": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "XEL": {
+  "sic_code": "4931",
+  "sic_description": "ELECTRIC & OTHER SERVICES COMBINED"
+ },
+ "XL": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "XLNX": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "XOM": {
+  "sic_code": "2911",
+  "sic_description": "PETROLEUM REFINING"
+ },
+ "XRAY": {
+  "sic_code": "3843",
+  "sic_description": "DENTAL EQUIPMENT & SUPPLIES"
+ },
+ "XRX": {
+  "sic_code": "3577",
+  "sic_description": "COMPUTER PERIPHERAL EQUIPMENT, NEC"
+ },
+ "XTO": {
+  "sic_code": null,
+  "sic_description": null
+ },
+ "XYL": {
+  "sic_code": "3561",
+  "sic_description": "PUMPS & PUMPING EQUIPMENT"
+ },
+ "XYZ": {
+  "sic_code": "7372",
+  "sic_description": "SERVICES-PREPACKAGED SOFTWARE"
+ },
+ "YUM": {
+  "sic_code": "5812",
+  "sic_description": "RETAIL-EATING PLACES"
+ },
+ "ZBH": {
+  "sic_code": "3842",
+  "sic_description": "ORTHOPEDIC, PROSTHETIC & SURGICAL APPLIANCES & SUPPLIES"
+ },
+ "ZBRA": {
+  "sic_code": "3560",
+  "sic_description": "GENERAL INDUSTRIAL MACHINERY & EQUIPMENT"
+ },
+ "ZION": {
+  "sic_code": "6021",
+  "sic_description": "NATIONAL COMMERCIAL BANKS"
+ },
+ "ZTS": {
+  "sic_code": "2834",
+  "sic_description": "PHARMACEUTICAL PREPARATIONS"
+ }
+}
