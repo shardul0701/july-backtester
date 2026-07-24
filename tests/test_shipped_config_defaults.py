@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-import importlib
-import sys
-from pathlib import Path
+import config
 
 
 def test_shipped_price_adjustment_defaults_to_total_return() -> None:
-    root = Path(__file__).resolve().parents[1]
-    sys.path.insert(0, str(root))
-    if "config" in sys.modules:
-        del sys.modules["config"]
-    config = importlib.import_module("config")
+    # Reads the already-imported module rather than reloading it. Deleting
+    # config from sys.modules and re-importing swaps in a fresh module object
+    # mid-session, which desyncs modules that did `from config import CONFIG`
+    # and breaks later tests that patch config.CONFIG (see #220 CI failure).
     assert config.CONFIG["price_adjustment"] == "total_return"
