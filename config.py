@@ -43,7 +43,9 @@ CONFIG = {
     # portfolio.  role="benchmark" → buy-and-hold return column in summary.
     # role="dependency" → available to strategies (spy_df, vix_df).
     # role="both" → benchmark + dependency.
-    "price_adjustment": "none",
+    # Use split/dividend-adjusted prices by default. "none" returns raw bars and
+    # creates phantom jump trades across splits (e.g. AMZN 20-for-1).
+    "price_adjustment": "total_return",
     "benchmark_symbol": "SPY",
     "comparison_tickers": [
         {"symbol": "SPY",   "role": "both"},
