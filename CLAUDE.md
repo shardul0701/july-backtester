@@ -176,12 +176,24 @@ output/
 
 ## Do Not Touch
 - `helpers/indicators.py` strategy **logic** (all working correctly) — docstring additions and documentation improvements are permitted provided no signal logic, parameter handling, imports, or formatting is changed
-- `helpers/simulations.py` and `helpers/portfolio_simulations.py` simulation engines
+- `helpers/simulations.py` and `helpers/portfolio_simulations.py` simulation engines — **the execution core was deliberately refactored for futures support (issue #229): every cost/sizing/accounting site now routes through the instrument-metadata layer (`helpers/instruments.py`). The equity path is protected byte-for-byte by the golden-master suite (`tests/test_engine_characterization.py`) — any change here MUST keep that suite green.**
 - `helpers/monte_carlo.py`
 - `tickers_to_scan/` JSON files
 - The multiprocessing architecture (`init_worker`, `run_single_simulation`, `Pool`)
 
 > **`helpers/summary.py`** — can be touched; actively maintained. `save_only_filtered_trades` now correctly filters by the display criteria captured in Step 2 of `generate_per_portfolio_summary` (see Known Issues Fixed below).
+
+## Futures Support / Instrument Metadata (issue #229)
+
+The engine is instrument-aware: **`helpers/instruments.py`** resolves a per-symbol `Instrument` (`resolve_instrument(symbol, config)`) carrying `point_value` ($/point), `tick_size`, `margin_mode`, `commission_model`/value, `slippage_model`/value, `integer_units`, `borrow_applies`, `calendar`. **Equities are the default and reproduce the pre-#229 arithmetic byte-for-byte** (point_value=1, `cash_full` margin, per-share commission, %-slippage). Futures opt in via a contract-month ticker (e.g. `ESM6`) or `config["instruments"]["overrides"]`.
+
+- **Cost/accounting helpers** in `instruments.py` (`commission`, `apply_slippage`, `round_units`, `market_value`, `margin_required`, `unrealized_pnl`, `borrow_cost_per_bar`, `stop_level`, `atr_stop_level`, `atr_stop_distance_pct`) replace the formerly hard-coded sites in `portfolio_simulations.py`.
+- **Futures execution:** margin accounting (entry reserves initial margin, not full notional; equity = cash + unrealized P&L; `reserved_margin` tracks buying power), integer contracts, `$/point` P&L, point-capped stop `{"type":"points","value":N}`, no borrow on futures shorts.
+- **Scaled exits:** a fractional exit signal `-1 < s < 0` scales OUT `abs(s)` of the position; full exit remains `s <= -1`.
+- **Sub-bar resolution (opt-in):** `config["intrabar_resolution"]=True` + `intrabar_data` passed to `run_portfolio_simulation` refines stop fills via `helpers/intrabar.py` (gap-through-stop fills at the sub-bar open). Off by default → unchanged.
+- **Data path:** `services/futures_service.py` (Polygon dedicated `/futures/v1/aggs`), plus CSV/Parquet for pre-built continuous series; `services/__init__.py` dispatches futures tickers to the futures endpoint. `helpers/continuous_contract.py` builds back-adjusted continuous series (panama/ratio + volume-roll). `helpers/data_quality.py` missing-bar check is calendar-aware (skipped for `CME_ETH`).
+- **Config:** SECTION 27 `instruments` (asset-class defaults, per-root point-value/tick tables, per-symbol overrides) and SECTION 28 `intrabar_resolution`.
+- **Regression guard:** `tests/test_engine_characterization.py` (golden master) + `test_instruments.py`, `test_futures_engine.py`, `test_futures_service.py`, `test_continuous_contract.py`, `test_scaled_exits.py`, `test_intrabar.py`, `test_data_quality_calendar.py`.
 
 ## Data Providers
 
