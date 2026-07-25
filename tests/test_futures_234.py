@@ -104,6 +104,15 @@ class TestTrailingAtrHelper:
         _update_trailing_atr_stop(pos, df, d, {"trail_mult": 0.5, "floor": "breakeven"})
         assert pos["stop_loss_level"] == 101.5    # never moves down
 
+    def test_numeric_floor_clamps(self):
+        # A numeric floor (not "breakeven") clamps the trail candidate to that price.
+        # candidate = 100.4 - 0.5*2 = 99.4 ; floor 99.8 -> clamped up to 99.8.
+        df, d = self._bar(high=103, close=100.4)
+        pos = {"entry_price": 100.0, "trail_armed": False, "trail_target": 102.0,
+               "atr_locked": 2.0, "stop_loss_level": 98.0}
+        _update_trailing_atr_stop(pos, df, d, {"trail_mult": 0.5, "floor": 99.8})
+        assert pos["stop_loss_level"] == pytest.approx(99.8)
+
 
 class TestTrailingAtrEngine:
     def test_trailing_exit_reason_and_target_derivation(self):
