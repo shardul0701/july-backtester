@@ -659,7 +659,10 @@ def main():
         if CONFIG.get("data_quality_checks", True):
             from helpers.data_quality import quality_report
             logger.info(f"  -> Running data quality checks on {len(symbols)} symbols...")
-            quality_df = quality_report(symbols, portfolio_data, CONFIG.get("timeframe", "D"))
+            # config is passed so futures symbols resolve their calendar (CME_ETH)
+            # and skip the NYSE missing-bar estimate (see helpers/data_quality.py).
+            quality_df = quality_report(symbols, portfolio_data, CONFIG.get("timeframe", "D"),
+                                        config=CONFIG)
 
             # Display quality report
             threshold = CONFIG.get("data_quality_threshold", 80)

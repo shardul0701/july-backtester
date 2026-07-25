@@ -5,8 +5,24 @@ import numpy as np
 from config import CONFIG
 from .simulations import calculate_advanced_metrics
 from helpers.position_sizing import calculate_position_size, check_portfolio_heat
+from helpers import instruments as _inst
+from helpers import intrabar as _intrabar
 
-def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocation_pct, spy_df, vix_df, tnx_df, stop_config, size_mults=None, delisting_dates=None):
+
+def _equity_contribution(inst, pos, close, side="long"):
+    """A position's contribution to account equity, honouring its margin mode.
+
+    - ``cash_full`` (equities): mark-to-market value — cash was reduced by the full
+      notional at entry, so the position contributes its market value.
+    - ``initial_margin`` (futures): unrealized P&L — only margin was reserved (not
+      spent), so the position contributes its open profit/loss on top of cash.
+    """
+    if inst.margin_mode == _inst.INITIAL_MARGIN:
+        return _inst.unrealized_pnl(inst, pos['shares'], pos['entry_price'], close, side=side)
+    return _inst.market_value(inst, pos['shares'], close)
+
+
+def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocation_pct, spy_df, vix_df, tnx_df, stop_config, size_mults=None, delisting_dates=None, intrabar_data=None):
     """
     Runs a portfolio simulation with integrated stop-loss handling and logs
     a rich set of features for each trade for future machine learning analysis.
@@ -22,6 +38,9 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
 
     execution_time = CONFIG.get("execution_time", "open").lower()
     htb_rate_annual = CONFIG.get("htb_rate_annual", 0.0)
+    # Sub-bar resolution: opt-in and requires finer-resolution data to be supplied.
+    # Off / no data -> stop fills behave exactly as before (no-op).
+    _intrabar_on = bool(CONFIG.get("intrabar_resolution", False)) and intrabar_data is not None
 
     # Dynamic HTB rate compounding based on timeframe (fixes issue #55)
     bars_per_year = get_bars_per_year(CONFIG)
@@ -29,7 +48,13 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
 
     short_positions: dict = {}
 
+    # Resolve per-symbol instrument metadata once. For equities the resolved
+    # instrument reproduces the engine's prior arithmetic byte-for-byte (see
+    # helpers/instruments.py); futures branch on margin_mode / integer_units.
+    instruments = {sym: _inst.resolve_instrument(sym, CONFIG) for sym in portfolio_data}
+
     cash = initial_capital
+    reserved_margin = 0.0  # initial margin reserved by open futures positions (buying-power)
     positions = {}
     all_dates = sorted(list(set(date for df in portfolio_data.values() for date in df.index)))
     portfolio_timeline = pd.Series(index=all_dates, dtype=float)
@@ -54,19 +79,20 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
             if date in portfolio_data[symbol].index:
                 close_price = portfolio_data[symbol].loc[date]['Close']
                 if pd.notna(close_price):
-                    current_market_value += pos['shares'] * close_price
+                    current_market_value += _equity_contribution(instruments[symbol], pos, close_price, side="long")
             else:
                 # If date doesn't exist, use the last known price for a more stable equity curve
                 # This is an edge case, but good practice.
                 last_valid_date = portfolio_data[symbol].index[portfolio_data[symbol].index < date][-1]
                 close_price = portfolio_data[symbol].loc[last_valid_date]['Close']
-                current_market_value += pos['shares'] * close_price
+                current_market_value += _equity_contribution(instruments[symbol], pos, close_price, side="long")
 
         for symbol, spos in short_positions.items():
             if date in portfolio_data[symbol].index:
                 cur = portfolio_data[symbol].loc[date].get('Close')
                 if pd.notna(cur):
-                    current_market_value += (spos['shares'] * spos['entry_price']) - (spos['shares'] * cur)
+                    current_market_value += _inst.unrealized_pnl(
+                        instruments[symbol], spos['shares'], spos['entry_price'], cur, side="short")
 
         total_equity = cash + current_market_value
         portfolio_timeline[date] = total_equity
@@ -105,23 +131,86 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     raw_exit_price = pos['stop_loss_level']
                     exit_date = date
                     exit_reason = f"Stop Loss ({stop_config['type']})"
+                    # Sub-bar resolution: refine the fill from finer-resolution bars
+                    # when enabled + available — a gap through the stop fills at the
+                    # (worse) sub-bar open rather than optimistically at the stop.
+                    if _intrabar_on and symbol in intrabar_data:
+                        _day_bars = _intrabar.session_bars(intrabar_data[symbol], date)
+                        _fill, _ = _intrabar.resolve_stop_fill(_day_bars, pos['stop_loss_level'], side="long")
+                        if _fill is not None:
+                            raw_exit_price = _fill
 
-            # --- STRATEGY-BASED EXIT ---
+            # --- STRATEGY-BASED EXIT (full <= -1) or PARTIAL SCALE-OUT (-1 < s < 0) ---
+            partial_fraction = 0.0
             if pd.isna(raw_exit_price):
                 signal_date_to_check = prev_trading_dates[symbol].get(date) if execution_time == 'open' else date
                 if pd.notna(signal_date_to_check) and signal_date_to_check in signals[symbol].index:
                     signal_value = signals[symbol].loc[signal_date_to_check]
-                    if signal_value < 0:
+                    if signal_value <= -1:
                         raw_exit_price = portfolio_data[symbol].loc[date].get('Open' if execution_time == 'open' else 'Close')
                         exit_date = date
-            
+                    elif signal_value < 0:
+                        # Fractional exit signal: scale OUT this fraction of the position,
+                        # keeping the remainder open. Full exit remains signal <= -1.
+                        partial_fraction = abs(float(signal_value))
+
+            # --- PARTIAL SCALE-OUT EXECUTION (position stays open) ---
+            if pd.isna(raw_exit_price) and partial_fraction > 0:
+                _pinst = instruments[symbol]
+                _praw = portfolio_data[symbol].loc[date].get('Open' if execution_time == 'open' else 'Close')
+                _pexit_shares = pos['shares'] * partial_fraction
+                if _pinst.integer_units:
+                    _pexit_shares = _inst.round_units(_pinst, _pexit_shares)
+                _min_units = 1.0 if _pinst.integer_units else 1e-9
+                if pd.notna(_praw) and _pexit_shares >= _min_units and _pexit_shares < pos['shares']:
+                    _pexit = _inst.apply_slippage(_pinst, _praw, "sell")
+                    _pcomm = _inst.commission(_pinst, _pexit_shares)
+                    if _pinst.margin_mode == _inst.INITIAL_MARGIN:
+                        _pgross = (_pexit - pos['entry_price']) * _pexit_shares * _pinst.point_value
+                        cash += _pgross - _pcomm
+                        _prel = pos.get('margin', 0.0) * (_pexit_shares / pos['shares'])
+                        reserved_margin -= _prel
+                        pos['margin'] = pos.get('margin', 0.0) - _prel
+                        _pnet = _pgross - (2 * _pcomm)
+                    else:
+                        cash += (_pexit_shares * _pexit) - _pcomm
+                        _pnet = ((_pexit - pos['entry_price']) * _pexit_shares) - (2 * _pcomm)
+                    cumulative_profit += _pnet
+                    trade_counter += 1
+                    _ptdf = portfolio_data[symbol].loc[pos['entry_date']:date]
+                    _pmae = (_ptdf['Low'].min() - pos['entry_price']) / pos['entry_price'] if not _ptdf.empty else 0.0
+                    _pmfe = (_ptdf['High'].max() - pos['entry_price']) / pos['entry_price'] if not _ptdf.empty else 0.0
+                    _pisl = pos.get('initial_stop_loss_level')
+                    if pd.notna(_pisl) and _pisl > 0 and _pisl < pos['entry_price']:
+                        _pirps = pos['entry_price'] - _pisl
+                    else:
+                        _pirps = pos['entry_price'] * 0.01
+                    _prm = (_pnet / (_pirps * _pexit_shares * _pinst.point_value)
+                            if _pirps > 0 and _pexit_shares > 0 else None)
+                    _pval = _inst.notional(_pinst, _pexit_shares, pos['entry_price'])
+                    _plog = {
+                        'Symbol': symbol, 'Trade': f"Long {trade_counter} (partial)",
+                        'EntryDate': pos['entry_date'].isoformat(), 'EntryPrice': pos['entry_price'],
+                        'ExitDate': date.isoformat(), 'ExitPrice': _pexit,
+                        'Profit': _pnet, 'ProfitPct': _pnet / _pval if _pval > 0 else 0,
+                        'Shares': _pexit_shares, 'PosSizeMult': pos.get('size_mult', 1.0),
+                        'is_win': 1 if _pnet > 0 else 0,
+                        'HoldDuration': (date - pos['entry_date']).days,
+                        'MAE_pct': _pmae, 'MFE_pct': _pmfe, 'ExitReason': 'Partial Scale-Out',
+                        'InitialRisk': _pirps, 'RMultiple': _prm, 'VolumeImpact_bps': 0.0,
+                    }
+                    _plog.update(pos.get('features', {}))
+                    trade_log.append(_plog)
+                    pos['shares'] -= _pexit_shares
+
             # --- TRAIL THE STOP AND CONTINUE IF NOT EXITING ---
             if pd.isna(raw_exit_price):
                 if stop_config.get("type") == "atr" and pd.notna(pos.get('stop_loss_level')):
                     current_close = portfolio_data[symbol].loc[date].get('Close')
                     current_atr = portfolio_data[symbol].loc[date].get('ATR_14')
                     if pd.notna(current_close) and pd.notna(current_atr):
-                        new_stop_level = current_close - (current_atr * stop_config.get("multiplier", 3.0))
+                        new_stop_level = _inst.atr_stop_level(
+                            current_close, current_atr, stop_config.get("multiplier", 3.0), side="long")
                         pos['stop_loss_level'] = max(pos['stop_loss_level'], new_stop_level)
                 continue
 
@@ -135,7 +224,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                 mfe_pct = (highest_price - pos['entry_price']) / pos['entry_price']
                 
             trade_counter += 1
-            exit_price = raw_exit_price * (1 - CONFIG['slippage_pct'])
+            exit_price = _inst.apply_slippage(instruments[symbol], raw_exit_price, "sell")
 
             # --- VOLUME-BASED MARKET IMPACT (exit) ---
             exit_impact_bps = 0.0
@@ -148,12 +237,20 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     exit_price = exit_price * (1 - _impact)
                     exit_impact_bps = round(_impact * 10000, 1)
 
-            commission = pos['shares'] * CONFIG['commission_per_share']
-            cash += (pos['shares'] * exit_price) - commission
-            net_pnl = ((exit_price - pos['entry_price']) * pos['shares']) - (2 * commission)
+            _exit_inst = instruments[symbol]
+            commission = _inst.commission(_exit_inst, pos['shares'])
+            if _exit_inst.margin_mode == _inst.INITIAL_MARGIN:
+                # Futures: realise P&L (via $/point) into cash and release reserved margin.
+                gross_pnl = (exit_price - pos['entry_price']) * pos['shares'] * _exit_inst.point_value
+                cash += gross_pnl - commission
+                reserved_margin -= pos.get('margin', 0.0)
+                net_pnl = gross_pnl - (2 * commission)
+            else:
+                cash += (pos['shares'] * exit_price) - commission
+                net_pnl = ((exit_price - pos['entry_price']) * pos['shares']) - (2 * commission)
             cumulative_profit += net_pnl
             duration = (exit_date - pos['entry_date']).days
-            position_value = pos['shares'] * pos['entry_price']
+            position_value = _inst.notional(_exit_inst, pos['shares'], pos['entry_price'])
 
             # --- Initial Risk and R-Multiple ---
             _initial_sl = pos.get('initial_stop_loss_level')
@@ -161,7 +258,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                 _initial_risk_per_share = pos['entry_price'] - _initial_sl
             else:
                 _initial_risk_per_share = pos['entry_price'] * 0.01
-            _r_multiple = (net_pnl / (_initial_risk_per_share * pos['shares'])
+            _r_multiple = (net_pnl / (_initial_risk_per_share * pos['shares'] * _exit_inst.point_value)
                            if _initial_risk_per_share > 0 and pos['shares'] > 0 else None)
 
             log_entry = {
@@ -187,8 +284,8 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
 
         # --- BORROW COST DEBIT (shorts held overnight) ---
         for symbol, spos in list(short_positions.items()):
-            if htb_rate_per_bar > 0:
-                cost = spos['notional'] * htb_rate_per_bar
+            cost = _inst.borrow_cost_per_bar(instruments[symbol], spos['notional'], htb_rate_per_bar)
+            if cost:
                 cash -= cost
                 spos['total_borrow_cost'] = spos.get('total_borrow_cost', 0.0) + cost
 
@@ -212,10 +309,14 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                 cover = portfolio_data[symbol].loc[date].get(cover_field)
                 if pd.isna(cover):
                     continue
-                cover_slip = cover * (1 + CONFIG['slippage_pct'])
-                commission = spos['shares'] * CONFIG['commission_per_share']
-                net_pnl = (spos['shares'] * spos['entry_price']) - (spos['shares'] * cover_slip) - (2 * commission) - spos.get('total_borrow_cost', 0.0)
-                cash += spos['shares'] * (spos['entry_price'] - cover_slip) - commission
+                inst_c = instruments[symbol]
+                cover_slip = _inst.apply_slippage(inst_c, cover, "buy")
+                commission = _inst.commission(inst_c, spos['shares'])
+                _gross = (spos['shares'] * (spos['entry_price'] - cover_slip)) * inst_c.point_value
+                net_pnl = _gross - (2 * commission) - spos.get('total_borrow_cost', 0.0)
+                cash += _gross - commission
+                if inst_c.margin_mode == _inst.INITIAL_MARGIN:
+                    reserved_margin -= spos.get('margin', 0.0)
                 trade_counter += 1
                 # MAE/MFE for shorts: favorable = price drops, adverse = price rises
                 short_trade_df = portfolio_data[symbol].loc[spos['entry_date']:date]
@@ -274,16 +375,39 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                 ep = df.loc[date].get('Open' if execution_time == 'open' else 'Close')
                 if pd.isna(ep) or ep <= 0:
                     continue
-                alloc = min(total_equity * allocation_pct, cash)
-                if alloc <= 0:
-                    continue
-                shares = alloc / ep
-                commission = shares * CONFIG['commission_per_share']
-                cash -= commission   # proceeds and collateral cancel; only commission is a real cash cost
-                short_positions[symbol] = {
-                    'entry_date': date, 'entry_price': ep,
-                    'shares': shares, 'notional': shares * ep, 'total_borrow_cost': 0.0,
-                }
+                inst_se = instruments[symbol]
+                if inst_se.margin_mode == _inst.INITIAL_MARGIN:
+                    # Futures short: integer contracts, reserve initial margin, pay commission.
+                    _free = cash - reserved_margin
+                    alloc = min(total_equity * allocation_pct, _free)
+                    if alloc <= 0:
+                        continue
+                    shares = _inst.round_units(inst_se, alloc / (ep * inst_se.point_value))
+                    if shares < 1:
+                        continue
+                    _s_margin = _inst.margin_required(inst_se, shares, ep)
+                    commission = _inst.commission(inst_se, shares)
+                    if _s_margin + commission > cash - reserved_margin:
+                        continue
+                    reserved_margin += _s_margin
+                    cash -= commission
+                    short_positions[symbol] = {
+                        'entry_date': date, 'entry_price': ep,
+                        'shares': shares, 'notional': _inst.notional(inst_se, shares, ep),
+                        'total_borrow_cost': 0.0, 'margin': _s_margin,
+                    }
+                else:
+                    alloc = min(total_equity * allocation_pct, cash)
+                    if alloc <= 0:
+                        continue
+                    shares = alloc / ep
+                    commission = _inst.commission(inst_se, shares)
+                    cash -= commission   # proceeds and collateral cancel; only commission is a real cash cost
+                    short_positions[symbol] = {
+                        'entry_date': date, 'entry_price': ep,
+                        'shares': shares, 'notional': shares * ep, 'total_borrow_cost': 0.0,
+                        'margin': 0.0,
+                    }
 
         # --- POSITION ENTRY LOGIC ---
         if _priority == "signal_date":
@@ -321,7 +445,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
 
             if pd.isna(raw_entry_price): continue
 
-            entry_price = raw_entry_price * (1 + CONFIG['slippage_pct'])
+            entry_price = _inst.apply_slippage(instruments[symbol], raw_entry_price, "buy")
 
             if entry_price > 0 and cash > 0:
                 # --- PER-SIGNAL SIZE MULTIPLIER ---
@@ -350,9 +474,8 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                             _atr = df.loc[_day_before, 'ATR_14']
                             _close = df.loc[_day_before, 'Close']
                             if pd.notna(_atr) and pd.notna(_close) and _close > 0:
-                                sizing_kwargs["stop_distance_pct"] = (
-                                    _atr * stop_config.get("multiplier", 3.0)
-                                ) / _close
+                                sizing_kwargs["stop_distance_pct"] = _inst.atr_stop_distance_pct(
+                                    _atr, stop_config.get("multiplier", 3.0), _close)
 
                 # For kelly: compute rolling stats from completed trades so sizing
                 # actually adapts to the strategy's live performance.
@@ -381,21 +504,28 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                 # to the sized position before the heat check.
                 shares = shares * _size_mult
 
+                inst = instruments[symbol]
+                # Futures size in contracts: the sizing methods return a dollar-notional
+                # based size; dividing out $/point converts it to contracts (pv=1 for equities).
+                if inst.point_value != 1.0:
+                    shares = shares / inst.point_value
+
                 # --- PORTFOLIO HEAT CHECK ---
                 # Compute the dollar risk this position adds. For methods with a
                 # known stop distance we use that; otherwise fall back to the
                 # target_risk_per_trade parameter (which is what vol/risk parity
-                # sized against anyway).
+                # sized against anyway). notional() applies $/point for futures.
                 _stop_dist = sizing_kwargs.get("stop_distance_pct") or CONFIG.get("target_risk_per_trade", 0.02)
-                new_position_risk = shares * entry_price * _stop_dist
+                new_position_risk = _inst.notional(inst, shares, entry_price) * _stop_dist
                 max_heat = CONFIG.get("max_portfolio_heat", 1.0)
                 if not check_portfolio_heat(positions, new_position_risk, total_equity, max_heat):
                     continue
 
-                # Cash constraint
-                capital_needed = shares * entry_price
-                if capital_needed > cash:
-                    shares = cash / entry_price
+                # Cash constraint (equity full-notional pre-clamp; futures clamp on margin below)
+                if inst.margin_mode != _inst.INITIAL_MARGIN:
+                    capital_needed = _inst.margin_required(inst, shares, entry_price)
+                    if capital_needed > cash:
+                        shares = cash / entry_price
 
                 # --- VOLUME-BASED LIQUIDITY FILTER ---
                 max_pct_adv = CONFIG.get('max_pct_adv') or 0
@@ -418,21 +548,35 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         entry_price = entry_price * (1 + impact_additional)
                         entry_impact_bps = round(impact_additional * 10000, 1)
 
-                # Calculate the total cost including commission for this ideal share size
-                commission_cost = shares * CONFIG['commission_per_share']
-                total_cost = (shares * entry_price) + commission_cost
+                # Integer contracts for futures; fractional shares pass through for equities.
+                shares = _inst.round_units(inst, shares)
 
-                # If the total cost is more than our available cash, we must reduce the share size.
-                # This can happen if cash is low and commission pushes us over the limit.
-                if total_cost > cash:
-                    # Robustly calculate the absolute maximum number of shares we can possibly afford
-                    shares = cash / (entry_price + CONFIG['commission_per_share'])
-                    if shares <= 0: continue # Cannot afford even a fraction of a share
-                    # Recalculate final total cost with the affordable share size
-                    total_cost = (shares * entry_price) + (shares * CONFIG['commission_per_share'])
+                # --- AFFORDABILITY (margin-mode aware) ---
+                commission_cost = _inst.commission(inst, shares)
+                if inst.margin_mode == _inst.INITIAL_MARGIN:
+                    # Futures: reserve initial margin against free buying power; the only
+                    # cash outlay at entry is commission (margin is collateral, not spent).
+                    _margin = _inst.margin_required(inst, shares, entry_price)
+                    _free = cash - reserved_margin
+                    if _margin + commission_cost > _free:
+                        _per = _inst.margin_required(inst, 1, entry_price)
+                        shares = _inst.round_units(inst, (_free - commission_cost) / _per) if _per > 0 else 0.0
+                        commission_cost = _inst.commission(inst, shares)
+                        _margin = _inst.margin_required(inst, shares, entry_price)
+                    can_afford = shares >= 1 and (_margin + commission_cost) <= (cash - reserved_margin)
+                else:
+                    # Equity cash_full: full notional + commission debited from cash.
+                    total_cost = _inst.margin_required(inst, shares, entry_price) + commission_cost
+                    if total_cost > cash:
+                        # Robustly calculate the absolute maximum number of shares we can possibly afford
+                        shares = cash / (entry_price + CONFIG['commission_per_share'])
+                        if shares <= 0: continue  # Cannot afford even a fraction of a share
+                        # Recalculate final total cost with the affordable share size
+                        total_cost = (shares * entry_price) + (shares * CONFIG['commission_per_share'])
+                    can_afford = cash >= total_cost and shares > 0.001
 
                 # Final check: Ensure we can afford the trade and it's a meaningful size
-                if cash >= total_cost and shares > 0.001: 
+                if can_afford:
                     # --- CAPTURE FEATURES AT ENTRY ---
                     features = {}
                     try:
@@ -481,9 +625,10 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     # ---
                     # --- SET INITIAL STOP LOSS ONCE ENTRY PRICE IS KNOWN ---
                     stop_loss_level = np.nan
-                    if stop_config.get("type") == 'percentage':
-                        stop_loss_level = entry_price * (1.0 - stop_config.get("value", 0.05))
-                    
+                    if stop_config.get("type") in ('percentage', 'points'):
+                        stop_loss_level = _inst.stop_level(
+                            instruments[symbol], entry_price, stop_config, side="long")
+
                     elif stop_config.get("type") == 'atr':
                         # Get the data from the day BEFORE entry (the signal day)
                         day_before_entry = prev_trading_dates[symbol].get(entry_exec_date)
@@ -496,7 +641,9 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                             if pd.notna(atr_before_entry) and pd.notna(close_before_entry):
                                 # The initial stop is based on the previous day's data,
                                 # matching the "Next Day Activation" spec.
-                                stop_loss_level = close_before_entry - (atr_before_entry * stop_config.get("multiplier", 3.0))
+                                stop_loss_level = _inst.atr_stop_level(
+                                    close_before_entry, atr_before_entry,
+                                    stop_config.get("multiplier", 3.0), side="long")
 
                     positions[symbol] = {
                         'shares': shares, 'entry_price': entry_price,
@@ -506,9 +653,14 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         'entry_impact_bps': entry_impact_bps,
                         'size_mult': _size_mult,
                         'risk': new_position_risk,
+                        'margin': _margin if inst.margin_mode == _inst.INITIAL_MARGIN else 0.0,
                     }
-                    cash -= total_cost
-    
+                    if inst.margin_mode == _inst.INITIAL_MARGIN:
+                        reserved_margin += _margin
+                        cash -= commission_cost
+                    else:
+                        cash -= total_cost
+
     exclude_open = CONFIG.get('exclude_open_positions', False)
 
     # --- SURVIVORSHIP BIAS: FORCE-CLOSE DELISTED OPEN POSITIONS ---
@@ -545,21 +697,31 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     if not prior.empty:
                         exit_price = float(prior.iloc[-1])
 
-            commission = pos['shares'] * CONFIG['commission_per_share']
-            net_pnl = ((exit_price - pos['entry_price']) * pos['shares']) - (2 * commission)
-            # Realised proceeds return to cash (delisting is a real liquidation).
-            cash += (pos['shares'] * exit_price) - commission
+            _dl_inst = instruments[symbol]
+            commission = _inst.commission(_dl_inst, pos['shares'])
+            if _dl_inst.margin_mode == _inst.INITIAL_MARGIN:
+                # Futures: realise P&L (via $/point) into cash and release reserved
+                # margin — cash never held the notional, so crediting proceeds would
+                # inject phantom capital.
+                gross_pnl = (exit_price - pos['entry_price']) * pos['shares'] * _dl_inst.point_value
+                cash += gross_pnl - commission
+                reserved_margin -= pos.get('margin', 0.0)
+                net_pnl = gross_pnl - (2 * commission)
+            else:
+                net_pnl = ((exit_price - pos['entry_price']) * pos['shares']) - (2 * commission)
+                # Realised proceeds return to cash (delisting is a real liquidation).
+                cash += (pos['shares'] * exit_price) - commission
 
             _initial_sl = pos.get('initial_stop_loss_level')
             if pd.notna(_initial_sl) and _initial_sl > 0 and _initial_sl < pos['entry_price']:
                 _initial_risk_per_share = pos['entry_price'] - _initial_sl
             else:
                 _initial_risk_per_share = pos['entry_price'] * 0.01
-            _r_multiple = (net_pnl / (_initial_risk_per_share * pos['shares'])
+            _r_multiple = (net_pnl / (_initial_risk_per_share * pos['shares'] * _dl_inst.point_value)
                            if _initial_risk_per_share > 0 and pos['shares'] > 0 else None)
 
             trade_counter += 1
-            _pos_value = pos['shares'] * pos['entry_price']
+            _pos_value = _inst.notional(_dl_inst, pos['shares'], pos['entry_price'])
             trade_log.append({
                 'Symbol': symbol, 'Trade': f"Long {trade_counter}",
                 'EntryDate': pos['entry_date'].isoformat(), 'EntryPrice': pos['entry_price'],
@@ -600,10 +762,11 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                 mae_pct = (trade_df['Low'].min() - pos['entry_price']) / pos['entry_price'] if not trade_df.empty else 0.0
                 mfe_pct = (trade_df['High'].max() - pos['entry_price']) / pos['entry_price'] if not trade_df.empty else 0.0
                 trade_counter += 1
-                exit_price = last_price * (1 - CONFIG['slippage_pct'])
-                commission = pos['shares'] * CONFIG['commission_per_share']
+                _mtm_inst = instruments[symbol]
+                exit_price = _inst.apply_slippage(_mtm_inst, last_price, "sell")
+                commission = _inst.commission(_mtm_inst, pos['shares'])
                 # We don't add to cash as this is a hypothetical close
-                net_pnl = ((exit_price - pos['entry_price']) * pos['shares']) - (2 * commission)
+                net_pnl = ((exit_price - pos['entry_price']) * pos['shares'] * _mtm_inst.point_value) - (2 * commission)
 
                 # --- Initial Risk and R-Multiple ---
                 _initial_sl = pos.get('initial_stop_loss_level')
@@ -611,10 +774,10 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     _initial_risk_per_share = pos['entry_price'] - _initial_sl
                 else:
                     _initial_risk_per_share = pos['entry_price'] * 0.01
-                _r_multiple = (net_pnl / (_initial_risk_per_share * pos['shares'])
+                _r_multiple = (net_pnl / (_initial_risk_per_share * pos['shares'] * _mtm_inst.point_value)
                                if _initial_risk_per_share > 0 and pos['shares'] > 0 else None)
 
-                log_entry = {'Symbol': symbol, 'Trade': f"Long {trade_counter}", 'EntryDate': pos['entry_date'].isoformat(), 'EntryPrice': pos['entry_price'], 'ExitDate': exit_date.isoformat(), 'ExitPrice': exit_price, 'Profit': net_pnl, 'ProfitPct': net_pnl / (pos['shares'] * pos['entry_price']), 'Shares': pos['shares'], 'is_win': 1 if net_pnl > 0 else 0, 'HoldDuration': (exit_date - pos['entry_date']).days, 'MAE_pct': mae_pct, 'MFE_pct': mfe_pct, 'ExitReason': exit_reason, 'InitialRisk': _initial_risk_per_share, 'RMultiple': _r_multiple, **pos.get('features', {})}
+                log_entry = {'Symbol': symbol, 'Trade': f"Long {trade_counter}", 'EntryDate': pos['entry_date'].isoformat(), 'EntryPrice': pos['entry_price'], 'ExitDate': exit_date.isoformat(), 'ExitPrice': exit_price, 'Profit': net_pnl, 'ProfitPct': net_pnl / _inst.notional(_mtm_inst, pos['shares'], pos['entry_price']), 'Shares': pos['shares'], 'is_win': 1 if net_pnl > 0 else 0, 'HoldDuration': (exit_date - pos['entry_date']).days, 'MAE_pct': mae_pct, 'MFE_pct': mfe_pct, 'ExitReason': exit_reason, 'InitialRisk': _initial_risk_per_share, 'RMultiple': _r_multiple, **pos.get('features', {})}
                 trade_log.append(log_entry)
     # --- END: MARK-TO-MARKET LOGIC ---
 
@@ -646,7 +809,11 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     mtm_close = sym_df.loc[prior_idx[-1], 'Close'] if len(prior_idx) else np.nan
                 if pd.isna(mtm_close):
                     continue
-                portfolio_timeline.loc[dt] += shares * (exit_price - mtm_close)
+                # x point_value: the daily loop's contribution was $/point-scaled
+                # (unrealized_pnl for futures, market value with pv=1 for equities),
+                # so the replacement delta must scale the same way.
+                portfolio_timeline.loc[dt] += (shares * (exit_price - mtm_close)
+                                               * instruments[symbol].point_value)
 
     duration_list = [t['HoldDuration'] for t in trade_log]
     if exclude_open:
