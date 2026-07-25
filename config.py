@@ -304,4 +304,7 @@ CONFIG = {
     # sub-bar open instead of optimistically at the stop level). Opt-in; requires
     # 1-min data availability, so it is off by default.
     "intrabar_resolution": False,
+    # Finer-resolution timeframe fetched per symbol when intrabar_resolution is on.
+    "intrabar_timeframe": "MIN",     # "MIN" | "H"
+    "intrabar_multiplier": 1,        # e.g. 5 for 5-minute sub-bars
 }
