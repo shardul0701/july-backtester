@@ -40,6 +40,38 @@ def session_bars(intraday_df: pd.DataFrame, day) -> pd.DataFrame | None:
     return day_bars if len(day_bars) else None
 
 
+def window_bars(intraday_df: pd.DataFrame, start, end) -> pd.DataFrame | None:
+    """Return the finer-resolution bars whose timestamp falls in ``[start, end)``.
+
+    Unlike :func:`session_bars` (which matches a whole calendar day), this resolves
+    the finer bars belonging to ONE coarse bar's span — needed for intraday coarse
+    bars (e.g. 45-minute), where a single coarse row covers a sub-day window rather
+    than the full session. For a daily coarse bar normalized to midnight the span
+    ``[date, next_date)`` is exactly that calendar day, so daily behaviour is
+    unchanged.
+
+    Tolerant of tz-aware / tz-naive mismatch between the coarse timestamps and the
+    finer index (compares in the finer index's own tz-naive frame). ``end`` may be
+    ``None``/``NaT`` (last coarse bar) — then all bars at/after ``start`` are taken.
+    Returns ``None`` when the window is empty.
+    """
+    if intraday_df is None or len(intraday_df) == 0:
+        return None
+    idx = intraday_df.index
+    idx_naive = idx.tz_localize(None) if getattr(idx, "tz", None) is not None else idx
+    s = pd.Timestamp(start)
+    if s.tzinfo is not None:
+        s = s.tz_localize(None)
+    mask = idx_naive >= s
+    if end is not None and not pd.isna(end):
+        e = pd.Timestamp(end)
+        if e.tzinfo is not None:
+            e = e.tz_localize(None)
+        mask = mask & (idx_naive < e)
+    win = intraday_df[mask]
+    return win if len(win) else None
+
+
 def resolve_stop_fill(intraday_bars: pd.DataFrame, stop_level: float, side: str = "long"):
     """First sub-bar that touches ``stop_level``; returns ``(fill_price, timestamp)``.
 
