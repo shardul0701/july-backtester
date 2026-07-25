@@ -224,6 +224,18 @@ class TestMarginCall:
         reasons = [t["ExitReason"] for t in res["trade_log"]]
         assert "Margin Call" not in reasons
 
+    def test_equity_never_margin_called_even_with_mm_set(self):
+        # The margin-call block is guarded by margin_mode == INITIAL_MARGIN. An equity
+        # (cash_full) symbol with maintenance_margin_pct set and a huge drawdown must
+        # NEVER margin-call — only futures do. Regression pin for the equity guard.
+        rows = [(100, 100, 100, 100, 5.0), (100, 100, 100, 100, 5.0),
+                (100, 100, 10, 10, 5.0)]  # -90% drop
+        df = _df(rows)
+        res = _run({"AAA": df}, {"AAA": _sig(df, {1: 1})},
+                   {"type": "none"}, cfg_over={"maintenance_margin_pct": 0.05})
+        reasons = [t["ExitReason"] for t in res["trade_log"]]
+        assert "Margin Call" not in reasons
+
 
 # ---------------------------------------------------------------------------
 # 4. Dynamic futures resolution
