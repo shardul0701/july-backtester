@@ -128,15 +128,69 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     exit_date = date
                     exit_reason = f"Stop Loss ({stop_config['type']})"
 
-            # --- STRATEGY-BASED EXIT ---
+            # --- STRATEGY-BASED EXIT (full <= -1) or PARTIAL SCALE-OUT (-1 < s < 0) ---
+            partial_fraction = 0.0
             if pd.isna(raw_exit_price):
                 signal_date_to_check = prev_trading_dates[symbol].get(date) if execution_time == 'open' else date
                 if pd.notna(signal_date_to_check) and signal_date_to_check in signals[symbol].index:
                     signal_value = signals[symbol].loc[signal_date_to_check]
-                    if signal_value < 0:
+                    if signal_value <= -1:
                         raw_exit_price = portfolio_data[symbol].loc[date].get('Open' if execution_time == 'open' else 'Close')
                         exit_date = date
-            
+                    elif signal_value < 0:
+                        # Fractional exit signal: scale OUT this fraction of the position,
+                        # keeping the remainder open. Full exit remains signal <= -1.
+                        partial_fraction = abs(float(signal_value))
+
+            # --- PARTIAL SCALE-OUT EXECUTION (position stays open) ---
+            if pd.isna(raw_exit_price) and partial_fraction > 0:
+                _pinst = instruments[symbol]
+                _praw = portfolio_data[symbol].loc[date].get('Open' if execution_time == 'open' else 'Close')
+                _pexit_shares = pos['shares'] * partial_fraction
+                if _pinst.integer_units:
+                    _pexit_shares = _inst.round_units(_pinst, _pexit_shares)
+                _min_units = 1.0 if _pinst.integer_units else 1e-9
+                if pd.notna(_praw) and _pexit_shares >= _min_units and _pexit_shares < pos['shares']:
+                    _pexit = _inst.apply_slippage(_pinst, _praw, "sell")
+                    _pcomm = _inst.commission(_pinst, _pexit_shares)
+                    if _pinst.margin_mode == _inst.INITIAL_MARGIN:
+                        _pgross = (_pexit - pos['entry_price']) * _pexit_shares * _pinst.point_value
+                        cash += _pgross - _pcomm
+                        _prel = pos.get('margin', 0.0) * (_pexit_shares / pos['shares'])
+                        reserved_margin -= _prel
+                        pos['margin'] = pos.get('margin', 0.0) - _prel
+                        _pnet = _pgross - (2 * _pcomm)
+                    else:
+                        cash += (_pexit_shares * _pexit) - _pcomm
+                        _pnet = ((_pexit - pos['entry_price']) * _pexit_shares) - (2 * _pcomm)
+                    cumulative_profit += _pnet
+                    trade_counter += 1
+                    _ptdf = portfolio_data[symbol].loc[pos['entry_date']:date]
+                    _pmae = (_ptdf['Low'].min() - pos['entry_price']) / pos['entry_price'] if not _ptdf.empty else 0.0
+                    _pmfe = (_ptdf['High'].max() - pos['entry_price']) / pos['entry_price'] if not _ptdf.empty else 0.0
+                    _pisl = pos.get('initial_stop_loss_level')
+                    if pd.notna(_pisl) and _pisl > 0 and _pisl < pos['entry_price']:
+                        _pirps = pos['entry_price'] - _pisl
+                    else:
+                        _pirps = pos['entry_price'] * 0.01
+                    _prm = (_pnet / (_pirps * _pexit_shares * _pinst.point_value)
+                            if _pirps > 0 and _pexit_shares > 0 else None)
+                    _pval = _inst.notional(_pinst, _pexit_shares, pos['entry_price'])
+                    _plog = {
+                        'Symbol': symbol, 'Trade': f"Long {trade_counter} (partial)",
+                        'EntryDate': pos['entry_date'].isoformat(), 'EntryPrice': pos['entry_price'],
+                        'ExitDate': date.isoformat(), 'ExitPrice': _pexit,
+                        'Profit': _pnet, 'ProfitPct': _pnet / _pval if _pval > 0 else 0,
+                        'Shares': _pexit_shares, 'PosSizeMult': pos.get('size_mult', 1.0),
+                        'is_win': 1 if _pnet > 0 else 0,
+                        'HoldDuration': (date - pos['entry_date']).days,
+                        'MAE_pct': _pmae, 'MFE_pct': _pmfe, 'ExitReason': 'Partial Scale-Out',
+                        'InitialRisk': _pirps, 'RMultiple': _prm, 'VolumeImpact_bps': 0.0,
+                    }
+                    _plog.update(pos.get('features', {}))
+                    trade_log.append(_plog)
+                    pos['shares'] -= _pexit_shares
+
             # --- TRAIL THE STOP AND CONTINUE IF NOT EXITING ---
             if pd.isna(raw_exit_price):
                 if stop_config.get("type") == "atr" and pd.notna(pos.get('stop_loss_level')):
