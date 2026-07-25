@@ -293,4 +293,13 @@ CONFIG = {
         # },
         "overrides": {},
     },
+
+    # ============================================================
+    # SECTION 28: SUB-BAR (INTRADAY) RESOLUTION
+    # ============================================================
+    # When True AND finer-resolution bars are supplied to the engine, stop fills are
+    # resolved against the intraday series (a gap through the stop fills at the worse
+    # sub-bar open instead of optimistically at the stop level). Opt-in; requires
+    # 1-min data availability, so it is off by default.
+    "intrabar_resolution": False,
 }

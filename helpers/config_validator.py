@@ -122,6 +122,8 @@ KNOWN_KEYS: set[str] = {
     "sp500_pit_path",
     # Instrument metadata (equities / futures)
     "instruments",
+    # Sub-bar (intraday) resolution
+    "intrabar_resolution",
     # SECTION 27: Deterministic Entry Queue
     "entry_priority",
     "entry_random_seed",

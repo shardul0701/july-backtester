@@ -6,6 +6,7 @@ from config import CONFIG
 from .simulations import calculate_advanced_metrics
 from helpers.position_sizing import calculate_position_size, check_portfolio_heat
 from helpers import instruments as _inst
+from helpers import intrabar as _intrabar
 
 
 def _equity_contribution(inst, pos, close, side="long"):
@@ -21,7 +22,7 @@ def _equity_contribution(inst, pos, close, side="long"):
     return _inst.market_value(inst, pos['shares'], close)
 
 
-def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocation_pct, spy_df, vix_df, tnx_df, stop_config, size_mults=None, delisting_dates=None):
+def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocation_pct, spy_df, vix_df, tnx_df, stop_config, size_mults=None, delisting_dates=None, intrabar_data=None):
     """
     Runs a portfolio simulation with integrated stop-loss handling and logs
     a rich set of features for each trade for future machine learning analysis.
@@ -37,6 +38,9 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
 
     execution_time = CONFIG.get("execution_time", "open").lower()
     htb_rate_annual = CONFIG.get("htb_rate_annual", 0.0)
+    # Sub-bar resolution: opt-in and requires finer-resolution data to be supplied.
+    # Off / no data -> stop fills behave exactly as before (no-op).
+    _intrabar_on = bool(CONFIG.get("intrabar_resolution", False)) and intrabar_data is not None
 
     # Dynamic HTB rate compounding based on timeframe (fixes issue #55)
     bars_per_year = get_bars_per_year(CONFIG)
@@ -127,6 +131,14 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     raw_exit_price = pos['stop_loss_level']
                     exit_date = date
                     exit_reason = f"Stop Loss ({stop_config['type']})"
+                    # Sub-bar resolution: refine the fill from finer-resolution bars
+                    # when enabled + available — a gap through the stop fills at the
+                    # (worse) sub-bar open rather than optimistically at the stop.
+                    if _intrabar_on and symbol in intrabar_data:
+                        _day_bars = _intrabar.session_bars(intrabar_data[symbol], date)
+                        _fill, _ = _intrabar.resolve_stop_fill(_day_bars, pos['stop_loss_level'], side="long")
+                        if _fill is not None:
+                            raw_exit_price = _fill
 
             # --- STRATEGY-BASED EXIT (full <= -1) or PARTIAL SCALE-OUT (-1 < s < 0) ---
             partial_fraction = 0.0
