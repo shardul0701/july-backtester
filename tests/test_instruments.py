@@ -105,9 +105,25 @@ class TestParseRoot:
     @pytest.mark.parametrize("ticker,root", [
         ("ESM6", "ES"), ("MNQZ26", "MNQ"), ("CLF7", "CL"),
         ("ES", "ES"), ("AAPL", "AAPL"), ("esm6", "ES"),
+        ("M2KZ6", "M2K"), ("M2KH25", "M2K"),  # digit-in-root product (Micro Russell)
     ])
     def test_parse_root(self, ticker, root):
         assert I.parse_root(ticker) == root
+
+    def test_m2k_contract_resolves_with_correct_point_value(self):
+        # Regression for the digit-in-root regex bug: M2K (Micro Russell 2000) must
+        # resolve to its real $/point (5.0), not silently fall back to 1.0.
+        inst = resolve_instrument("M2KZ6", _CFG)
+        assert inst.asset_class == I.FUTURE
+        assert inst.point_value == 5.0
+        assert inst.tick_size == 0.10
+
+    def test_m2k_override_uses_correct_point_value(self):
+        cfg = {**_CFG, "instruments": {
+            "default_asset_class": "equity",
+            "overrides": {"M2KZ6": {"asset_class": "future"}},
+        }}
+        assert resolve_instrument("M2KZ6", cfg).point_value == 5.0
 
 
 # ---------------------------------------------------------------------------

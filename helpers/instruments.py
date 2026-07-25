@@ -53,8 +53,10 @@ CME_ETH = "CME_ETH"
 
 # CME contract-month codes (Jan..Dec) — used to parse a root from e.g. "ESM6".
 _MONTH_CODES = "FGHJKMNQUVXZ"
-# Matches PRODUCT + MONTH_CODE + YEAR_DIGIT(s): "ESM6", "MNQZ26", "CLF7".
-_CONTRACT_RE = re.compile(rf"^([A-Z]{{1,3}})([{_MONTH_CODES}])(\d{{1,2}})$")
+# Matches PRODUCT + MONTH_CODE + YEAR_DIGIT(s): "ESM6", "MNQZ26", "CLF7", "M2KZ6".
+# The root group allows a digit after the first letter so products like M2K (Micro
+# Russell 2000) parse correctly; the regex still backtracks so "ESM6" -> root "ES".
+_CONTRACT_RE = re.compile(rf"^([A-Z][A-Z0-9]{{0,2}})([{_MONTH_CODES}])(\d{{1,2}})$")
 
 # $/point multipliers, seeded from SignalDeck's FUTURES_MULTIPLIERS map.
 # All values are overridable via config["instruments"]["point_values"].
