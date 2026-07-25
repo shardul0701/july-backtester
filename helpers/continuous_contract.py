@@ -180,6 +180,12 @@ def rolls_spanned(entry_date, exit_date, roll_dates) -> list:
             logger.warning("position %s held across %d roll(s): %s", sym, len(spanned), spanned)
 
     Returns the list of roll timestamps ``t`` with ``entry_date < t < exit_date``.
+
+    tz-safe: mixed tz-aware / tz-naive inputs are normalized to naive before
+    comparison (avoids the ``TypeError`` class seen in the VIX tz bug).
     """
-    lo, hi = pd.Timestamp(entry_date), pd.Timestamp(exit_date)
-    return [r for r in (pd.Timestamp(x) for x in roll_dates) if lo < r < hi]
+    def _naive(x):
+        t = pd.Timestamp(x)
+        return t.tz_localize(None) if t.tzinfo is not None else t
+    lo, hi = _naive(entry_date), _naive(exit_date)
+    return [_naive(x) for x in roll_dates if lo < _naive(x) < hi]

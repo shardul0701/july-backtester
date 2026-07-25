@@ -22,43 +22,71 @@ def _equity_contribution(inst, pos, close, side="long"):
     return _inst.market_value(inst, pos['shares'], close)
 
 
-def _update_trailing_atr_stop(pos, sym_df, date, stop_config):
-    """Trailing-ATR-with-breakeven-floor update for one long position (`trailing_atr`).
+def _update_trailing_atr_stop(pos, sym_df, date, stop_config, side="long"):
+    """Trailing-ATR-with-breakeven-floor update for one position (`trailing_atr`).
+
+    ``side="long"`` rides the running-max High and ratchets the stop UP (floored at
+    breakeven); ``side="short"`` rides the running-min Low and ratchets the stop DOWN
+    (capped at breakeven). Symmetric mechanic.
 
     Two-phase exit (Sleeve A mechanic):
       1. Pre-arm: the stop stays at its initial point-capped ATR level until the bar's
          High reaches the arm target (a reward:risk ratio off the capped stop, computed
          at entry).
-      2. Armed: ratchet a ``close - trail_mult * atr_locked`` trail (never loosening),
+      2. Armed: ratchet a ``high - trail_mult * atr_locked`` trail (never loosening),
          clamped to a ``floor`` — ``"breakeven"`` (literal entry, no offset) or a numeric
          price. The ATR is the value LOCKED at the breakout bar (never recomputed live).
     Next-bar-activation model: the level set this bar becomes active next bar.
+
+    The trail rides the running-max **High**, not the close (Sleeve A reference). Using
+    the current bar's High with the ``max(prev, candidate)`` ratchet is provably identical
+    to tracking a running peak explicitly: ``max_k(high[k] - c)`` telescopes into
+    ``running_extreme - c``.
     """
     atr_locked = pos.get('atr_locked')
     if atr_locked is None:
         return
     row = sym_df.loc[date]
-    high, close = row.get('High'), row.get('Close')
-
-    if not pos.get('trail_armed', False):
-        target = pos.get('trail_target')
-        if target is not None and pd.notna(high) and high >= target:
-            pos['trail_armed'] = True
-        else:
-            return  # not armed yet — leave the initial protective stop untouched
-
-    if pd.isna(close):
-        return
-    candidate = close - stop_config.get("trail_mult", 1.0) * atr_locked
-
+    trail_mult = stop_config.get("trail_mult", 1.0)
+    entry = pos['entry_price']
     floor = stop_config.get("floor")
-    if floor == "breakeven":
-        candidate = max(candidate, pos['entry_price'])
-    elif isinstance(floor, (int, float)):
-        candidate = max(candidate, float(floor))
 
-    prev = pos.get('stop_loss_level')
-    pos['stop_loss_level'] = candidate if pd.isna(prev) else max(prev, candidate)
+    if side == "long":
+        # ride the running-max High; ratchet the stop up, floored at breakeven/entry
+        extreme = row.get('High')
+        if not pos.get('trail_armed', False):
+            target = pos.get('trail_target')
+            if target is not None and pd.notna(extreme) and extreme >= target:
+                pos['trail_armed'] = True
+            else:
+                return
+        if pd.isna(extreme):
+            return
+        candidate = extreme - trail_mult * atr_locked
+        if floor == "breakeven":
+            candidate = max(candidate, entry)
+        elif isinstance(floor, (int, float)):
+            candidate = max(candidate, float(floor))
+        prev = pos.get('stop_loss_level')
+        pos['stop_loss_level'] = candidate if pd.isna(prev) else max(prev, candidate)
+    else:
+        # short: ride the running-min Low; ratchet the stop DOWN, capped at breakeven/entry
+        extreme = row.get('Low')
+        if not pos.get('trail_armed', False):
+            target = pos.get('trail_target')
+            if target is not None and pd.notna(extreme) and extreme <= target:
+                pos['trail_armed'] = True
+            else:
+                return
+        if pd.isna(extreme):
+            return
+        candidate = extreme + trail_mult * atr_locked
+        if floor == "breakeven":
+            candidate = min(candidate, entry)
+        elif isinstance(floor, (int, float)):
+            candidate = min(candidate, float(floor))
+        prev = pos.get('stop_loss_level')
+        pos['stop_loss_level'] = candidate if pd.isna(prev) else min(prev, candidate)
 
 
 def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocation_pct, spy_df, vix_df, tnx_df, stop_config, size_mults=None, delisting_dates=None, intrabar_data=None):
@@ -349,59 +377,99 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                 cash -= cost
                 spos['total_borrow_cost'] = spos.get('total_borrow_cost', 0.0) + cost
 
-        # --- SHORT COVER (signal = -1 while short) ---
+        # --- SHORT COVER (stop-loss / margin call / strategy signal / PIT) ---
         short_exited = []
         for symbol, spos in list(short_positions.items()):
             if date not in portfolio_data[symbol].index:
                 continue
-            sig_date = prev_trading_dates[symbol].get(date) if execution_time == 'open' else date
+            inst_c = instruments[symbol]
+            row = portfolio_data[symbol].loc[date]
+            cover_raw, cover_reason = np.nan, "Short Cover"
+
+            # PIT membership exit
             pit_member = _pit_flag(symbol, date, '_pit_member', True)
             pit_force_exit = _pit_flag(symbol, date, '_pit_force_exit', False)
-            strategy_cover = (
-                pd.notna(sig_date) and sig_date in signals[symbol].index
-                and signals[symbol].loc[sig_date] < 0
-            )
-            if pit_force_exit or not pit_member or strategy_cover:
-                cover_field = (
-                    'Close' if pit_force_exit
-                    else ('Open' if execution_time == 'open' else 'Close')
-                )
-                cover = portfolio_data[symbol].loc[date].get(cover_field)
-                if pd.isna(cover):
-                    continue
-                inst_c = instruments[symbol]
-                cover_slip = _inst.apply_slippage(inst_c, cover, "buy")
-                commission = _inst.commission(inst_c, spos['shares'])
-                _gross = (spos['shares'] * (spos['entry_price'] - cover_slip)) * inst_c.point_value
-                net_pnl = _gross - (2 * commission) - spos.get('total_borrow_cost', 0.0)
-                cash += _gross - commission
-                if inst_c.margin_mode == _inst.INITIAL_MARGIN:
-                    reserved_margin -= spos.get('margin', 0.0)
-                trade_counter += 1
-                # MAE/MFE for shorts: favorable = price drops, adverse = price rises
-                short_trade_df = portfolio_data[symbol].loc[spos['entry_date']:date]
-                if not short_trade_df.empty:
-                    _ep = spos['entry_price']
-                    short_mfe = (_ep - short_trade_df['Low'].min())  / _ep  # max drop = best case
-                    short_mae = (short_trade_df['High'].max() - _ep) / _ep  # max rise = worst case
-                else:
-                    short_mfe, short_mae = 0.0, 0.0
-                trade_log.append({
-                    'Symbol': symbol, 'Trade': f"Short {trade_counter}",
-                    'EntryDate': spos['entry_date'].isoformat(), 'EntryPrice': spos['entry_price'],
-                    'ExitDate': date.isoformat(), 'ExitPrice': cover_slip,
-                    'Profit': net_pnl, 'ProfitPct': net_pnl / spos['notional'] if spos['notional'] > 0 else 0,
-                    'Shares': spos['shares'], 'is_win': 1 if net_pnl > 0 else 0,
-                    'HoldDuration': (date - spos['entry_date']).days,
-                    'MAE_pct': short_mae, 'MFE_pct': short_mfe,
-                    'ExitReason': (
-                        'PIT Membership Exit (last available close)' if pit_force_exit
-                        else 'PIT Membership Exit' if not pit_member
-                        else 'Short Cover'
-                    ),
-                    'InitialRisk': 0.0, 'RMultiple': None,
-                })
-                short_exited.append(symbol)
+            if pit_force_exit:
+                cover_raw = row.get('Close')
+                cover_reason = "PIT Membership Exit (last available close)"
+            elif not pit_member:
+                cover_raw = row.get('Open' if execution_time == 'open' else 'Close')
+                cover_reason = "PIT Membership Exit"
+
+            # STOP-LOSS (short is stopped when the High trades up through the stop)
+            if (pd.isna(cover_raw) and stop_config.get("type") != "none"
+                    and pd.notna(spos.get('stop_loss_level'))):
+                cur_high = row.get('High')
+                if pd.notna(cur_high) and cur_high >= spos['stop_loss_level']:
+                    cover_raw = spos['stop_loss_level']
+                    cover_reason = f"Stop Loss ({stop_config['type']})"
+
+            # MAINTENANCE MARGIN / MARGIN CALL (futures short)
+            if pd.isna(cover_raw):
+                _mm_pct = CONFIG.get("maintenance_margin_pct", 0.0) or 0.0
+                if _mm_pct > 0 and inst_c.margin_mode == _inst.INITIAL_MARGIN:
+                    _mc_close = row.get('Close')
+                    if pd.notna(_mc_close):
+                        _unreal = _inst.unrealized_pnl(
+                            inst_c, spos['shares'], spos['entry_price'], _mc_close, side="short")
+                        _mc_notional = _inst.notional(inst_c, spos['shares'], spos['entry_price'])
+                        if spos.get('margin', 0.0) + _unreal < _mc_notional * _mm_pct:
+                            cover_raw = _mc_close
+                            cover_reason = "Margin Call"
+
+            # STRATEGY cover (signal < 0 while short)
+            if pd.isna(cover_raw):
+                sig_date = prev_trading_dates[symbol].get(date) if execution_time == 'open' else date
+                if (pd.notna(sig_date) and sig_date in signals[symbol].index
+                        and signals[symbol].loc[sig_date] < 0):
+                    cover_raw = row.get('Open' if execution_time == 'open' else 'Close')
+                    cover_reason = "Short Cover"
+
+            # Not covering this bar → trail the short stop and move on.
+            if pd.isna(cover_raw):
+                if stop_config.get("type") == "atr" and pd.notna(spos.get('stop_loss_level')):
+                    _cc, _ca = row.get('Close'), row.get('ATR_14')
+                    if pd.notna(_cc) and pd.notna(_ca):
+                        _ns = _inst.atr_stop_level(_cc, _ca, stop_config.get("multiplier", 3.0),
+                                                   side="short", point_cap=stop_config.get("point_cap"))
+                        spos['stop_loss_level'] = min(spos['stop_loss_level'], _ns)
+                elif stop_config.get("type") == "trailing_atr":
+                    _update_trailing_atr_stop(spos, portfolio_data[symbol], date, stop_config, side="short")
+                continue
+
+            # --- EXECUTE COVER ---
+            cover_slip = _inst.apply_slippage(inst_c, cover_raw, "buy")
+            commission = _inst.commission(inst_c, spos['shares'])
+            _gross = (spos['shares'] * (spos['entry_price'] - cover_slip)) * inst_c.point_value
+            net_pnl = _gross - (2 * commission) - spos.get('total_borrow_cost', 0.0)
+            cash += _gross - commission
+            if inst_c.margin_mode == _inst.INITIAL_MARGIN:
+                reserved_margin -= spos.get('margin', 0.0)
+            trade_counter += 1
+            # MAE/MFE for shorts: favorable = price drops, adverse = price rises
+            short_trade_df = portfolio_data[symbol].loc[spos['entry_date']:date]
+            if not short_trade_df.empty:
+                _ep = spos['entry_price']
+                short_mfe = (_ep - short_trade_df['Low'].min())  / _ep  # max drop = best case
+                short_mae = (short_trade_df['High'].max() - _ep) / _ep  # max rise = worst case
+            else:
+                short_mfe, short_mae = 0.0, 0.0
+            _s_ir = spos.get('initial_risk')
+            _s_rm = (net_pnl / (_s_ir * spos['shares'] * inst_c.point_value)
+                     if _s_ir and _s_ir > 0 and spos['shares'] > 0 else None)
+            trade_log.append({
+                'Symbol': symbol, 'Trade': f"Short {trade_counter}",
+                'EntryDate': spos['entry_date'].isoformat(), 'EntryPrice': spos['entry_price'],
+                'ExitDate': date.isoformat(), 'ExitPrice': cover_slip,
+                'Profit': net_pnl, 'ProfitPct': net_pnl / spos['notional'] if spos['notional'] > 0 else 0,
+                'Shares': spos['shares'], 'is_win': 1 if net_pnl > 0 else 0,
+                'HoldDuration': (date - spos['entry_date']).days,
+                'MAE_pct': short_mae, 'MFE_pct': short_mfe,
+                'ExitReason': cover_reason,
+                'InitialRisk': _s_ir if (_s_ir and _s_ir > 0) else 0.0,
+                'RMultiple': _s_rm,
+            })
+            short_exited.append(symbol)
         for symbol in short_exited:
             del short_positions[symbol]
 
@@ -436,6 +504,36 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                 if pd.isna(ep) or ep <= 0:
                     continue
                 inst_se = instruments[symbol]
+
+                # Short-side stop / target / trail init (mirror of the long entry block).
+                # Stop sits ABOVE entry; target BELOW; ATR locked at the signal bar.
+                _s_stop, _s_target, _s_atr = np.nan, None, None
+                _sc_type = stop_config.get("type")
+                if _sc_type in ('percentage', 'points'):
+                    _s_stop = _inst.stop_level(inst_se, ep, stop_config, side="short")
+                elif _sc_type == 'atr':
+                    _dbe = prev_trading_dates[symbol].get(date)
+                    if pd.notna(_dbe) and _dbe in df.index:
+                        _ab, _cb = df.loc[_dbe].get('ATR_14'), df.loc[_dbe].get('Close')
+                        if pd.notna(_ab) and pd.notna(_cb):
+                            _s_stop = _inst.atr_stop_level(_cb, _ab, stop_config.get("multiplier", 3.0),
+                                                           side="short", point_cap=stop_config.get("point_cap"))
+                elif _sc_type == 'trailing_atr':
+                    _dbe = prev_trading_dates[symbol].get(date)
+                    _ab = df.loc[_dbe].get('ATR_14') if (pd.notna(_dbe) and _dbe in df.index) else np.nan
+                    if pd.notna(_ab):
+                        _s_atr = float(_ab)
+                        _sm = stop_config.get("stop_mult", 1.0)
+                        _eff = _s_atr * _sm
+                        _pc = stop_config.get("point_cap")
+                        if _pc is not None and _pc > 0:
+                            _eff = min(_eff, _pc)
+                        _s_stop = ep + _eff
+                        _t1 = stop_config.get("t1_mult", 0.0)
+                        if _sm > 0 and _t1 > 0:
+                            _s_target = ep - _eff * (_t1 / _sm)
+                _s_ir = float(_s_stop - ep) if (pd.notna(_s_stop) and _s_stop > ep) else None
+
                 if inst_se.margin_mode == _inst.INITIAL_MARGIN:
                     # Futures short: integer contracts, reserve initial margin, pay commission.
                     _free = cash - reserved_margin
@@ -455,6 +553,9 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         'entry_date': date, 'entry_price': ep,
                         'shares': shares, 'notional': _inst.notional(inst_se, shares, ep),
                         'total_borrow_cost': 0.0, 'margin': _s_margin,
+                        'stop_loss_level': _s_stop, 'initial_stop_loss_level': _s_stop,
+                        'trail_target': _s_target, 'atr_locked': _s_atr,
+                        'trail_armed': False, 'initial_risk': _s_ir,
                     }
                 else:
                     alloc = min(total_equity * allocation_pct, cash)
@@ -467,6 +568,9 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         'entry_date': date, 'entry_price': ep,
                         'shares': shares, 'notional': shares * ep, 'total_borrow_cost': 0.0,
                         'margin': 0.0,
+                        'stop_loss_level': _s_stop, 'initial_stop_loss_level': _s_stop,
+                        'trail_target': _s_target, 'atr_locked': _s_atr,
+                        'trail_armed': False, 'initial_risk': _s_ir,
                     }
 
         # --- POSITION ENTRY LOGIC ---
@@ -869,6 +973,42 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
 
                 log_entry = {'Symbol': symbol, 'Trade': f"Long {trade_counter}", 'EntryDate': pos['entry_date'].isoformat(), 'EntryPrice': pos['entry_price'], 'ExitDate': exit_date.isoformat(), 'ExitPrice': exit_price, 'Profit': net_pnl, 'ProfitPct': net_pnl / _inst.notional(_mtm_inst, pos['shares'], pos['entry_price']), 'Shares': pos['shares'], 'is_win': 1 if net_pnl > 0 else 0, 'HoldDuration': (exit_date - pos['entry_date']).days, 'MAE_pct': mae_pct, 'MFE_pct': mfe_pct, 'ExitReason': exit_reason, 'InitialRisk': _initial_risk_per_share, 'RMultiple': _r_multiple, **pos.get('features', {})}
                 trade_log.append(log_entry)
+
+    # Open SHORTS still on the book at the last bar — mark to market (parallel to longs).
+    # Without this an open short vanishes from the trade log (and, if it's the only
+    # trade, run returns None), even though the equity curve already carries its MTM.
+    if short_positions and not exclude_open:
+        for symbol, spos in list(short_positions.items()):
+            last_price = portfolio_data[symbol]['Close'].get(last_date)
+            if pd.isna(last_price):
+                continue
+            _s_inst = instruments[symbol]
+            cover_slip = _inst.apply_slippage(_s_inst, last_price, "buy")
+            commission = _inst.commission(_s_inst, spos['shares'])
+            _gross = (spos['shares'] * (spos['entry_price'] - cover_slip)) * _s_inst.point_value
+            net_pnl = _gross - (2 * commission) - spos.get('total_borrow_cost', 0.0)
+            # hypothetical close — do not touch cash (parallel to the long EoB branch)
+            trade_counter += 1
+            _std = portfolio_data[symbol].loc[spos['entry_date']:last_date]
+            if not _std.empty:
+                _ep = spos['entry_price']
+                _s_mfe = (_ep - _std['Low'].min()) / _ep
+                _s_mae = (_std['High'].max() - _ep) / _ep
+            else:
+                _s_mfe, _s_mae = 0.0, 0.0
+            _s_ir = spos.get('initial_risk')
+            _s_rm = (net_pnl / (_s_ir * spos['shares'] * _s_inst.point_value)
+                     if _s_ir and _s_ir > 0 and spos['shares'] > 0 else None)
+            trade_log.append({
+                'Symbol': symbol, 'Trade': f"Short {trade_counter}",
+                'EntryDate': spos['entry_date'].isoformat(), 'EntryPrice': spos['entry_price'],
+                'ExitDate': last_date.isoformat(), 'ExitPrice': cover_slip,
+                'Profit': net_pnl, 'ProfitPct': net_pnl / spos['notional'] if spos['notional'] > 0 else 0,
+                'Shares': spos['shares'], 'is_win': 1 if net_pnl > 0 else 0,
+                'HoldDuration': (last_date - spos['entry_date']).days,
+                'MAE_pct': _s_mae, 'MFE_pct': _s_mfe, 'ExitReason': "End of Backtest",
+                'InitialRisk': _s_ir if (_s_ir and _s_ir > 0) else 0.0, 'RMultiple': _s_rm,
+            })
     # --- END: MARK-TO-MARKET LOGIC ---
 
     pnl_list = [t['Profit'] for t in trade_log]

@@ -91,14 +91,16 @@ class TestTrailingAtrHelper:
         assert pos["stop_loss_level"] == 98.0     # untouched
 
     def test_breakeven_floor_clamps(self):
-        df, d = self._bar(high=103, close=100.4)  # trail would be 100.4-1=99.4 < entry
-        pos = {"entry_price": 100.0, "trail_armed": False, "trail_target": 102.0,
+        # Trail rides HIGH now, so arming (high>=target) always keeps candidate>entry.
+        # Pre-arm and use a low High so the High-based candidate is still below entry.
+        df, d = self._bar(high=100.5, close=100.4)  # candidate = 100.5 - 1 = 99.5 < entry
+        pos = {"entry_price": 100.0, "trail_armed": True, "trail_target": 102.0,
                "atr_locked": 2.0, "stop_loss_level": 98.0}
         _update_trailing_atr_stop(pos, df, d, {"trail_mult": 0.5, "floor": "breakeven"})
-        assert pos["stop_loss_level"] == pytest.approx(100.0)   # clamped to entry, not 99.4
+        assert pos["stop_loss_level"] == pytest.approx(100.0)   # clamped to entry, not 99.5
 
     def test_ratchet_never_loosens(self):
-        df, d = self._bar(high=103, close=100.5)  # candidate 99.5 -> floor 100
+        df, d = self._bar(high=101, close=100.5)  # candidate = 101 - 1 = 100 < prev 101.5
         pos = {"entry_price": 100.0, "trail_armed": True, "trail_target": 102.0,
                "atr_locked": 2.0, "stop_loss_level": 101.5}  # already higher
         _update_trailing_atr_stop(pos, df, d, {"trail_mult": 0.5, "floor": "breakeven"})
@@ -106,9 +108,9 @@ class TestTrailingAtrHelper:
 
     def test_numeric_floor_clamps(self):
         # A numeric floor (not "breakeven") clamps the trail candidate to that price.
-        # candidate = 100.4 - 0.5*2 = 99.4 ; floor 99.8 -> clamped up to 99.8.
-        df, d = self._bar(high=103, close=100.4)
-        pos = {"entry_price": 100.0, "trail_armed": False, "trail_target": 102.0,
+        # Pre-armed; candidate = 100.5 - 0.5*2 = 99.5 ; floor 99.8 -> clamped up to 99.8.
+        df, d = self._bar(high=100.5, close=100.4)
+        pos = {"entry_price": 100.0, "trail_armed": True, "trail_target": 102.0,
                "atr_locked": 2.0, "stop_loss_level": 98.0}
         _update_trailing_atr_stop(pos, df, d, {"trail_mult": 0.5, "floor": 99.8})
         assert pos["stop_loss_level"] == pytest.approx(99.8)
@@ -119,8 +121,8 @@ class TestTrailingAtrEngine:
         # ATR=2 locked; stop_mult=1 -> stop 2 below; t1_mult=1 -> target = eff_stop_dist = 2 above.
         rows = [(100, 100, 100, 100, 2.0),   # bar0 (signal-day source for locked ATR)
                 (100, 100, 100, 100, 2.0),   # bar1 enter @100 (stop 98, target 102)
-                (100, 103, 100, 102, 2.0),   # bar2 High 103 >= target 102 -> arm; trail=102-2=100 (=breakeven)
-                (100, 100, 99.5, 99.5, 2.0)]  # bar3 Low 99.5 <= 100 stop -> exit @100 (breakeven)
+                (100, 103, 100, 102, 2.0),   # bar2 High 103 >= target 102 -> arm; trail=103(High)-2=101
+                (100, 100, 99.5, 99.5, 2.0)]  # bar3 Low 99.5 <= 101 stop -> exit @101 (>= breakeven)
         df = _df(rows)
         res = _run({"AAA": df}, {"AAA": _sig(df, {1: 1})},
                    {"type": "trailing_atr", "stop_mult": 1.0, "trail_mult": 1.0,
