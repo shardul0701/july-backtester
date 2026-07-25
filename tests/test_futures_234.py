@@ -121,6 +121,24 @@ class TestTrailingAtrEngine:
         assert t["ExitReason"] == "Stop Loss (trailing_atr)"
         assert t["ExitPrice"] >= t["EntryPrice"]    # breakeven floor held -> not a loss
 
+    def test_atr_locked_at_breakout_bar_not_fill_bar(self):
+        # Shardul's clarification: a = atr[breakout_i] = the bar BEFORE the fill bar
+        # (the signal/confirmation candle), not the fill bar. execution_time="open" so
+        # signal on bar1 -> fill at bar2 open; ATR must come from bar1 (=2), not bar2 (=99).
+        rows = [(100, 100, 100, 100, 5.0),    # bar0
+                (100, 100, 100, 100, 2.0),    # bar1 signal (breakout_i) -> ATR 2
+                (100, 100, 100, 100, 99.0),   # bar2 fill @open 100 -> ATR 99 must be IGNORED
+                (100, 100, 97, 97, 99.0)]     # bar3 Low 97 <= stop 98 -> stop out
+        df = _df(rows)
+        res = _run({"AAA": df}, {"AAA": _sig(df, {1: 1})},
+                   {"type": "trailing_atr", "stop_mult": 1.0, "trail_mult": 0.5,
+                    "t1_mult": 1.0, "floor": "breakeven"},
+                   cfg_over={"execution_time": "open"})
+        assert res is not None and res["trade_log"]
+        t = res["trade_log"][0]
+        # InitialRisk = eff_stop_dist = stop_mult*atr_locked = 1*2 = 2 (not 99).
+        assert t["InitialRisk"] == pytest.approx(2.0)
+
 
 # ---------------------------------------------------------------------------
 # 2. ATR point_cap
