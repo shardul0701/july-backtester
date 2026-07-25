@@ -124,6 +124,8 @@ KNOWN_KEYS: set[str] = {
     "instruments",
     # Sub-bar (intraday) resolution
     "intrabar_resolution",
+    "intrabar_timeframe",
+    "intrabar_multiplier",
     # SECTION 27: Deterministic Entry Queue
     "entry_priority",
     "entry_random_seed",

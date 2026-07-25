@@ -45,25 +45,56 @@ comparison_dfs_global = None
 benchmark_returns_global = None
 dependency_map_global = None
 portfolio_data_global = None
+delisting_dates_global = None
 pit_member_masks_global = None
+intrabar_data_global = None
 
 # --------------------------------------------------------------------
 # --- WORKER INITIALIZER FOR MULTIPROCESSING ---
 # --------------------------------------------------------------------
-def init_worker(comparison_dfs_dict, benchmark_returns_dict, dependency_map_dict, portfolio_data_for_worker, delisting_dates_for_worker=None, pit_member_masks_dict=None):
+def init_worker(comparison_dfs_dict, benchmark_returns_dict, dependency_map_dict, portfolio_data_for_worker, delisting_dates_for_worker=None, pit_member_masks_dict=None, intrabar_data_for_worker=None):
     """
     Initializer for the multiprocessing pool.
     Makes comparison ticker DataFrames, benchmark returns, dependency symbol map,
-    the current portfolio's data, delisting dates, and optional PIT membership
-    masks globally available to each worker process.
+    the current portfolio's data, delisting dates, optional PIT membership masks,
+    and optional intraday (sub-bar) data globally available to each worker process.
     """
-    global comparison_dfs_global, benchmark_returns_global, dependency_map_global, portfolio_data_global, delisting_dates_global, pit_member_masks_global
+    global comparison_dfs_global, benchmark_returns_global, dependency_map_global, portfolio_data_global, delisting_dates_global, pit_member_masks_global, intrabar_data_global
     comparison_dfs_global = comparison_dfs_dict
     benchmark_returns_global = benchmark_returns_dict
     dependency_map_global = dependency_map_dict
     portfolio_data_global = portfolio_data_for_worker
     delisting_dates_global = delisting_dates_for_worker
     pit_member_masks_global = pit_member_masks_dict
+    intrabar_data_global = intrabar_data_for_worker
+
+
+def _build_intrabar_data(portfolio_data, config):
+    """Fetch finer-resolution (intraday) bars per symbol for sub-bar stop resolution.
+
+    Returns ``{symbol: intraday_df}`` for symbols whose provider can serve intraday
+    data; symbols that can't (or error) are omitted and the engine simply no-ops for
+    them. Heavy and provider/plan-limited, so only called when ``intrabar_resolution``
+    is enabled. Uses ``intrabar_timeframe`` / ``intrabar_multiplier`` (default MIN/1).
+    """
+    tf = config.get("intrabar_timeframe", "MIN")
+    mult = config.get("intrabar_multiplier", 1)
+    intra_cfg = {**config, "timeframe": tf, "timeframe_multiplier": mult}
+    fetcher = get_data_service()
+    out = {}
+    for symbol in portfolio_data:
+        try:
+            idf = fetcher(symbol, config["start_date"], config["end_date"], intra_cfg)
+        except Exception as e:
+            logger.warning(f"  -> intrabar fetch failed for '{symbol}': {e}")
+            idf = None
+        if idf is not None and not idf.empty:
+            out[symbol] = idf
+    if out:
+        logger.info(f"  -> Sub-bar resolution: loaded intraday data for {len(out)}/{len(portfolio_data)} symbols")
+    else:
+        logger.warning("  -> intrabar_resolution enabled but no intraday data available; stop fills unchanged")
+    return out
 
 # --------------------------------------------------------------------
 
@@ -73,7 +104,7 @@ def run_single_simulation(args):
     This version now uses globally initialized dataframes AND portfolio_data.
     """
     # Access ALL globally initialized data
-    global comparison_dfs_global, benchmark_returns_global, dependency_map_global, portfolio_data_global, delisting_dates_global, pit_member_masks_global
+    global comparison_dfs_global, benchmark_returns_global, dependency_map_global, portfolio_data_global, delisting_dates_global, pit_member_masks_global, intrabar_data_global
 
     # 1. Unpack the arguments. `portfolio_data` has been REMOVED from the tuple.
     portfolio_name, name, logic_func, dependencies, stop_config, \
@@ -144,7 +175,9 @@ def run_single_simulation(args):
         # Call the simulation, passing the stop_config and using the global dataframes.
         result = run_portfolio_simulation(
             portfolio_data, final_signals, CONFIG["initial_capital"], CONFIG["allocation_per_trade"],
-            spy_df_local, vix_df_local, tnx_df_local, stop_config, delisting_dates_global
+            spy_df_local, vix_df_local, tnx_df_local, stop_config,
+            delisting_dates=delisting_dates_global,
+            intrabar_data=intrabar_data_global,
         )
         
         if result is None: return None
@@ -784,8 +817,13 @@ def main():
         logger.info("=" * 15 + f" RUNNING SIMULATIONS FOR '{portfolio_name}' " + "=" * 15)
         logger.info(f"Found {len(tasks_for_this_portfolio)} tasks. Using up to {cpu_count()} CPU cores.")
         
-        # Pass comparison data, portfolio data, delisting dates, and PIT masks during initialization
-        init_args = (comparison_dfs, benchmark_returns, comparison_config["dependencies"], portfolio_data, delisting_dates, _pit_member_masks)
+        # Sub-bar resolution: fetch intraday data per symbol only when enabled.
+        _intrabar_data = (_build_intrabar_data(portfolio_data, CONFIG)
+                          if CONFIG.get("intrabar_resolution", False) else None)
+
+        # Pass comparison data, portfolio data, delisting dates, PIT masks, and
+        # optional intraday data during initialization
+        init_args = (comparison_dfs, benchmark_returns, comparison_config["dependencies"], portfolio_data, delisting_dates, _pit_member_masks, _intrabar_data)
 
         with Pool(processes=cpu_count(), initializer=init_worker, initargs=init_args) as p:
             import time as _time
