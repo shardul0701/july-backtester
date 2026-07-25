@@ -263,4 +263,34 @@ CONFIG = {
     "pit_warmup_days": 400,              # calendar days of pre-join data for indicators
     "pit_exit_buffer_days": 10,          # grace-period bars after index removal
     "pit_coverage_tolerance_days": 7,
+
+    # ============================================================
+    # SECTION 27: INSTRUMENT METADATA (equities / futures)
+    # ============================================================
+    # Per-symbol trading metadata resolved by helpers/instruments.py. Equities are
+    # the default and reproduce prior behaviour exactly (point_value=1, full-notional
+    # cash, per-share commission, %-slippage). Futures opt in either via a contract-
+    # month ticker (e.g. "ESM6") or an explicit override below.
+    "instruments": {
+        # "future" makes EVERY symbol in the portfolio a futures contract; leave as
+        # "equity" for mixed/equity runs and opt individual symbols in via overrides.
+        "default_asset_class": "equity",
+
+        # Futures defaults (used for any resolved futures instrument):
+        "futures_initial_margin_pct": 0.10,   # fraction of notional posted at entry
+        "futures_commission_per_contract": 2.50,  # $ per contract, one side
+        "futures_slippage_ticks": 1.0,        # slippage in ticks per fill
+
+        # Optional per-root overrides of the built-in seed tables:
+        # "point_values": {"ES": 50.0, "NQ": 20.0},
+        # "tick_sizes":   {"ES": 0.25, "NQ": 0.25},
+
+        # Explicit per-symbol overrides. Each dict may set "asset_class" and any
+        # Instrument field (point_value, tick_size, initial_margin_pct, ...):
+        # "overrides": {
+        #     "NQ":  {"asset_class": "future", "point_value": 20.0, "tick_size": 0.25},
+        #     "SI":  {"asset_class": "equity"},  # keep the Silvergate ticker as equity
+        # },
+        "overrides": {},
+    },
 }

@@ -120,6 +120,8 @@ KNOWN_KEYS: set[str] = {
     "pit_exit_buffer_days",
     "pit_coverage_tolerance_days",
     "sp500_pit_path",
+    # Instrument metadata (equities / futures)
+    "instruments",
     # SECTION 27: Deterministic Entry Queue
     "entry_priority",
     "entry_random_seed",
