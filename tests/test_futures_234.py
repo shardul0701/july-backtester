@@ -139,6 +139,30 @@ class TestTrailingAtrEngine:
         # InitialRisk = eff_stop_dist = stop_mult*atr_locked = 1*2 = 2 (not 99).
         assert t["InitialRisk"] == pytest.approx(2.0)
 
+    def test_target_and_stop_derive_off_capped_distance(self):
+        # point_cap propagates into BOTH the initial stop AND the arm target:
+        #   atr=2, stop_mult=1 -> uncapped eff_stop_dist=2, but point_cap=1 -> eff=1
+        #   stop = entry - 1 = 99 ;  target = entry + eff*(t1_mult/stop_mult) = 100 + 1 = 101
+        # If the cap were ignored, eff=2 -> stop 98 and target 102. We arm at High 101
+        # (< 102): reaching the target at 101 proves the target used the CAPPED distance;
+        # InitialRisk == 1 proves the initial stop used the CAPPED distance.
+        rows = [(100, 100, 100, 100, 2.0),    # bar0 signal-day source for locked ATR
+                (100, 100, 100, 100, 2.0),    # bar1 enter @100 (stop 99, target 101)
+                (100, 101, 100, 101, 2.0),    # bar2 High 101 >= capped target 101 -> arm;
+                                              #   trail = 101 - 0.5*2 = 100, floored @entry -> 100
+                (100, 100, 99.5, 99.5, 2.0)]  # bar3 Low 99.5 <= ratcheted stop 100 -> exit @100
+        df = _df(rows)
+        res = _run({"AAA": df}, {"AAA": _sig(df, {1: 1})},
+                   {"type": "trailing_atr", "stop_mult": 1.0, "trail_mult": 0.5,
+                    "t1_mult": 1.0, "point_cap": 1.0, "floor": "breakeven"})
+        assert res is not None and res["trade_log"]
+        t = res["trade_log"][0]
+        assert t["InitialRisk"] == pytest.approx(1.0)   # capped eff_stop_dist, not 2
+        assert t["ExitReason"] == "Stop Loss (trailing_atr)"
+        # Armed at the capped target 101 (would NOT arm at 101 if target were 102),
+        # then ratcheted to the breakeven floor 100.
+        assert t["ExitPrice"] == pytest.approx(100.0)
+
 
 # ---------------------------------------------------------------------------
 # 2. ATR point_cap
@@ -159,6 +183,23 @@ class TestPointCap:
         t = res["trade_log"][0]
         assert t["ExitReason"] == "Stop Loss (atr)"
         assert t["ExitPrice"] == pytest.approx(85.0)   # entry100 - cap15
+
+    def test_engine_trailing_atr_stop_capped(self):
+        # The 'atr' type trailing-update must honour point_cap too:
+        #   entry 100, initial capped stop 85 (100-15). On bar2 close 120:
+        #   capped trail = 120-15 = 105 ; uncapped would be 120-50 = 70 (< 85, no ratchet).
+        #   So a ratchet to 105 proves the cap propagated into the trailing update.
+        rows = [(100, 100, 100, 100, 10.0),   # bar0
+                (100, 100, 100, 100, 10.0),   # bar1 enter @100 (initial capped stop 85)
+                (100, 120, 100, 120, 10.0),   # bar2 close 120 -> capped trail 105 (uncapped 70)
+                (100, 106, 104, 104, 10.0)]   # bar3 Low 104 <= 105 -> stop out @105
+        df = _df(rows)
+        res = _run({"AAA": df}, {"AAA": _sig(df, {1: 1})},
+                   {"type": "atr", "multiplier": 5.0, "point_cap": 15.0})
+        assert res is not None and res["trade_log"]
+        t = res["trade_log"][0]
+        assert t["ExitReason"] == "Stop Loss (atr)"
+        assert t["ExitPrice"] == pytest.approx(105.0)  # ratcheted to capped trail, not 85
 
 
 # ---------------------------------------------------------------------------
