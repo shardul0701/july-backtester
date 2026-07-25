@@ -307,4 +307,13 @@ CONFIG = {
     # Finer-resolution timeframe fetched per symbol when intrabar_resolution is on.
     "intrabar_timeframe": "MIN",     # "MIN" | "H"
     "intrabar_multiplier": 1,        # e.g. 5 for 5-minute sub-bars
+
+    # ============================================================
+    # SECTION 29: FUTURES MAINTENANCE MARGIN
+    # ============================================================
+    # Force-liquidate a futures position when posted margin + unrealized P&L falls
+    # below notional * maintenance_margin_pct (logged as ExitReason "Margin Call").
+    # 0.0 = disabled (default). Set below the instrument's initial_margin_pct, e.g.
+    # 0.07 with a 0.10 initial. Equities (cash_full) are never margin-called.
+    "maintenance_margin_pct": 0.0,
 }

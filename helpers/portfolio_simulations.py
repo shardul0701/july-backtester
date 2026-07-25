@@ -22,6 +22,45 @@ def _equity_contribution(inst, pos, close, side="long"):
     return _inst.market_value(inst, pos['shares'], close)
 
 
+def _update_trailing_atr_stop(pos, sym_df, date, stop_config):
+    """Trailing-ATR-with-breakeven-floor update for one long position (`trailing_atr`).
+
+    Two-phase exit (Sleeve A mechanic):
+      1. Pre-arm: the stop stays at its initial point-capped ATR level until the bar's
+         High reaches the arm target (a reward:risk ratio off the capped stop, computed
+         at entry).
+      2. Armed: ratchet a ``close - trail_mult * atr_locked`` trail (never loosening),
+         clamped to a ``floor`` — ``"breakeven"`` (literal entry, no offset) or a numeric
+         price. The ATR is the value LOCKED at the breakout bar (never recomputed live).
+    Next-bar-activation model: the level set this bar becomes active next bar.
+    """
+    atr_locked = pos.get('atr_locked')
+    if atr_locked is None:
+        return
+    row = sym_df.loc[date]
+    high, close = row.get('High'), row.get('Close')
+
+    if not pos.get('trail_armed', False):
+        target = pos.get('trail_target')
+        if target is not None and pd.notna(high) and high >= target:
+            pos['trail_armed'] = True
+        else:
+            return  # not armed yet — leave the initial protective stop untouched
+
+    if pd.isna(close):
+        return
+    candidate = close - stop_config.get("trail_mult", 1.0) * atr_locked
+
+    floor = stop_config.get("floor")
+    if floor == "breakeven":
+        candidate = max(candidate, pos['entry_price'])
+    elif isinstance(floor, (int, float)):
+        candidate = max(candidate, float(floor))
+
+    prev = pos.get('stop_loss_level')
+    pos['stop_loss_level'] = candidate if pd.isna(prev) else max(prev, candidate)
+
+
 def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocation_pct, spy_df, vix_df, tnx_df, stop_config, size_mults=None, delisting_dates=None, intrabar_data=None):
     """
     Runs a portfolio simulation with integrated stop-loss handling and logs
@@ -203,6 +242,24 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     trade_log.append(_plog)
                     pos['shares'] -= _pexit_shares
 
+            # --- MAINTENANCE MARGIN / MARGIN CALL (futures only) ---
+            # Force-liquidate a futures position when posted margin + unrealized P&L
+            # falls below the maintenance requirement (notional * maintenance_margin_pct).
+            # Disabled by default (0.0). Equities (cash_full) never margin-call.
+            if pd.isna(raw_exit_price):
+                _mm_pct = CONFIG.get("maintenance_margin_pct", 0.0) or 0.0
+                _mc_inst = instruments[symbol]
+                if _mm_pct > 0 and _mc_inst.margin_mode == _inst.INITIAL_MARGIN:
+                    _mc_close = portfolio_data[symbol].loc[date].get('Close')
+                    if pd.notna(_mc_close):
+                        _unreal = _inst.unrealized_pnl(
+                            _mc_inst, pos['shares'], pos['entry_price'], _mc_close, side="long")
+                        _mc_notional = _inst.notional(_mc_inst, pos['shares'], pos['entry_price'])
+                        if pos.get('margin', 0.0) + _unreal < _mc_notional * _mm_pct:
+                            raw_exit_price = _mc_close   # forced liquidation at market
+                            exit_date = date
+                            exit_reason = "Margin Call"
+
             # --- TRAIL THE STOP AND CONTINUE IF NOT EXITING ---
             if pd.isna(raw_exit_price):
                 if stop_config.get("type") == "atr" and pd.notna(pos.get('stop_loss_level')):
@@ -210,8 +267,11 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     current_atr = portfolio_data[symbol].loc[date].get('ATR_14')
                     if pd.notna(current_close) and pd.notna(current_atr):
                         new_stop_level = _inst.atr_stop_level(
-                            current_close, current_atr, stop_config.get("multiplier", 3.0), side="long")
+                            current_close, current_atr, stop_config.get("multiplier", 3.0),
+                            side="long", point_cap=stop_config.get("point_cap"))
                         pos['stop_loss_level'] = max(pos['stop_loss_level'], new_stop_level)
+                elif stop_config.get("type") == "trailing_atr":
+                    _update_trailing_atr_stop(pos, portfolio_data[symbol], date, stop_config)
                 continue
 
             # --- TRADE EXIT AND LOGGING LOGIC ---
@@ -625,25 +685,52 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     # ---
                     # --- SET INITIAL STOP LOSS ONCE ENTRY PRICE IS KNOWN ---
                     stop_loss_level = np.nan
-                    if stop_config.get("type") in ('percentage', 'points'):
+                    _trail_target = None   # arm price for trailing_atr (None otherwise)
+                    _atr_locked = None     # ATR frozen at the breakout bar for trailing_atr
+                    _stype = stop_config.get("type")
+                    if _stype in ('percentage', 'points'):
                         stop_loss_level = _inst.stop_level(
                             instruments[symbol], entry_price, stop_config, side="long")
 
-                    elif stop_config.get("type") == 'atr':
+                    elif _stype == 'atr':
                         # Get the data from the day BEFORE entry (the signal day)
                         day_before_entry = prev_trading_dates[symbol].get(entry_exec_date)
-                        
+
                         if pd.notna(day_before_entry) and day_before_entry in df.index:
                             day_before_data = df.loc[day_before_entry]
                             atr_before_entry = day_before_data.get('ATR_14')
                             close_before_entry = day_before_data.get('Close')
-                            
+
                             if pd.notna(atr_before_entry) and pd.notna(close_before_entry):
                                 # The initial stop is based on the previous day's data,
-                                # matching the "Next Day Activation" spec.
+                                # matching the "Next Day Activation" spec. point_cap (if set)
+                                # clips the ATR distance to a fixed point ceiling per trade.
                                 stop_loss_level = _inst.atr_stop_level(
                                     close_before_entry, atr_before_entry,
-                                    stop_config.get("multiplier", 3.0), side="long")
+                                    stop_config.get("multiplier", 3.0), side="long",
+                                    point_cap=stop_config.get("point_cap"))
+
+                    elif _stype == 'trailing_atr':
+                        # Sleeve A mechanic. Lock ATR at the breakout (signal) bar and keep it
+                        # fixed for the whole trade — stop, target, and trail all use this one
+                        # value (never recomputed live). Initial stop is a point-capped ATR stop;
+                        # the arm target is a reward:risk ratio off that CAPPED stop so the cap
+                        # propagates into the target:
+                        #   eff_stop_dist = min(stop_mult*atr, point_cap)
+                        #   target_dist   = eff_stop_dist * (t1_mult / stop_mult)
+                        _dbe = prev_trading_dates[symbol].get(entry_exec_date)
+                        _atr_b = df.loc[_dbe].get('ATR_14') if (pd.notna(_dbe) and _dbe in df.index) else np.nan
+                        if pd.notna(_atr_b):
+                            _atr_locked = float(_atr_b)
+                            _stop_mult = stop_config.get("stop_mult", 1.0)
+                            _eff_stop_dist = _atr_locked * _stop_mult
+                            _pc = stop_config.get("point_cap")
+                            if _pc is not None and _pc > 0:
+                                _eff_stop_dist = min(_eff_stop_dist, _pc)
+                            stop_loss_level = entry_price - _eff_stop_dist
+                            _t1_mult = stop_config.get("t1_mult", 0.0)
+                            if _stop_mult > 0 and _t1_mult > 0:
+                                _trail_target = entry_price + _eff_stop_dist * (_t1_mult / _stop_mult)
 
                     positions[symbol] = {
                         'shares': shares, 'entry_price': entry_price,
@@ -653,6 +740,9 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         'entry_impact_bps': entry_impact_bps,
                         'size_mult': _size_mult,
                         'risk': new_position_risk,
+                        'trail_armed': False,
+                        'trail_target': _trail_target,
+                        'atr_locked': _atr_locked,
                         'margin': _margin if inst.margin_mode == _inst.INITIAL_MARGIN else 0.0,
                     }
                     if inst.margin_mode == _inst.INITIAL_MARGIN:

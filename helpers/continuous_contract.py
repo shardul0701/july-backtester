@@ -161,3 +161,25 @@ def validate_continuous(df: pd.DataFrame, jump_threshold: float = 0.20) -> tuple
         issues.append(f"large close-to-close jumps (>{jump_threshold:.0%}): {len(jumps)} "
                       "— possible unadjusted roll")
     return (len(issues) == 0), issues
+
+
+def rolls_spanned(entry_date, exit_date, roll_dates) -> list:
+    """Roll dates strictly inside the ``(entry_date, exit_date)`` hold window.
+
+    A back-adjusted continuous series is built for **signal continuity**, not for a
+    real position physically held across a roll: the synthetic series has no gap at
+    the seam, but a live position would actually roll (close the expiring contract,
+    open the next) and realise the roll spread. For short-hold strategies (hours to
+    days) a position never spans a roll and this is a non-issue; for longer-horizon
+    futures strategies it can silently misstate P&L across the seam.
+
+    Callers can use this to warn/flag such trades:
+
+        spanned = rolls_spanned(pos_entry, pos_exit, roll_dates)
+        if spanned:
+            logger.warning("position %s held across %d roll(s): %s", sym, len(spanned), spanned)
+
+    Returns the list of roll timestamps ``t`` with ``entry_date < t < exit_date``.
+    """
+    lo, hi = pd.Timestamp(entry_date), pd.Timestamp(exit_date)
+    return [r for r in (pd.Timestamp(x) for x in roll_dates) if lo < r < hi]
