@@ -188,3 +188,40 @@ class TestNoFuturesBorrow:
         expected = shares * (t["EntryPrice"] - t["ExitPrice"]) * _PV - 2 * (shares * _COMM)
         assert t["Profit"] == pytest.approx(expected, abs=1e-6)
         assert t["Profit"] > 0  # price fell, short profits
+
+
+# ---------------------------------------------------------------------------
+class TestDelistedFuturesPosition:
+    """Survivorship force-close must honour margin-mode accounting: realise P&L via
+    $/point and release margin — NOT credit full notional to cash (which was never
+    debited for a futures entry) or leave reserved_margin dangling."""
+
+    def test_force_close_uses_point_value_and_no_phantom_cash(self):
+        from unittest.mock import patch
+        df = _df([5000, 5000, 4990, 4980, 4970, 4960, 4950, 4940])
+        signals = {"MESM6": _sig(df, {1: 1})}  # enter, never exit -> delisting closes it
+        delist_ts = df.index[5]
+        cfg = {**_FUT_CFG, "include_delisted": True,
+               "delisting_price_assumption": "last_close"}
+        with patch.dict("config.CONFIG", cfg, clear=False):
+            res = run_portfolio_simulation(
+                portfolio_data={"MESM6": df}, signals=signals,
+                initial_capital=100_000.0, allocation_pct=1.0,
+                spy_df=None, vix_df=None, tnx_df=None,
+                stop_config={"type": "none"},
+                delisting_dates={"MESM6": delist_ts},
+            )
+        assert res is not None
+        t = res["trade_log"][0]
+        assert t["ExitReason"] == "Delisting"
+        shares = t["Shares"]
+        # P&L must be $/point-scaled: shares * (exit - entry) * $5/pt - 2x commission.
+        expected = shares * (t["ExitPrice"] - t["EntryPrice"]) * _PV - 2 * (shares * _COMM)
+        assert t["Profit"] == pytest.approx(expected, abs=1e-6)
+        # Final equity ~= initial + realised loss (small). If the force-close had
+        # credited full notional (shares * exit_price ~ $99k of phantom cash), the
+        # final timeline value would be ~2x initial capital.
+        final_equity = res["portfolio_timeline"].dropna().iloc[-1]
+        assert final_equity < 105_000.0, (
+            f"final equity {final_equity} — phantom notional credited to cash")
+        assert final_equity == pytest.approx(100_000.0 + t["Profit"], rel=0.01)

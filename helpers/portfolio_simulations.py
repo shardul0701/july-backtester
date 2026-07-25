@@ -697,21 +697,31 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     if not prior.empty:
                         exit_price = float(prior.iloc[-1])
 
-            commission = _inst.commission(instruments[symbol], pos['shares'])
-            net_pnl = ((exit_price - pos['entry_price']) * pos['shares']) - (2 * commission)
-            # Realised proceeds return to cash (delisting is a real liquidation).
-            cash += (pos['shares'] * exit_price) - commission
+            _dl_inst = instruments[symbol]
+            commission = _inst.commission(_dl_inst, pos['shares'])
+            if _dl_inst.margin_mode == _inst.INITIAL_MARGIN:
+                # Futures: realise P&L (via $/point) into cash and release reserved
+                # margin — cash never held the notional, so crediting proceeds would
+                # inject phantom capital.
+                gross_pnl = (exit_price - pos['entry_price']) * pos['shares'] * _dl_inst.point_value
+                cash += gross_pnl - commission
+                reserved_margin -= pos.get('margin', 0.0)
+                net_pnl = gross_pnl - (2 * commission)
+            else:
+                net_pnl = ((exit_price - pos['entry_price']) * pos['shares']) - (2 * commission)
+                # Realised proceeds return to cash (delisting is a real liquidation).
+                cash += (pos['shares'] * exit_price) - commission
 
             _initial_sl = pos.get('initial_stop_loss_level')
             if pd.notna(_initial_sl) and _initial_sl > 0 and _initial_sl < pos['entry_price']:
                 _initial_risk_per_share = pos['entry_price'] - _initial_sl
             else:
                 _initial_risk_per_share = pos['entry_price'] * 0.01
-            _r_multiple = (net_pnl / (_initial_risk_per_share * pos['shares'])
+            _r_multiple = (net_pnl / (_initial_risk_per_share * pos['shares'] * _dl_inst.point_value)
                            if _initial_risk_per_share > 0 and pos['shares'] > 0 else None)
 
             trade_counter += 1
-            _pos_value = pos['shares'] * pos['entry_price']
+            _pos_value = _inst.notional(_dl_inst, pos['shares'], pos['entry_price'])
             trade_log.append({
                 'Symbol': symbol, 'Trade': f"Long {trade_counter}",
                 'EntryDate': pos['entry_date'].isoformat(), 'EntryPrice': pos['entry_price'],
@@ -799,7 +809,11 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     mtm_close = sym_df.loc[prior_idx[-1], 'Close'] if len(prior_idx) else np.nan
                 if pd.isna(mtm_close):
                     continue
-                portfolio_timeline.loc[dt] += shares * (exit_price - mtm_close)
+                # x point_value: the daily loop's contribution was $/point-scaled
+                # (unrealized_pnl for futures, market value with pv=1 for equities),
+                # so the replacement delta must scale the same way.
+                portfolio_timeline.loc[dt] += (shares * (exit_price - mtm_close)
+                                               * instruments[symbol].point_value)
 
     duration_list = [t['HoldDuration'] for t in trade_log]
     if exclude_open:

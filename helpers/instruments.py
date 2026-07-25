@@ -168,6 +168,24 @@ def _futures_instrument(symbol: str, config: dict) -> Instrument:
     )
 
 
+def is_futures_data_symbol(symbol: str, config: dict) -> bool:
+    """True when *symbol* should be fetched from a futures **data** endpoint.
+
+    Deliberately narrower than :func:`resolve_instrument`: only an explicit
+    per-symbol override (``asset_class: "future"``) or an unambiguous
+    contract-month code (``ESM6``) routes to the futures API.
+    ``default_asset_class`` is intentionally ignored here — benchmark and
+    dependency tickers (SPY, I:VIX, ...) share the same fetch path as portfolio
+    symbols, and a blanket "future" default must not reroute them to an
+    endpoint that cannot serve them.
+    """
+    inst_cfg = config.get("instruments", {}) or {}
+    override = (inst_cfg.get("overrides", {}) or {}).get(symbol)
+    if override is not None and "asset_class" in override:
+        return override["asset_class"] == FUTURE
+    return _looks_like_futures_contract(symbol)
+
+
 def resolve_instrument(symbol: str, config: dict) -> Instrument:
     """Resolve an :class:`Instrument` for *symbol* from *config*.
 

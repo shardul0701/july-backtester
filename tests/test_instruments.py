@@ -208,3 +208,36 @@ class TestStopLevel:
     def test_none_and_atr_return_none(self):
         assert I.stop_level(self.eq, 100.0, {"type": "none"}) is None
         assert I.stop_level(self.eq, 100.0, {"type": "atr", "multiplier": 3.0}) is None
+
+
+# ---------------------------------------------------------------------------
+# TestIsFuturesDataSymbol — data-endpoint routing predicate
+# ---------------------------------------------------------------------------
+class TestIsFuturesDataSymbol:
+    """Data routing must be narrower than execution-semantics resolution:
+    a blanket default_asset_class="future" must NOT reroute benchmark tickers
+    (SPY, I:VIX) to the futures endpoint — they share the same fetch path."""
+
+    def test_contract_month_code_routes_to_futures(self):
+        assert I.is_futures_data_symbol("ESM6", _CFG) is True
+
+    def test_plain_equity_does_not_route(self):
+        assert I.is_futures_data_symbol("AAPL", _CFG) is False
+
+    def test_benchmark_not_rerouted_by_future_default(self):
+        cfg = {"instruments": {"default_asset_class": "future", "overrides": {}}}
+        # resolve_instrument says "future" (execution semantics honour the default)...
+        assert resolve_instrument("SPY", cfg).asset_class == I.FUTURE
+        # ...but the DATA path must keep SPY / I:VIX on the equities/index endpoint.
+        assert I.is_futures_data_symbol("SPY", cfg) is False
+        assert I.is_futures_data_symbol("I:VIX", cfg) is False
+
+    def test_explicit_override_routes_to_futures(self):
+        cfg = {"instruments": {"default_asset_class": "equity",
+                               "overrides": {"NQ": {"asset_class": "future"}}}}
+        assert I.is_futures_data_symbol("NQ", cfg) is True
+
+    def test_explicit_equity_override_blocks_contract_code(self):
+        cfg = {"instruments": {"default_asset_class": "equity",
+                               "overrides": {"ESM6": {"asset_class": "equity"}}}}
+        assert I.is_futures_data_symbol("ESM6", cfg) is False
