@@ -23,7 +23,18 @@ def get_data_service():
 
     if provider == "polygon":
         logger.info("Using Polygon.io data service.")
-        return get_price_data
+        # Dispatch per symbol: futures contract tickers (e.g. "ESM6") use Polygon's
+        # dedicated /futures endpoint; everything else uses the equities/index aggs
+        # path. Asset class is resolved from the instrument metadata layer.
+        from .futures_service import get_price_data as _futures_fetch
+        from helpers.instruments import resolve_instrument as _resolve
+
+        def _polygon_dispatch(symbol, start_date, end_date, config):
+            if _resolve(symbol, config).asset_class == "future":
+                return _futures_fetch(symbol, start_date, end_date, config)
+            return get_price_data(symbol, start_date, end_date, config)
+
+        return _polygon_dispatch
 
     if provider == "norgate":
         logger.info("Using Norgate data service.")
