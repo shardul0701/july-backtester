@@ -126,6 +126,8 @@ KNOWN_KEYS: set[str] = {
     "intrabar_resolution",
     "intrabar_timeframe",
     "intrabar_multiplier",
+    # Futures maintenance margin
+    "maintenance_margin_pct",
     # SECTION 27: Deterministic Entry Queue
     "entry_priority",
     "entry_random_seed",

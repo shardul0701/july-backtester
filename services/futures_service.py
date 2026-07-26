@@ -36,13 +36,10 @@ logger = logging.getLogger(__name__)
 _BASE = "https://api.polygon.io/futures/v1"
 _LIMIT = 1000
 
-# config timeframe -> Polygon futures resolution string
-_RESOLUTION_MAP = {
-    ("D", 1): "1session",
-    ("H", 1): "1hour",
-    ("H", 4): "4hour",
-    ("MIN", 1): "1min",
-}
+# Polygon futures resolution unit per config timeframe. The multiplier is applied
+# dynamically (e.g. MIN x5 -> "5min", H x4 -> "4hour") so intraday strategies on
+# 5m/15m/45m bars fetch natively instead of pulling 1-min and resampling locally.
+_RESOLUTION_UNIT = {"MIN": "min", "H": "hour"}
 
 
 def _api_key() -> str:
@@ -54,13 +51,15 @@ def _api_key() -> str:
 
 def _resolution(config: dict) -> str:
     tf = str(config.get("timeframe", "D")).upper()
-    mult = int(config.get("timeframe_multiplier", 1))
-    res = _RESOLUTION_MAP.get((tf, mult))
-    if res is None:
-        # Fall back to the base resolution for the timeframe with a warning.
-        res = _RESOLUTION_MAP.get((tf, 1), "1session")
-        logger.warning("No exact futures resolution for %s x%s; using '%s'.", tf, mult, res)
-    return res
+    mult = max(1, int(config.get("timeframe_multiplier", 1)))
+    # Daily bars map to Polygon's session resolution (multiplier ignored).
+    if tf == "D":
+        return "1session"
+    unit = _RESOLUTION_UNIT.get(tf)
+    if unit is None:
+        logger.warning("No futures resolution for timeframe '%s'; defaulting to '1session'.", tf)
+        return "1session"
+    return f"{mult}{unit}"
 
 
 def _paginate(url: str, params: dict) -> list[dict]:

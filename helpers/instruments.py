@@ -311,15 +311,23 @@ def stop_level(inst: Instrument, entry: float, stop_config: dict,
 
 
 def atr_stop_level(reference_price: float, atr: float, multiplier: float,
-                   side: str = "long") -> float:
+                   side: str = "long", point_cap: float | None = None) -> float:
     """ATR stop price: ``ref - atr*mult`` (long) / ``ref + atr*mult`` (short).
 
     Single home for the ATR stop formula that the engine previously duplicated in
     three places (initial stop, trailing update, and risk-parity sizing). ``reference_price``
     is the close the stop is measured from (the signal-day close on entry, the
-    current close while trailing)."""
+    current close while trailing).
+
+    ``point_cap`` (in instrument price points) clips the ATR-derived distance so the
+    stop never sits more than ``point_cap`` points from the reference — i.e.
+    ``distance = min(atr*mult, point_cap)`` per trade. ``None``/``<=0`` disables the cap.
+    """
     sign = -1.0 if side == "long" else 1.0
-    return reference_price + sign * atr * multiplier
+    distance = atr * multiplier
+    if point_cap is not None and point_cap > 0:
+        distance = min(distance, point_cap)
+    return reference_price + sign * distance
 
 
 def atr_stop_distance_pct(atr: float, multiplier: float, price: float) -> float:
