@@ -89,6 +89,48 @@ def _update_trailing_atr_stop(pos, sym_df, date, stop_config, side="long"):
         pos['stop_loss_level'] = candidate if pd.isna(prev) else min(prev, candidate)
 
 
+def _prearm_decision(high, low, stop_level, target, window_bars, side="long"):
+    """Outcome of ONE pre-arm bar for a ``trailing_atr`` position.
+
+    Returns ``("stop", fill)`` | ``("arm", None)`` | ``("hold", None)``:
+
+    - both the initial stop and the arm target sit inside this coarse bar → the
+      order is resolved from finer sub-bar data (``resolve_order_precedence``);
+      with no finer coverage the STOP is assumed first (conservative — the coarse
+      engine's prior behaviour),
+    - only the stop → ``("stop", stop_level)`` (reference parity: the leg1 loop
+      never gap-refines a plain stop-only hit, same convention as the armed
+      leg2 trail — only the both-hit race above consults finer data),
+    - only the target → ``("arm", None)`` (caller arms + seeds the trail),
+    - neither → ``("hold", None)``.
+
+    This is the seam that lets the engine reproduce the reference's leg1 loop,
+    which evaluates the ENTRY bar and resolves same-bar both-hit from 1-minute
+    data. Opt-in: callers only reach it when ``intrabar_resolution`` is on and
+    finer data was supplied.
+    """
+    if pd.isna(stop_level) or target is None:
+        return ("hold", None)
+    if side == "long":
+        hit_s = pd.notna(low) and low <= stop_level
+        hit_t = pd.notna(high) and high >= target
+    else:
+        hit_s = pd.notna(high) and high >= stop_level
+        hit_t = pd.notna(low) and low <= target
+    if hit_s and hit_t:
+        which, fill, _ = _intrabar.resolve_order_precedence(window_bars, stop_level, target, side=side)
+        if which == "target":
+            return ("arm", None)
+        if which == "stop":
+            return ("stop", fill)
+        return ("stop", stop_level)   # no finer coverage -> conservative stop-first
+    if hit_s:
+        return ("stop", stop_level)
+    if hit_t:
+        return ("arm", None)
+    return ("hold", None)
+
+
 def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocation_pct, spy_df, vix_df, tnx_df, stop_config, size_mults=None, delisting_dates=None, intrabar_data=None):
     """
     Runs a portfolio simulation with integrated stop-loss handling and logs
@@ -130,6 +172,104 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
     cumulative_profit = 0.0
 
     prev_trading_dates = { symbol: df.index.to_series().shift(1) for symbol, df in portfolio_data.items() }
+    # Next-bar timestamp per symbol — bounds the sub-bar window of the CURRENT bar
+    # for intrabar resolution ([date, next_date)). For a daily bar this is exactly
+    # the calendar day; for an intraday (e.g. 45-min) bar it is that bar's own span.
+    next_trading_dates = { symbol: df.index.to_series().shift(-1) for symbol, df in portfolio_data.items() }
+
+    def _close_long_now(symbol, pos, exit_date, raw_exit_price, exit_reason):
+        """Close a long position immediately, logging it exactly like the main
+        exit path (helpers.instruments slippage/commission, R-multiple, MAE/MFE).
+
+        Only used by the opt-in entry-bar intrabar-parity check (a same-bar
+        entry+exit — the position never enters ``positions`` at all in that
+        case). The ordinary multi-bar exit path is untouched by this helper.
+        """
+        nonlocal cash, reserved_margin, cumulative_profit, trade_counter
+        trade_df = portfolio_data[symbol].loc[pos['entry_date']:exit_date]
+        mae_pct, mfe_pct = 0.0, 0.0
+        if not trade_df.empty:
+            mae_pct = (trade_df['Low'].min() - pos['entry_price']) / pos['entry_price']
+            mfe_pct = (trade_df['High'].max() - pos['entry_price']) / pos['entry_price']
+        trade_counter += 1
+        exit_price = _inst.apply_slippage(instruments[symbol], raw_exit_price, "sell")
+        exit_impact_bps = 0.0
+        _coeff = CONFIG.get('volume_impact_coeff', 0.0)
+        if _coeff > 0 and 'Volume' in portfolio_data[symbol].columns:
+            _adv = portfolio_data[symbol]['Volume'].rolling(window=20, min_periods=1).mean().get(exit_date, np.nan)
+            if pd.notna(_adv) and _adv > 0:
+                _impact = _coeff * np.sqrt(pos['shares'] / _adv)
+                exit_price = exit_price * (1 - _impact)
+                exit_impact_bps = round(_impact * 10000, 1)
+        _exit_inst = instruments[symbol]
+        commission = _inst.commission(_exit_inst, pos['shares'])
+        if _exit_inst.margin_mode == _inst.INITIAL_MARGIN:
+            gross_pnl = (exit_price - pos['entry_price']) * pos['shares'] * _exit_inst.point_value
+            cash += gross_pnl - commission
+            reserved_margin -= pos.get('margin', 0.0)
+            net_pnl = gross_pnl - (2 * commission)
+        else:
+            cash += (pos['shares'] * exit_price) - commission
+            net_pnl = ((exit_price - pos['entry_price']) * pos['shares']) - (2 * commission)
+        cumulative_profit += net_pnl
+        duration = (exit_date - pos['entry_date']).days
+        position_value = _inst.notional(_exit_inst, pos['shares'], pos['entry_price'])
+        _isl = pos.get('initial_stop_loss_level')
+        if pd.notna(_isl) and _isl > 0 and _isl < pos['entry_price']:
+            _irps = pos['entry_price'] - _isl
+        else:
+            _irps = pos['entry_price'] * 0.01
+        _rm = (net_pnl / (_irps * pos['shares'] * _exit_inst.point_value)
+               if _irps > 0 and pos['shares'] > 0 else None)
+        log_entry = {
+            'Symbol': symbol, 'Trade': f"Long {trade_counter}",
+            'EntryDate': pos['entry_date'].isoformat(), 'EntryPrice': pos['entry_price'],
+            'ExitDate': exit_date.isoformat(), 'ExitPrice': exit_price,
+            'Profit': net_pnl, 'ProfitPct': net_pnl / position_value if position_value > 0 else 0,
+            'Shares': pos['shares'], 'PosSizeMult': pos.get('size_mult', 1.0),
+            'is_win': 1 if net_pnl > 0 else 0, 'HoldDuration': duration,
+            'MAE_pct': mae_pct, 'MFE_pct': mfe_pct, 'ExitReason': exit_reason,
+            'InitialRisk': _irps, 'RMultiple': _rm,
+            'VolumeImpact_bps': round(pos.get('entry_impact_bps', 0.0) + exit_impact_bps, 1),
+        }
+        log_entry.update(pos.get('features', {}))
+        trade_log.append(log_entry)
+
+    def _close_short_now(symbol, spos, exit_date, raw_cover_price, cover_reason):
+        """Cover a short position immediately — mirror of ``_close_long_now``
+        for the opt-in entry-bar intrabar-parity check on the short side."""
+        nonlocal cash, reserved_margin, trade_counter
+        inst_c = instruments[symbol]
+        cover_slip = _inst.apply_slippage(inst_c, raw_cover_price, "buy")
+        commission = _inst.commission(inst_c, spos['shares'])
+        _gross = (spos['shares'] * (spos['entry_price'] - cover_slip)) * inst_c.point_value
+        net_pnl = _gross - (2 * commission) - spos.get('total_borrow_cost', 0.0)
+        cash += _gross - commission
+        if inst_c.margin_mode == _inst.INITIAL_MARGIN:
+            reserved_margin -= spos.get('margin', 0.0)
+        trade_counter += 1
+        short_trade_df = portfolio_data[symbol].loc[spos['entry_date']:exit_date]
+        if not short_trade_df.empty:
+            _ep = spos['entry_price']
+            short_mfe = (_ep - short_trade_df['Low'].min()) / _ep
+            short_mae = (short_trade_df['High'].max() - _ep) / _ep
+        else:
+            short_mfe, short_mae = 0.0, 0.0
+        _s_ir = spos.get('initial_risk')
+        _s_rm = (net_pnl / (_s_ir * spos['shares'] * inst_c.point_value)
+                 if _s_ir and _s_ir > 0 and spos['shares'] > 0 else None)
+        trade_log.append({
+            'Symbol': symbol, 'Trade': f"Short {trade_counter}",
+            'EntryDate': spos['entry_date'].isoformat(), 'EntryPrice': spos['entry_price'],
+            'ExitDate': exit_date.isoformat(), 'ExitPrice': cover_slip,
+            'Profit': net_pnl, 'ProfitPct': net_pnl / spos['notional'] if spos['notional'] > 0 else 0,
+            'Shares': spos['shares'], 'is_win': 1 if net_pnl > 0 else 0,
+            'HoldDuration': (exit_date - spos['entry_date']).days,
+            'MAE_pct': short_mae, 'MFE_pct': short_mfe,
+            'ExitReason': cover_reason,
+            'InitialRisk': _s_ir if (_s_ir and _s_ir > 0) else 0.0,
+            'RMultiple': _s_rm,
+        })
 
     def _pit_flag(symbol, date, column, default):
         df = portfolio_data[symbol]
@@ -194,15 +334,40 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
             if (pd.isna(raw_exit_price) and stop_config.get("type") != "none"
                     and pd.notna(pos.get('stop_loss_level'))):
                 current_low = portfolio_data[symbol].loc[date].get('Low')
-                if pd.notna(current_low) and current_low <= pos['stop_loss_level']:
+                # Pre-arm both-hit resolution (opt-in): while a trailing_atr position
+                # hasn't armed yet, a bar that touches BOTH the initial stop and the
+                # arm target is ambiguous on daily/coarse OHLC alone. Resolve the
+                # ordering from finer-resolution sub-bars — reproducing the reference
+                # mechanic's leg1 loop — instead of always assuming the stop won.
+                if (stop_config.get("type") == "trailing_atr" and _intrabar_on
+                        and not pos.get('trail_armed', False) and pos.get('trail_target') is not None):
+                    current_high = portfolio_data[symbol].loc[date].get('High')
+                    _wbars = _intrabar.window_bars(intrabar_data.get(symbol), date,
+                                                   next_trading_dates[symbol].get(date))
+                    _decision, _fill = _prearm_decision(
+                        current_high, current_low, pos['stop_loss_level'], pos['trail_target'],
+                        _wbars, side="long")
+                    if _decision == "stop":
+                        raw_exit_price = _fill
+                        exit_date = date
+                        exit_reason = f"Stop Loss ({stop_config['type']})"
+                    # "arm" / "hold": leave raw_exit_price NaN — the TRAIL block below
+                    # calls _update_trailing_atr_stop, which arms + seeds off THIS same
+                    # bar's High when the target was reached (idempotent on "hold").
+                elif pd.notna(current_low) and current_low <= pos['stop_loss_level']:
                     raw_exit_price = pos['stop_loss_level']
                     exit_date = date
                     exit_reason = f"Stop Loss ({stop_config['type']})"
                     # Sub-bar resolution: refine the fill from finer-resolution bars
                     # when enabled + available — a gap through the stop fills at the
                     # (worse) sub-bar open rather than optimistically at the stop.
-                    if _intrabar_on and symbol in intrabar_data:
-                        _day_bars = _intrabar.session_bars(intrabar_data[symbol], date)
+                    # Skipped once an ATR trail has armed: the reference trailing
+                    # mechanic (Sleeve A leg2) always fills at the exact trail level,
+                    # gap or not — gap-refinement there would diverge from parity.
+                    if (_intrabar_on and symbol in intrabar_data
+                            and not (stop_config.get("type") == "trailing_atr" and pos.get('trail_armed', False))):
+                        _day_bars = _intrabar.window_bars(intrabar_data[symbol], date,
+                                                          next_trading_dates[symbol].get(date))
                         _fill, _ = _intrabar.resolve_stop_fill(_day_bars, pos['stop_loss_level'], side="long")
                         if _fill is not None:
                             raw_exit_price = _fill
@@ -400,9 +565,34 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
             if (pd.isna(cover_raw) and stop_config.get("type") != "none"
                     and pd.notna(spos.get('stop_loss_level'))):
                 cur_high = row.get('High')
-                if pd.notna(cur_high) and cur_high >= spos['stop_loss_level']:
+                # Pre-arm both-hit resolution (opt-in, mirror of the long side): while
+                # not yet armed, a bar touching both the initial stop and the arm
+                # target is resolved from finer sub-bars instead of assumed-stop.
+                if (stop_config.get("type") == "trailing_atr" and _intrabar_on
+                        and not spos.get('trail_armed', False) and spos.get('trail_target') is not None):
+                    cur_low = row.get('Low')
+                    _wbars = _intrabar.window_bars(intrabar_data.get(symbol), date,
+                                                   next_trading_dates[symbol].get(date))
+                    _decision, _fill = _prearm_decision(
+                        cur_high, cur_low, spos['stop_loss_level'], spos['trail_target'],
+                        _wbars, side="short")
+                    if _decision == "stop":
+                        cover_raw = _fill
+                        cover_reason = f"Stop Loss ({stop_config['type']})"
+                    # "arm" / "hold": leave cover_raw NaN — the trail-update below arms
+                    # + seeds off THIS same bar's Low when the target was reached.
+                elif pd.notna(cur_high) and cur_high >= spos['stop_loss_level']:
                     cover_raw = spos['stop_loss_level']
                     cover_reason = f"Stop Loss ({stop_config['type']})"
+                    # See mirrored long-side comment: skip gap-refinement once the ATR
+                    # trail has armed, matching the reference's exact-level trail fill.
+                    if (_intrabar_on and symbol in intrabar_data
+                            and not (stop_config.get("type") == "trailing_atr" and spos.get('trail_armed', False))):
+                        _day_bars = _intrabar.window_bars(intrabar_data[symbol], date,
+                                                          next_trading_dates[symbol].get(date))
+                        _fill, _ = _intrabar.resolve_stop_fill(_day_bars, spos['stop_loss_level'], side="short")
+                        if _fill is not None:
+                            cover_raw = _fill
 
             # MAINTENANCE MARGIN / MARGIN CALL (futures short)
             if pd.isna(cover_raw):
@@ -572,6 +762,23 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         'trail_target': _s_target, 'atr_locked': _s_atr,
                         'trail_armed': False, 'initial_risk': _s_ir,
                     }
+
+                # --- ENTRY-BAR EVALUATION (opt-in, mirror of the long entry-bar check) ---
+                if (_intrabar_on and stop_config.get("type") == "trailing_atr"
+                        and short_positions[symbol].get('trail_target') is not None):
+                    _spos0 = short_positions[symbol]
+                    _hi0 = df.loc[date].get('High')
+                    _lo0 = df.loc[date].get('Low')
+                    _wbars0 = _intrabar.window_bars(intrabar_data.get(symbol), date,
+                                                    next_trading_dates[symbol].get(date))
+                    _dec0, _fill0 = _prearm_decision(
+                        _hi0, _lo0, _spos0['stop_loss_level'], _spos0['trail_target'],
+                        _wbars0, side="short")
+                    if _dec0 == "stop":
+                        _close_short_now(symbol, _spos0, date, _fill0, f"Stop Loss ({stop_config['type']})")
+                        del short_positions[symbol]
+                    else:
+                        _update_trailing_atr_stop(_spos0, df, date, stop_config, side="short")
 
         # --- POSITION ENTRY LOGIC ---
         if _priority == "signal_date":
@@ -854,6 +1061,32 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         cash -= commission_cost
                     else:
                         cash -= total_cost
+
+                    # --- ENTRY-BAR EVALUATION (opt-in, trailing_atr + intrabar_resolution) ---
+                    # The reference Sleeve A mechanic checks the stop/target starting ON
+                    # the entry bar itself (leg1 loop is `range(entry_i, cap+1)`), but the
+                    # position-management loop above only re-checks `positions` starting
+                    # the NEXT date. Reproduce the entry-bar check here: if the entry bar's
+                    # own High/Low already resolves the stop or the arm target, apply it
+                    # immediately instead of silently deferring to the next bar.
+                    if (_intrabar_on and stop_config.get("type") == "trailing_atr"
+                            and positions[symbol].get('trail_target') is not None):
+                        _pos0 = positions[symbol]
+                        _hi0 = df.loc[date].get('High')
+                        _lo0 = df.loc[date].get('Low')
+                        _wbars0 = _intrabar.window_bars(intrabar_data.get(symbol), date,
+                                                        next_trading_dates[symbol].get(date))
+                        _dec0, _fill0 = _prearm_decision(
+                            _hi0, _lo0, _pos0['stop_loss_level'], _pos0['trail_target'],
+                            _wbars0, side="long")
+                        if _dec0 == "stop":
+                            _close_long_now(symbol, _pos0, date, _fill0, f"Stop Loss ({stop_config['type']})")
+                            del positions[symbol]
+                        else:
+                            # "arm" / "hold": _update_trailing_atr_stop arms + seeds off
+                            # THIS bar's High when the target was already reached (no-op
+                            # otherwise), matching the reference's same-bar arm.
+                            _update_trailing_atr_stop(_pos0, df, date, stop_config, side="long")
 
     exclude_open = CONFIG.get('exclude_open_positions', False)
 
