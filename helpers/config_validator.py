@@ -93,6 +93,8 @@ KNOWN_KEYS: set[str] = {
     # SECTION 18: MC Sampling
     "mc_sampling",
     "mc_block_size",
+    # SECTION 18b: Smoothness verdict profile
+    "smoothness_profile",
     # SECTION 19: Volume Impact
     "volume_impact_coeff",
     # SECTION 20: ML Export

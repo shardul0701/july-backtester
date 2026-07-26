@@ -88,6 +88,7 @@ scripts/debug_data.py              # Compares Polygon vs Yahoo SPY data; run wit
 "htb_rate_annual": 0.02          # annual hard-to-borrow rate debited daily on short positions
 "mc_sampling": "iid"             # "iid" = independent resampling; "block" = block-bootstrap
 "mc_block_size": None            # block size for block-bootstrap; None = auto floor(sqrt(N))
+"smoothness_profile": "auto"     # smoothness-verdict thresholds: "auto"|"equity"|"concentrated_futures"
 "volume_impact_coeff": 0.0       # square-root market impact coefficient; 0.0 = disabled
 ```
 
@@ -490,6 +491,25 @@ Controlled by two config keys (SECTION 18):
 - **Circular wrap**: blocks that extend past the end of the trade list wrap around — no trades are omitted and edge blocks are not under-represented.
 - **No caller changes**: `run_monte_carlo_simulation` signature is unchanged. The refactor extracted a `_equity_and_drawdown` helper used by both branches.
 - **Tests**: `tests/test_mc_block_bootstrap.py` — 9 tests: config defaults, output shapes, auto block size resolution, streak divergence (>1% std difference), small trade guard, i.i.d. seed match, and no-key default.
+
+## Smoothness Verdict Profiles (asset-class-aware)
+
+The curve-smoothness verdict (`compute_smoothness` in `helpers/llm_verdict.py`) grades an equity curve **SMOOTH / ACCEPTABLE / ROUGH** by counting how many of five failure conditions trip. Those five thresholds were originally hard-coded constants chosen for a steadily-compounding, many-name **equity** book. A concentrated, event-driven strategy (e.g. a single-instrument futures breakout sleeve — one instrument, long dead stretches between edges, risk-based sizing producing occasional big months) structurally trips `plateau >= 12` and `upthrust > 2` **when working exactly as intended** — that is what its curve looks like, not instability. Judging it against equity-book thresholds mislabels correct behaviour as ROUGH.
+
+**`helpers/smoothness_profiles.py`** — pure, stateless module making the thresholds a named **profile**:
+
+- `SMOOTHNESS_PROFILES` — `"equity"` (default; the legacy constants **byte-for-byte**) and `"concentrated_futures"` (looser: `r2_min` 0.70, `positive_months_min` 45, `longest_flat_max` 24, `upthrust_max` 6, `worst_month_min` -20).
+- `get_thresholds(profile)` — `None` → equity defaults (no-regression); a name → that profile (unknown → equity + `[WARNING]`); a `dict` → partial/full override merged over equity defaults.
+- `resolve_profile_name(symbols, config)` — precedence: (1) explicit `config["smoothness_profile"]` if not `"auto"`; (2) `"auto"` → derive from the portfolio's instrument **asset class** via `resolve_instrument` (all symbols futures → `concentrated_futures`, else `equity`); (3) `equity` fallback.
+- `mc_sampling_caveat(mc_verdict, profile, mc_sampling)` — reporting-layer note folding in the MC **"DD Understated"** flag: fires only for a non-equity profile with a "DD Understated" verdict under `mc_sampling="iid"`, recommending `mc_sampling="block"` (block-bootstrap preserves the streak clustering these strategies live on). **Never touches `helpers/monte_carlo.py` or the MC score.**
+
+**Config**: `smoothness_profile` (SECTION 18b, default `"auto"`) — `"auto"` | `"equity"` | `"concentrated_futures"`.
+
+**Wiring**: `compute_smoothness(timeline, profile=None)` gains an optional profile (None = byte-identical equity default) and echoes the applied profile back in the `"profile"` result key. The worker (`main.py::run_single_simulation`) resolves the profile from `portfolio_data` symbols + `CONFIG`, stores `result["smoothness_profile"]` and (when applicable) `result["mc_sampling_note"]`, and passes the profile to `compute_smoothness`. The verdict is surfaced with its profile tag in **all** existing surfaces: `llm_verdict.json` (`smoothness_profile` + `curve_smoothness.profile` + `mc_sampling_note`), the terminal STRATEGY VERDICTS block (`helpers/verdict_format.py`), the PDF tearsheet (`trade_analyzer/report_generator.py`), and the verbose summary tables (`helpers/summary.py` — new `Smooth Prof.` column, short name `Prof`).
+
+**No-regression guarantee**: default runs (`smoothness_profile="auto"` with equity portfolios, or `profile=None`) produce the exact legacy grades — `smooth_verdict` stays the raw `SMOOTH/ACCEPTABLE/ROUGH` string.
+
+**Tests**: `tests/test_smoothness_profiles.py` — profile thresholds, dict-override merge, `resolve_profile_name` (explicit/auto/mixed/empty), byte-identical equity default, looser-profile-never-adds-failures invariant, and the MC caveat gating.
 
 ## Recovery Time
 
