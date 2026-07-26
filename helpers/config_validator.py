@@ -171,6 +171,20 @@ def validate_config(config: dict) -> list[str]:
             warnings.append(msg)
             logger.warning(msg)
 
+    # Value-level check for the smoothness_profile enum: a typo here would
+    # otherwise degrade silently to the equity profile at run time. The valid
+    # set is derived from the profile registry so new profiles auto-extend it.
+    sp = config.get("smoothness_profile")
+    if sp is not None and not isinstance(sp, dict):
+        from helpers.smoothness_profiles import SMOOTHNESS_PROFILES, AUTO
+        valid = {AUTO, *SMOOTHNESS_PROFILES.keys()}
+        if str(sp).lower() not in valid:
+            options = "', '".join(sorted(valid))
+            msg = (f"WARNING: smoothness_profile '{sp}' is not a known profile "
+                   f"(expected one of '{options}') -- will fall back to the equity profile")
+            warnings.append(msg)
+            logger.warning(msg)
+
     return warnings
 
 

@@ -158,6 +158,27 @@ class TestComputeSmoothnessProfileParam:
         assert compute_smoothness(c, loose)["smooth_verdict"] == "SMOOTH"
 
 
+class TestConfigValidation:
+    def test_valid_profile_values_pass(self):
+        from helpers.config_validator import validate_config
+        for val in ("auto", "equity", "concentrated_futures", "AUTO", "Equity"):
+            assert validate_config({"smoothness_profile": val}) == []
+
+    def test_unknown_profile_value_warns(self):
+        from helpers.config_validator import validate_config
+        warnings = validate_config({"smoothness_profile": "concentraded_futures"})
+        assert any("smoothness_profile" in w and "not a known profile" in w for w in warnings)
+
+    def test_dict_profile_not_value_checked(self):
+        from helpers.config_validator import validate_config
+        # A dict override is a legitimate value and must not trip the enum check.
+        assert validate_config({"smoothness_profile": {"r2_min": 0.5}}) == []
+
+    def test_missing_profile_key_is_silent(self):
+        from helpers.config_validator import validate_config
+        assert validate_config({}) == []
+
+
 class TestMcSamplingCaveat:
     def test_fires_for_concentrated_iid_dd_understated(self):
         note = mc_sampling_caveat("DD Understated", CONCENTRATED_FUTURES, "iid")
