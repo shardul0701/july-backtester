@@ -23,6 +23,12 @@ import orjson
 from helpers.caching import CACHE_DIR
 from helpers.noise import inject_price_noise
 
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except AttributeError:
+    pass
+
 logger = logging.getLogger(__name__)
 
 
@@ -76,7 +82,41 @@ def _build_intrabar_data(portfolio_data, config):
     data; symbols that can't (or error) are omitted and the engine simply no-ops for
     them. Heavy and provider/plan-limited, so only called when ``intrabar_resolution``
     is enabled. Uses ``intrabar_timeframe`` / ``intrabar_multiplier`` (default MIN/1).
+
+    If ``intrabar_parquet_source`` is set, bypasses the normal per-symbol data-provider
+    fetch entirely and instead loads one 1-minute OHLC parquet file directly, applying
+    it to every symbol in the portfolio. This is for single-symbol research (e.g. the
+    Sleeve A NQ reconciliation) where the CSV provider has no notion of timeframe (it
+    always re-reads the same daily-bar file regardless of `timeframe`/`timeframe_multiplier`)
+    and the real sub-minute source lives outside `csv_data_dir` as a parquet file.
     """
+    parquet_source = config.get("intrabar_parquet_source")
+    if parquet_source:
+        try:
+            raw = pd.read_parquet(parquet_source).sort_index()
+            idx = raw.index
+            idx_naive = idx.tz_localize(None) if getattr(idx, "tz", None) is not None else idx
+            idf = pd.DataFrame({
+                "Open": raw["open"].to_numpy(), "High": raw["high"].to_numpy(),
+                "Low": raw["low"].to_numpy(), "Close": raw["close"].to_numpy(),
+            }, index=idx_naive)
+            idf.index.name = "Datetime"
+        except Exception as e:
+            # Covers read failures AND a mismatched column schema (e.g. "Open"
+            # instead of "open") -- both are non-fatal here: the caller treats
+            # an empty dict as "no intrabar data available" and no-ops.
+            logger.warning(f"  -> intrabar_parquet_source failed to load '{parquet_source}': {e}")
+            return {}
+        out = {symbol: idf for symbol in portfolio_data}
+        if len(portfolio_data) > 1:
+            logger.warning(
+                f"  -> intrabar_parquet_source applies the SAME single-symbol parquet file "
+                f"to all {len(portfolio_data)} symbols in this portfolio ({len(portfolio_data)} "
+                f"symbols); this path is intended for single-symbol research runs only.")
+        logger.info(f"  -> Sub-bar resolution: loaded 1-min parquet source ({len(idf)} rows) "
+                    f"for {len(out)} symbol(s)")
+        return out
+
     tf = config.get("intrabar_timeframe", "MIN")
     mult = config.get("intrabar_multiplier", 1)
     intra_cfg = {**config, "timeframe": tf, "timeframe_multiplier": mult}
@@ -402,7 +442,7 @@ def main():
         format="%(asctime)s [%(levelname)s] %(message)s",
         handlers=[
             logging.StreamHandler(),
-            logging.FileHandler(os.path.join(run_base_dir, "logs", f"run_{timestamp}.log")),
+            logging.FileHandler(os.path.join(run_base_dir, "logs", f"run_{timestamp}.log"), encoding="utf-8"),
         ],
     )
 
@@ -829,8 +869,9 @@ def main():
 
         # --- Create a NEW Pool initialized with THIS portfolio's data ---
         logger.info("=" * 15 + f" RUNNING SIMULATIONS FOR '{portfolio_name}' " + "=" * 15)
-        logger.info(f"Found {len(tasks_for_this_portfolio)} tasks. Using up to {cpu_count()} CPU cores.")
-        
+        _n_workers = min(cpu_count(), len(tasks_for_this_portfolio))
+        logger.info(f"Found {len(tasks_for_this_portfolio)} tasks. Using up to {_n_workers} CPU cores.")
+
         # Sub-bar resolution: fetch intraday data per symbol only when enabled.
         _intrabar_data = (_build_intrabar_data(portfolio_data, CONFIG)
                           if CONFIG.get("intrabar_resolution", False) else None)
@@ -839,7 +880,14 @@ def main():
         # optional intraday data during initialization
         init_args = (comparison_dfs, benchmark_returns, comparison_config["dependencies"], portfolio_data, delisting_dates, _pit_member_masks, _intrabar_data)
 
-        with Pool(processes=cpu_count(), initializer=init_worker, initargs=init_args) as p:
+        # _n_workers caps at the actual task count (not always cpu_count()): with
+        # intrabar_resolution on, each worker gets its own pickled copy of the full
+        # 1-minute intrabar dataframe (5M+ rows) at spawn time via initargs. On a
+        # memory-constrained Windows box, spawning idle extra workers that only
+        # duplicate that payload without doing any work has been observed to trigger
+        # an intermittent `OSError: [Errno 22] Invalid argument` from
+        # multiprocessing's spawn pickling (a low-memory condition, not a task bug).
+        with Pool(processes=_n_workers, initializer=init_worker, initargs=init_args) as p:
             import time as _time
             _results = []
             _start_pool = _time.monotonic()

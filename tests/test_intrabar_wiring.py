@@ -56,6 +56,36 @@ class TestBuildIntrabarData:
         out = main._build_intrabar_data({"AAA": None}, {"start_date": "a", "end_date": "b"})
         assert out == {}
 
+    def test_parquet_source_bad_columns_warns_and_returns_empty(self, tmp_path):
+        # Wrongly-cased columns ("Open" instead of "open") must not crash with an
+        # unhandled KeyError -- the column access now sits inside the same
+        # try/except as the read call, so a schema mismatch is treated like any
+        # other load failure: warn and return {} (#238 review item #4).
+        p = tmp_path / "bad_intrabar.parquet"
+        idx = pd.to_datetime(["2023-01-03 09:30", "2023-01-03 09:31"])
+        pd.DataFrame({"Open": [1.0, 1.0], "High": [1.0, 1.0], "Low": [1.0, 1.0],
+                      "Close": [1.0, 1.0]}, index=idx).to_parquet(p)
+        out = main._build_intrabar_data(
+            {"AAA": None},
+            {"start_date": "a", "end_date": "b", "intrabar_parquet_source": str(p)},
+        )
+        assert out == {}
+
+    def test_parquet_source_applies_same_file_to_every_symbol(self, tmp_path):
+        # intrabar_parquet_source is documented as single-symbol research only;
+        # confirm the (correct-schema) happy path still applies the one parquet
+        # file to every symbol in a multi-symbol portfolio.
+        p = tmp_path / "good_intrabar.parquet"
+        idx = pd.to_datetime(["2023-01-03 09:30", "2023-01-03 09:31"])
+        pd.DataFrame({"open": [1.0, 1.0], "high": [1.0, 1.0], "low": [1.0, 1.0],
+                      "close": [1.0, 1.0]}, index=idx).to_parquet(p)
+        out = main._build_intrabar_data(
+            {"AAA": None, "BBB": None},
+            {"start_date": "a", "end_date": "b", "intrabar_parquet_source": str(p)},
+        )
+        assert set(out) == {"AAA", "BBB"}
+        assert out["AAA"] is out["BBB"]  # same single-symbol DataFrame object reused
+
 
 class TestWorkerGlobals:
     def test_init_worker_sets_intrabar_global(self):

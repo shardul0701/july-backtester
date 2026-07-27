@@ -48,7 +48,11 @@ def _update_trailing_atr_stop(pos, sym_df, date, stop_config, side="long"):
         return
     row = sym_df.loc[date]
     trail_mult = stop_config.get("trail_mult", 1.0)
-    entry = pos['entry_price']
+    # Breakeven floor anchors to the RAW pre-slippage entry (matches the
+    # reference mechanic's `entry_price`, the unslipped bar Open) -- not the
+    # slipped fill stored in pos['entry_price'], which would shift the floor
+    # by the slippage amount.
+    entry = pos.get('raw_entry_price', pos['entry_price'])
     floor = stop_config.get("floor")
 
     if side == "long":
@@ -270,6 +274,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
             'InitialRisk': _s_ir if (_s_ir and _s_ir > 0) else 0.0,
             'RMultiple': _s_rm,
         })
+        trade_log[-1].update(spos.get('features', {}))
 
     def _pit_flag(symbol, date, column, default):
         df = portfolio_data[symbol]
@@ -659,6 +664,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                 'InitialRisk': _s_ir if (_s_ir and _s_ir > 0) else 0.0,
                 'RMultiple': _s_rm,
             })
+            trade_log[-1].update(spos.get('features', {}))
             short_exited.append(symbol)
         for symbol in short_exited:
             del short_positions[symbol]
@@ -724,28 +730,73 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                             _s_target = ep - _eff * (_t1 / _sm)
                 _s_ir = float(_s_stop - ep) if (pd.notna(_s_stop) and _s_stop > ep) else None
 
+                # --- CAPTURE FEATURES AT ENTRY (mirror of the long entry block) ---
+                _s_features = {}
+                try:
+                    _s_features['entry_RSI_14'] = df.loc[date, 'RSI_14']
+                    _s_features['entry_ATR_14_pct'] = df.loc[date, 'ATR_14_pct']
+                    _s_features['entry_SMA200_dist_pct'] = df.loc[date, 'SMA200_dist_pct']
+                    _s_features['entry_Volume_Spike'] = df.loc[date, 'Volume_Spike']
+                    if spy_df is not None:
+                        _s_features['entry_SPY_RSI_14'] = spy_df.loc[date, 'RSI_14']
+                        _s_features['entry_SPY_SMA200_dist_pct'] = spy_df.loc[date, 'SMA200_dist_pct']
+                    if vix_df is not None:
+                        _s_features['entry_VIX_Close'] = vix_df.loc[date, 'Close']
+                    if tnx_df is not None:
+                        _s_features['entry_TNX_Close'] = tnx_df.loc[date, 'Close']
+                except KeyError:
+                    pass
+
                 if inst_se.margin_mode == _inst.INITIAL_MARGIN:
                     # Futures short: integer contracts, reserve initial margin, pay commission.
+                    # Short-sale fill is unfavourable (lower), mirroring the long-side "buy"
+                    # slippage above. `ep` stays the RAW anchor for the stop/target levels
+                    # already computed from it (_s_stop/_s_target); this slipped price is
+                    # only the realized fill used for margin/notional/P&L accounting.
+                    _s_entry_fill = _inst.apply_slippage(inst_se, ep, "sell")
                     _free = cash - reserved_margin
-                    alloc = min(total_equity * allocation_pct, _free)
-                    if alloc <= 0:
-                        continue
-                    shares = _inst.round_units(inst_se, alloc / (ep * inst_se.point_value))
+                    _s_sizing_method = CONFIG.get('position_sizing_method', 'fixed')
+                    if _s_sizing_method == "risk_pct_capped":
+                        # Mirror of the long-side risk_pct_capped branch. _s_ir
+                        # (initial risk in points) is already computed above,
+                        # before this dispatch -- unlike the long path, the
+                        # short path sets its stop before sizing.
+                        if _s_ir and _s_ir > 0:
+                            _risk_budget = max(total_equity, 0.0) * CONFIG.get("risk_pct_per_trade", 0.01)
+                            _raw_contracts = np.floor(_risk_budget / (_s_ir * inst_se.point_value))
+                            _cap = CONFIG.get("max_contracts_cap", 20)
+                            shares = max(0.0, min(_raw_contracts, _cap))
+                        else:
+                            shares = 0.0
+                    elif _s_sizing_method == "fixed_contracts":
+                        # Mirror of the long-side fixed_contracts branch: a fixed
+                        # contract count every trade, never equity-scaled.
+                        shares = float(CONFIG.get("fixed_contracts_per_trade", 1))
+                    else:
+                        alloc = min(total_equity * allocation_pct, _free)
+                        if alloc <= 0:
+                            continue
+                        # Size off margin capacity, not full notional (mirror of the long-side
+                        # fix): dividing the target dollar amount by point_value treats it as
+                        # unlevered notional, which for a leveraged futures contract eventually
+                        # floors to 0 contracts forever as price appreciates.
+                        _s_per_contract_margin = _inst.margin_required(inst_se, 1, ep)
+                        shares = _inst.round_units(inst_se, alloc / _s_per_contract_margin) if _s_per_contract_margin > 0 else 0.0
                     if shares < 1:
                         continue
-                    _s_margin = _inst.margin_required(inst_se, shares, ep)
+                    _s_margin = _inst.margin_required(inst_se, shares, _s_entry_fill)
                     commission = _inst.commission(inst_se, shares)
                     if _s_margin + commission > cash - reserved_margin:
                         continue
                     reserved_margin += _s_margin
                     cash -= commission
                     short_positions[symbol] = {
-                        'entry_date': date, 'entry_price': ep,
-                        'shares': shares, 'notional': _inst.notional(inst_se, shares, ep),
+                        'entry_date': date, 'entry_price': _s_entry_fill, 'raw_entry_price': ep,
+                        'shares': shares, 'notional': _inst.notional(inst_se, shares, _s_entry_fill),
                         'total_borrow_cost': 0.0, 'margin': _s_margin,
                         'stop_loss_level': _s_stop, 'initial_stop_loss_level': _s_stop,
                         'trail_target': _s_target, 'atr_locked': _s_atr,
-                        'trail_armed': False, 'initial_risk': _s_ir,
+                        'trail_armed': False, 'initial_risk': _s_ir, 'features': _s_features,
                     }
                 else:
                     alloc = min(total_equity * allocation_pct, cash)
@@ -760,7 +811,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         'margin': 0.0,
                         'stop_loss_level': _s_stop, 'initial_stop_loss_level': _s_stop,
                         'trail_target': _s_target, 'atr_locked': _s_atr,
-                        'trail_armed': False, 'initial_risk': _s_ir,
+                        'trail_armed': False, 'initial_risk': _s_ir, 'features': _s_features,
                     }
 
                 # --- ENTRY-BAR EVALUATION (opt-in, mirror of the long entry-bar check) ---
@@ -861,25 +912,107 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                 # Slice to current date to prevent look-ahead bias: vol_parity and
                 # risk_parity use .iloc[-1] on the passed DataFrame, so passing the
                 # full history would use a future ATR value on early simulation dates.
-                shares = calculate_position_size(
-                    method=sizing_method,
-                    equity=total_equity,
-                    price=entry_price,
-                    symbol_data=df.loc[:date],
-                    config=CONFIG,
-                    allocation_pct=allocation_pct,  # honour the caller's allocation, not CONFIG only
-                    **sizing_kwargs
-                )
-
-                # Apply the per-signal size multiplier (entry-queue / ML band)
-                # to the sized position before the heat check.
-                shares = shares * _size_mult
-
                 inst = instruments[symbol]
-                # Futures size in contracts: the sizing methods return a dollar-notional
-                # based size; dividing out $/point converts it to contracts (pv=1 for equities).
-                if inst.point_value != 1.0:
-                    shares = shares / inst.point_value
+                if sizing_method == "risk_pct_capped":
+                    # Compounding risk-percent sizing: risk risk_pct_per_trade of
+                    # CURRENT (compounding) equity per trade, contracts = floor(
+                    # risk_budget / (stop_dist_pts * point_value)), hard-capped at
+                    # max_contracts_cap. This compounds with account growth --
+                    # unlike fixed_contracts, which never scales.
+                    _rp_stop_dist_pts = None
+                    _stype_sz = stop_config.get("type", "none")
+                    if _stype_sz == "trailing_atr":
+                        _dbe_sz = prev_trading_dates[symbol].get(entry_exec_date)
+                        if pd.notna(_dbe_sz) and _dbe_sz in df.index:
+                            _atr_sz = df.loc[_dbe_sz].get('ATR_14')
+                            if pd.notna(_atr_sz):
+                                _eff_sz = float(_atr_sz) * stop_config.get("stop_mult", 1.0)
+                                _pc_sz = stop_config.get("point_cap")
+                                if _pc_sz is not None and _pc_sz > 0:
+                                    _eff_sz = min(_eff_sz, _pc_sz)
+                                _rp_stop_dist_pts = _eff_sz
+                    elif _stype_sz == "percentage":
+                        # Use the RAW pre-slippage price for consistency with the
+                        # stop-level anchor computed later in this function for
+                        # the same stop type -- using the slipped entry_price here
+                        # would size against a slightly different (shrunk) stop
+                        # distance than the one the position is actually stopped at.
+                        _rp_stop_dist_pts = stop_config.get("value", 0.05) * raw_entry_price
+                    elif _stype_sz == "atr":
+                        _dbe_sz = prev_trading_dates[symbol].get(entry_exec_date)
+                        if pd.notna(_dbe_sz) and _dbe_sz in df.index:
+                            _atr_sz = df.loc[_dbe_sz].get('ATR_14')
+                            if pd.notna(_atr_sz):
+                                _eff_sz = float(_atr_sz) * stop_config.get("multiplier", 3.0)
+                                _pc_sz = stop_config.get("point_cap")
+                                if _pc_sz is not None and _pc_sz > 0:
+                                    _eff_sz = min(_eff_sz, _pc_sz)
+                                _rp_stop_dist_pts = _eff_sz
+
+                    if _rp_stop_dist_pts and _rp_stop_dist_pts > 0:
+                        _risk_budget = max(total_equity, 0.0) * CONFIG.get("risk_pct_per_trade", 0.01)
+                        _raw_contracts = np.floor(_risk_budget / (_rp_stop_dist_pts * inst.point_value))
+                        _cap = CONFIG.get("max_contracts_cap", 20)
+                        shares = max(0.0, min(_raw_contracts, _cap)) * _size_mult
+                        # The portfolio heat check below falls back to the flat
+                        # target_risk_per_trade (2%) proxy when stop_distance_pct is
+                        # absent from sizing_kwargs. For risk_pct_capped the position
+                        # was already sized to risk exactly risk_pct_per_trade (1%) of
+                        # equity via the REAL stop distance -- which is typically much
+                        # smaller than 2% of price for this strategy (point_cap=60 on
+                        # a multi-thousand-point index is a small fraction). Passing the
+                        # flat 2% proxy instead of the true stop_dist_pts/entry_price
+                        # fraction overstates dollar risk on every trade (by ~10-15x
+                        # observed), so check_portfolio_heat() spuriously rejects
+                        # already-correctly-risk-capped trades once notional grows
+                        # large relative to equity. Populate the real fraction so the
+                        # heat check evaluates the position's actual risk. Divide by
+                        # raw_entry_price (not the slipped entry_price) to match the
+                        # anchor _rp_stop_dist_pts was computed against above.
+                        sizing_kwargs["stop_distance_pct"] = _rp_stop_dist_pts / raw_entry_price
+                    else:
+                        shares = 0.0
+                elif sizing_method == "fixed_contracts":
+                    # Fixed contract-count sizing: EXACTLY N contracts every
+                    # trade, forever -- never scaled to equity. This is already
+                    # a contract count, not a dollar-notional target, so it
+                    # bypasses calculate_position_size and the point_value/
+                    # margin conversion below entirely.
+                    shares = float(CONFIG.get("fixed_contracts_per_trade", 1)) * _size_mult
+                else:
+                    shares = calculate_position_size(
+                        method=sizing_method,
+                        equity=total_equity,
+                        price=entry_price,
+                        symbol_data=df.loc[:date],
+                        config=CONFIG,
+                        allocation_pct=allocation_pct,  # honour the caller's allocation, not CONFIG only
+                        **sizing_kwargs
+                    )
+
+                    # Apply the per-signal size multiplier (entry-queue / ML band)
+                    # to the sized position before the heat check.
+                    shares = shares * _size_mult
+
+                    # Futures size in contracts: the sizing methods return a dollar-notional
+                    # based size; dividing out $/point converts it to contracts (pv=1 for equities).
+                    if inst.margin_mode == _inst.INITIAL_MARGIN:
+                        # Margined (leveraged) futures: the sizing target is a dollar
+                        # amount of equity to commit. Converting it via point_value
+                        # treats that dollar amount as full unlevered notional, so as
+                        # price appreciates the position size keeps shrinking below 1
+                        # contract and, once it floors to 0, equity never moves again
+                        # and it never recovers. Size off margin_required() instead,
+                        # which is what the account actually posts to hold the contract.
+                        # Checked BEFORE point_value (rather than nested inside a
+                        # `point_value != 1.0` gate) so a margined instrument whose
+                        # point_value happens to be 1.0 still gets margin-based sizing
+                        # instead of silently falling through as if it were unlevered.
+                        _target_dollars = shares * entry_price
+                        _per_contract_margin = _inst.margin_required(inst, 1, entry_price)
+                        shares = _target_dollars / _per_contract_margin if _per_contract_margin > 0 else 0.0
+                    elif inst.point_value != 1.0:
+                        shares = shares / inst.point_value
 
                 # --- PORTFOLIO HEAT CHECK ---
                 # Compute the dollar risk this position adds. For methods with a
@@ -1000,8 +1133,24 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     _atr_locked = None     # ATR frozen at the breakout bar for trailing_atr
                     _stype = stop_config.get("type")
                     if _stype in ('percentage', 'points'):
+                        # Margined instruments (futures): anchor to the RAW pre-slippage
+                        # price, not the slipped fill. Slippage is a separate, symmetric
+                        # friction applied to the realized entry/exit fills; for futures it
+                        # must not also shift where the stop/target levels sit, or every
+                        # stop distance is silently shrunk (long side) by the entry-slippage
+                        # amount.
+                        #
+                        # Cash-full instruments (equities): keep the PRE-EXISTING behaviour
+                        # of anchoring to the slipped `entry_price`. The equity backtest path
+                        # is protected byte-for-byte by the golden-master suite
+                        # (tests/fixtures/engine_golden_master.json); changing this anchor
+                        # for equities would silently alter historical equity results, which
+                        # is out of scope for this futures-only fix.
+                        _stop_anchor = (
+                            raw_entry_price if inst.margin_mode == _inst.INITIAL_MARGIN
+                            else entry_price)
                         stop_loss_level = _inst.stop_level(
-                            instruments[symbol], entry_price, stop_config, side="long")
+                            instruments[symbol], _stop_anchor, stop_config, side="long")
 
                     elif _stype == 'atr':
                         # Get the data from the day BEFORE entry (the signal day)
@@ -1038,13 +1187,19 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                             _pc = stop_config.get("point_cap")
                             if _pc is not None and _pc > 0:
                                 _eff_stop_dist = min(_eff_stop_dist, _pc)
-                            stop_loss_level = entry_price - _eff_stop_dist
+                            # Anchor to the RAW pre-slippage price (matches the reference
+                            # mechanic's entry_price, which is the unslipped bar Open).
+                            # Using the slipped `entry_price` here would shift the stop/
+                            # target levels by the slippage amount, silently shrinking
+                            # every trailing_atr trade's effective stop distance for longs.
+                            stop_loss_level = raw_entry_price - _eff_stop_dist
                             _t1_mult = stop_config.get("t1_mult", 0.0)
                             if _stop_mult > 0 and _t1_mult > 0:
-                                _trail_target = entry_price + _eff_stop_dist * (_t1_mult / _stop_mult)
+                                _trail_target = raw_entry_price + _eff_stop_dist * (_t1_mult / _stop_mult)
 
                     positions[symbol] = {
                         'shares': shares, 'entry_price': entry_price,
+                        'raw_entry_price': raw_entry_price,
                         'entry_date': entry_exec_date, 'features': features,
                         'stop_loss_level': stop_loss_level,
                         'initial_stop_loss_level': stop_loss_level,
@@ -1242,6 +1397,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                 'MAE_pct': _s_mae, 'MFE_pct': _s_mfe, 'ExitReason': "End of Backtest",
                 'InitialRisk': _s_ir if (_s_ir and _s_ir > 0) else 0.0, 'RMultiple': _s_rm,
             })
+            trade_log[-1].update(spos.get('features', {}))
     # --- END: MARK-TO-MARKET LOGIC ---
 
     pnl_list = [t['Profit'] for t in trade_log]
