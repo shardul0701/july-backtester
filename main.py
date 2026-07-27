@@ -261,15 +261,29 @@ def run_single_simulation(args):
             )
 
             # --- Smoothness verdict (surfaced in summary tables, terminal verdict block,
-            # PDF tearsheet) — same compute as helpers/llm_verdict.compute_smoothness ---
+            # PDF tearsheet) — same compute as helpers/llm_verdict.compute_smoothness.
+            # The profile is chosen per strategy from the portfolio's instrument asset
+            # class (or an explicit config["smoothness_profile"]) so concentrated /
+            # futures strategies are judged against the right baseline, not equities. ---
             from helpers.llm_verdict import compute_smoothness as _compute_smoothness
-            _smooth = _compute_smoothness(result.get("portfolio_timeline"))
+            from helpers.smoothness_profiles import resolve_profile_name, mc_sampling_caveat
+            _profile = resolve_profile_name(list(portfolio_data.keys()), CONFIG)
+            result["smoothness_profile"] = _profile
+            _smooth = _compute_smoothness(result.get("portfolio_timeline"), _profile)
             if _smooth:
                 result["smooth_verdict"] = _smooth.get("smooth_verdict", "N/A")
                 result["smooth_notes"] = _smooth.get("smooth_notes", []) or []
             else:
                 result["smooth_verdict"] = "N/A"
                 result["smooth_notes"] = []
+
+            # Fold in the MC "DD Understated" caveat (reporting-layer only; no change
+            # to monte_carlo.py or the MC score).
+            _mc_note = mc_sampling_caveat(
+                result.get("mc_verdict"), _profile, CONFIG.get("mc_sampling", "iid")
+            )
+            if _mc_note:
+                result["mc_sampling_note"] = _mc_note
 
             return result
             

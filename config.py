@@ -159,6 +159,21 @@ CONFIG = {
     "mc_block_size": None,          # None = auto floor(sqrt(N))
 
     # ============================================================
+    # SECTION 18b: CURVE-SMOOTHNESS VERDICT PROFILE
+    # ============================================================
+    # Which threshold set the SMOOTH/ACCEPTABLE/ROUGH verdict is judged against
+    # (see helpers/smoothness_profiles.py). The equity thresholds assume a
+    # steadily-compounding, many-name book; a concentrated / event-driven
+    # strategy (e.g. a single-instrument futures breakout) structurally trips
+    # them even when working as intended.
+    #   "auto"                 -> derive per strategy from the portfolio's
+    #                             instrument asset class (futures -> looser
+    #                             "concentrated_futures" profile, else "equity").
+    #   "equity"               -> force the legacy equity thresholds.
+    #   "concentrated_futures" -> force the looser concentrated profile.
+    "smoothness_profile": "auto",
+
+    # ============================================================
     # SECTION 19: VOLUME-BASED MARKET IMPACT
     # ============================================================
     "volume_impact_coeff": 0.0,     # 0.0 = disabled; 0.1 = mild institutional

@@ -93,6 +93,8 @@ KNOWN_KEYS: set[str] = {
     # SECTION 18: MC Sampling
     "mc_sampling",
     "mc_block_size",
+    # SECTION 18b: Smoothness verdict profile
+    "smoothness_profile",
     # SECTION 19: Volume Impact
     "volume_impact_coeff",
     # SECTION 20: ML Export
@@ -166,6 +168,20 @@ def validate_config(config: dict) -> list[str]:
                 msg = f"WARNING: unrecognised config key '{key}' -- did you mean '{close[0]}'?"
             else:
                 msg = f"WARNING: unrecognised config key '{key}'"
+            warnings.append(msg)
+            logger.warning(msg)
+
+    # Value-level check for the smoothness_profile enum: a typo here would
+    # otherwise degrade silently to the equity profile at run time. The valid
+    # set is derived from the profile registry so new profiles auto-extend it.
+    sp = config.get("smoothness_profile")
+    if sp is not None and not isinstance(sp, dict):
+        from helpers.smoothness_profiles import SMOOTHNESS_PROFILES, AUTO
+        valid = {AUTO, *SMOOTHNESS_PROFILES.keys()}
+        if str(sp).lower() not in valid:
+            options = "', '".join(sorted(valid))
+            msg = (f"WARNING: smoothness_profile '{sp}' is not a known profile "
+                   f"(expected one of '{options}') -- will fall back to the equity profile")
             warnings.append(msg)
             logger.warning(msg)
 
