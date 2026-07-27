@@ -9,6 +9,20 @@ from helpers import instruments as _inst
 from helpers import intrabar as _intrabar
 
 
+def _hold_duration_days(entry_dt, exit_dt):
+    """Hold duration in days, preserving sub-day precision for intraday trades.
+
+    Returns an ``int`` when the span is a whole number of days — daily and
+    midnight-normalized timestamps reproduce the previous
+    ``(exit - entry).days`` value byte-for-byte — and a rounded ``float``
+    fraction otherwise (e.g. 45-minute bars), so ``HoldDuration`` /
+    ``Avg. Hold`` / ``# bars`` are meaningful for sub-daily strategies instead
+    of truncating to ``0``.
+    """
+    total_days = (exit_dt - entry_dt).total_seconds() / 86400.0
+    return int(total_days) if float(total_days).is_integer() else round(total_days, 4)
+
+
 def _equity_contribution(inst, pos, close, side="long"):
     """A position's contribution to account equity, honouring its margin mode.
 
@@ -216,7 +230,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
             cash += (pos['shares'] * exit_price) - commission
             net_pnl = ((exit_price - pos['entry_price']) * pos['shares']) - (2 * commission)
         cumulative_profit += net_pnl
-        duration = (exit_date - pos['entry_date']).days
+        duration = _hold_duration_days(pos['entry_date'], exit_date)
         position_value = _inst.notional(_exit_inst, pos['shares'], pos['entry_price'])
         _isl = pos.get('initial_stop_loss_level')
         if pd.notna(_isl) and _isl > 0 and _isl < pos['entry_price']:
@@ -268,7 +282,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
             'ExitDate': exit_date.isoformat(), 'ExitPrice': cover_slip,
             'Profit': net_pnl, 'ProfitPct': net_pnl / spos['notional'] if spos['notional'] > 0 else 0,
             'Shares': spos['shares'], 'is_win': 1 if net_pnl > 0 else 0,
-            'HoldDuration': (exit_date - spos['entry_date']).days,
+            'HoldDuration': _hold_duration_days(spos['entry_date'], exit_date),
             'MAE_pct': short_mae, 'MFE_pct': short_mfe,
             'ExitReason': cover_reason,
             'InitialRisk': _s_ir if (_s_ir and _s_ir > 0) else 0.0,
@@ -432,7 +446,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         'Profit': _pnet, 'ProfitPct': _pnet / _pval if _pval > 0 else 0,
                         'Shares': _pexit_shares, 'PosSizeMult': pos.get('size_mult', 1.0),
                         'is_win': 1 if _pnet > 0 else 0,
-                        'HoldDuration': (date - pos['entry_date']).days,
+                        'HoldDuration': _hold_duration_days(pos['entry_date'], date),
                         'MAE_pct': _pmae, 'MFE_pct': _pmfe, 'ExitReason': 'Partial Scale-Out',
                         'InitialRisk': _pirps, 'RMultiple': _prm, 'VolumeImpact_bps': 0.0,
                     }
@@ -507,7 +521,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                 cash += (pos['shares'] * exit_price) - commission
                 net_pnl = ((exit_price - pos['entry_price']) * pos['shares']) - (2 * commission)
             cumulative_profit += net_pnl
-            duration = (exit_date - pos['entry_date']).days
+            duration = _hold_duration_days(pos['entry_date'], exit_date)
             position_value = _inst.notional(_exit_inst, pos['shares'], pos['entry_price'])
 
             # --- Initial Risk and R-Multiple ---
@@ -658,7 +672,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                 'ExitDate': date.isoformat(), 'ExitPrice': cover_slip,
                 'Profit': net_pnl, 'ProfitPct': net_pnl / spos['notional'] if spos['notional'] > 0 else 0,
                 'Shares': spos['shares'], 'is_win': 1 if net_pnl > 0 else 0,
-                'HoldDuration': (date - spos['entry_date']).days,
+                'HoldDuration': _hold_duration_days(spos['entry_date'], date),
                 'MAE_pct': short_mae, 'MFE_pct': short_mfe,
                 'ExitReason': cover_reason,
                 'InitialRisk': _s_ir if (_s_ir and _s_ir > 0) else 0.0,
@@ -1310,7 +1324,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                 'ExitDate': delisting_ts.isoformat(), 'ExitPrice': exit_price,
                 'Profit': net_pnl, 'ProfitPct': net_pnl / _pos_value if _pos_value > 0 else -1.0,
                 'Shares': pos['shares'], 'is_win': 1 if net_pnl > 0 else 0,
-                'HoldDuration': (delisting_ts - pos['entry_date']).days,
+                'HoldDuration': _hold_duration_days(pos['entry_date'], delisting_ts),
                 'MAE_pct': 0.0, 'MFE_pct': 0.0, 'ExitReason': "Delisting",
                 'InitialRisk': _initial_risk_per_share, 'RMultiple': _r_multiple,
                 **pos.get('features', {}),
@@ -1359,7 +1373,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                 _r_multiple = (net_pnl / (_initial_risk_per_share * pos['shares'] * _mtm_inst.point_value)
                                if _initial_risk_per_share > 0 and pos['shares'] > 0 else None)
 
-                log_entry = {'Symbol': symbol, 'Trade': f"Long {trade_counter}", 'EntryDate': pos['entry_date'].isoformat(), 'EntryPrice': pos['entry_price'], 'ExitDate': exit_date.isoformat(), 'ExitPrice': exit_price, 'Profit': net_pnl, 'ProfitPct': net_pnl / _inst.notional(_mtm_inst, pos['shares'], pos['entry_price']), 'Shares': pos['shares'], 'is_win': 1 if net_pnl > 0 else 0, 'HoldDuration': (exit_date - pos['entry_date']).days, 'MAE_pct': mae_pct, 'MFE_pct': mfe_pct, 'ExitReason': exit_reason, 'InitialRisk': _initial_risk_per_share, 'RMultiple': _r_multiple, **pos.get('features', {})}
+                log_entry = {'Symbol': symbol, 'Trade': f"Long {trade_counter}", 'EntryDate': pos['entry_date'].isoformat(), 'EntryPrice': pos['entry_price'], 'ExitDate': exit_date.isoformat(), 'ExitPrice': exit_price, 'Profit': net_pnl, 'ProfitPct': net_pnl / _inst.notional(_mtm_inst, pos['shares'], pos['entry_price']), 'Shares': pos['shares'], 'is_win': 1 if net_pnl > 0 else 0, 'HoldDuration': _hold_duration_days(pos['entry_date'], exit_date), 'MAE_pct': mae_pct, 'MFE_pct': mfe_pct, 'ExitReason': exit_reason, 'InitialRisk': _initial_risk_per_share, 'RMultiple': _r_multiple, **pos.get('features', {})}
                 trade_log.append(log_entry)
 
     # Open SHORTS still on the book at the last bar — mark to market (parallel to longs).
@@ -1393,7 +1407,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                 'ExitDate': last_date.isoformat(), 'ExitPrice': cover_slip,
                 'Profit': net_pnl, 'ProfitPct': net_pnl / spos['notional'] if spos['notional'] > 0 else 0,
                 'Shares': spos['shares'], 'is_win': 1 if net_pnl > 0 else 0,
-                'HoldDuration': (last_date - spos['entry_date']).days,
+                'HoldDuration': _hold_duration_days(spos['entry_date'], last_date),
                 'MAE_pct': _s_mae, 'MFE_pct': _s_mfe, 'ExitReason': "End of Backtest",
                 'InitialRisk': _s_ir if (_s_ir and _s_ir > 0) else 0.0, 'RMultiple': _s_rm,
             })
