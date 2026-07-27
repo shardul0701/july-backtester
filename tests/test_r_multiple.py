@@ -251,10 +251,12 @@ class TestTradeLogHasRMultipleFields:
             assert trade['InitialRisk'] > 0, "InitialRisk must be positive"
 
     def test_percentage_stop_sets_initial_risk(self):
-        """With a 5% stop, InitialRisk/share should equal entry_price * 0.05.
+        """With a 5% stop, InitialRisk/share should equal entry_price - stop_level,
+        where stop_level is 5% below the RAW (pre-slippage) entry price.
 
-        Note: entry_price includes slippage so we check the formula holds
-        (initial_risk == entry_price * 0.05) to within a small tolerance.
+        Note: entry_price includes slippage, but the stop is anchored to the raw
+        price, so InitialRisk is slightly larger than entry_price * 0.05 by the
+        slippage amount.
         """
         from helpers.portfolio_simulations import run_portfolio_simulation
 
@@ -277,8 +279,12 @@ class TestTradeLogHasRMultipleFields:
 
         if result and result.get('trade_log'):
             for trade in result['trade_log']:
-                # InitialRisk = entry_price * 0.05 (5% of whatever entry_price is)
-                expected_risk = trade['EntryPrice'] * 0.05
+                # The stop level is anchored to the raw (pre-slippage) entry price,
+                # not the slipped fill (see portfolio_simulations.py raw_entry_price
+                # anchoring), so InitialRisk = entry_price - raw_entry * (1 - 0.05).
+                raw_entry = trade['EntryPrice'] / (1 + 0.0005)
+                stop_level = raw_entry * (1 - 0.05)
+                expected_risk = trade['EntryPrice'] - stop_level
                 assert math.isclose(trade['InitialRisk'], expected_risk, rel_tol=1e-6), (
                     f"Expected InitialRisk={expected_risk:.4f} but got {trade['InitialRisk']}"
                 )

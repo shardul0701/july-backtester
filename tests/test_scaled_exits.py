@@ -76,7 +76,11 @@ class TestEquityPartial:
 
 class TestFuturesPartial:
     def test_integer_contract_scaleout(self):
-        # MES @ ~2400, alloc 1.0, 100k -> 8 contracts; -0.5 scales out 4 (integer).
+        # MES @ ~2400, alloc 1.0: margin-based sizing floors
+        # equity*alloc / (margin_pct * point_value * entry_price) to whole
+        # contracts (see ZACH_HANDOFF_NOTES.md #2 / test_fractional_size_floored);
+        # -0.5 then scales out half of those contracts, also floored.
+        import math
         df = _df([2400, 2400, 2400, 2400, 2400, 2400])
         res = _run({"MESM6": df}, {"MESM6": _sig(df, {1: 1, 3: -0.5, 5: -1})},
                    allocation_pct=1.0)
@@ -84,21 +88,27 @@ class TestFuturesPartial:
         partials = [t for t in res["trade_log"] if t["ExitReason"] == "Partial Scale-Out"]
         assert len(partials) == 1
         p = partials[0]
+        total_contracts = float(math.floor(
+            100_000.0 * 1.0 / (0.10 * 5.0 * p["EntryPrice"])))
         assert p["Shares"] == float(int(p["Shares"]))  # whole contracts
-        assert p["Shares"] == 4.0
+        assert p["Shares"] == float(math.floor(total_contracts * 0.5))
         total = sum(t["Shares"] for t in res["trade_log"])
-        assert total == 8.0  # 4 scaled out + 4 closed
+        assert total == total_contracts  # scaled-out leg + closed remainder
 
 
 class TestGuards:
     def test_single_contract_cannot_partial(self):
-        # ~15k capital @ 2400 -> 1 contract; -0.5 rounds to 0 -> no partial leg.
+        # Margin-based sizing (see TestFuturesPartial) floors
+        # equity*alloc / (margin_pct * point_value * entry_price) to whole
+        # contracts; 1800 @ ~2400 -> 1800 / (0.10*5*2401.2) ~= 1.499 -> 1
+        # contract. -0.5 of 1 contract rounds down to 0 -> no partial leg.
         df = _df([2400, 2400, 2400, 2400, 2400])
         res = _run({"MESM6": df}, {"MESM6": _sig(df, {1: 1, 2: -0.5, 4: -1})},
-                   initial_capital=15_000.0, allocation_pct=1.0)
+                   initial_capital=1_800.0, allocation_pct=1.0)
         assert res is not None
         assert not any(t["ExitReason"] == "Partial Scale-Out" for t in res["trade_log"])
         assert len(res["trade_log"]) == 1  # just the full exit
+        assert res["trade_log"][0]["Shares"] == 1.0  # sizing floored to exactly 1 contract
 
     def test_full_exit_signal_unchanged(self):
         # s == -1 still fully exits in one leg (no partial).

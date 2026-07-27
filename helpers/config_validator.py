@@ -41,6 +41,7 @@ KNOWN_KEYS: set[str] = {
     # SECTION 3: Timeframe
     "timeframe",
     "timeframe_multiplier",
+    "trading_hours_per_day",
     # SECTION 4: Price Adjustment & Benchmarks
     "price_adjustment",
     "benchmark_symbol",
@@ -114,6 +115,9 @@ KNOWN_KEYS: set[str] = {
     "kelly_fraction",
     "target_risk_per_trade",
     "max_portfolio_heat",
+    "fixed_contracts_per_trade",
+    "risk_pct_per_trade",
+    "max_contracts_cap",
     # PIT screening
     "pit_enforce_daily",
     "pit_warmup_days",
@@ -126,6 +130,7 @@ KNOWN_KEYS: set[str] = {
     "intrabar_resolution",
     "intrabar_timeframe",
     "intrabar_multiplier",
+    "intrabar_parquet_source",
     # Futures maintenance margin
     "maintenance_margin_pct",
     # SECTION 27: Deterministic Entry Queue

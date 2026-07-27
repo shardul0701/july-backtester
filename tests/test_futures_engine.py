@@ -108,13 +108,16 @@ class TestIntegerContracts:
             assert t["Shares"] >= 1
 
     def test_fractional_size_floored(self):
-        # capital=100k, alloc=1.0 -> raw = 100000/(entry*$5/pt); floored to whole contracts.
+        # capital=100k, alloc=1.0. Margined futures size off margin_required(),
+        # not full notional/point_value: raw = 100000 / (margin_pct * entry * $5/pt).
+        # (Pre-margin-fix math divided by full notional only, which floored contract
+        # counts toward 0 as price appreciated — see ZACH_HANDOFF_NOTES.md #2.)
         import math
         df = _df([5000, 5010, 5020, 5030])
         res = _run({"MESM6": df}, {"MESM6": _sig(df, {1: 1})}, initial_capital=100_000.0)
         assert res is not None
         t = res["trade_log"][0]
-        expected = float(math.floor(100_000.0 / (t["EntryPrice"] * _PV)))
+        expected = float(math.floor(100_000.0 / (_MARGIN_PCT * t["EntryPrice"] * _PV)))
         assert t["Shares"] == expected
         assert t["Shares"] == float(int(t["Shares"]))  # whole contracts
 
@@ -169,8 +172,13 @@ class TestPointStop:
         assert res is not None
         t = res["trade_log"][0]
         assert t["ExitReason"] == "Stop Loss (points)"
-        # stop = entry - 50 points; the fill then takes 1 tick (0.25) of sell slippage.
-        assert t["ExitPrice"] == pytest.approx(t["EntryPrice"] - 50.0 - 0.25, abs=1e-6)
+        # Stop level is anchored to the raw (pre-slippage) entry price, not the
+        # slipped fill — slippage is a separate, symmetric friction that must not
+        # also shift where the stop sits (see portfolio_simulations.py raw_entry_price
+        # anchoring for 'percentage'/'points' stop types).
+        raw_entry = t["EntryPrice"] - 0.25  # back out the 1-tick buy slippage
+        # stop = raw_entry - 50 points; the fill then takes 1 tick (0.25) of sell slippage.
+        assert t["ExitPrice"] == pytest.approx(raw_entry - 50.0 - 0.25, abs=1e-6)
 
 
 # ---------------------------------------------------------------------------
