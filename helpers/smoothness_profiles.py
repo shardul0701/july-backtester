@@ -112,9 +112,14 @@ def resolve_profile_name(symbols: Iterable[str] | None, config: Mapping) -> str:
         return str(explicit)
 
     classes = _asset_classes(symbols, config)
-    if classes and all(c == "future" for c in classes):
-        return CONCENTRATED_FUTURES
-    return EQUITY
+    if not classes:
+        return EQUITY
+    # Map each symbol's asset class to its profile via _ASSET_CLASS_PROFILE
+    # (the single source of truth — add a row there to support a new class).
+    # Only commit to a non-equity profile when the whole book agrees; a mixed
+    # book falls back to the safe equity baseline.
+    profiles = {_ASSET_CLASS_PROFILE.get(c, EQUITY) for c in classes}
+    return next(iter(profiles)) if len(profiles) == 1 else EQUITY
 
 
 def _asset_classes(symbols: Iterable[str] | None, config: Mapping) -> list[str]:

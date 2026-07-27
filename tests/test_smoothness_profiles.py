@@ -113,6 +113,15 @@ class TestResolveProfileName:
     def test_missing_config_key_defaults_to_auto_equity(self):
         assert resolve_profile_name(["AAPL"], {}) == EQUITY
 
+    def test_asset_class_profile_table_is_load_bearing(self, monkeypatch):
+        # resolve_profile_name must consult _ASSET_CLASS_PROFILE, not hardcode
+        # "future". Register a synthetic class and confirm it routes through.
+        import helpers.smoothness_profiles as sp
+        monkeypatch.setitem(sp._ASSET_CLASS_PROFILE, "crypto", CONCENTRATED_FUTURES)
+        cfg = {"smoothness_profile": "auto",
+               "instruments": {"overrides": {"BTCUSD": {"asset_class": "crypto"}}}}
+        assert sp.resolve_profile_name(["BTCUSD"], cfg) == CONCENTRATED_FUTURES
+
 
 class TestComputeSmoothnessProfileParam:
     def test_none_default_is_byte_identical_to_equity(self):
