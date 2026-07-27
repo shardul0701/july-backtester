@@ -78,7 +78,8 @@ class TestFuturesPartial:
     def test_integer_contract_scaleout(self):
         # MES @ ~2400, alloc 1.0: margin-based sizing floors
         # equity*alloc / (margin_pct * point_value * entry_price) to whole
-        # contracts (see ZACH_HANDOFF_NOTES.md #2 / test_fractional_size_floored);
+        # contracts (see test_futures_engine.py::TestIntegerContracts::
+        # test_fractional_size_floored for the equivalent full-entry assertion);
         # -0.5 then scales out half of those contracts, also floored.
         import math
         df = _df([2400, 2400, 2400, 2400, 2400, 2400])

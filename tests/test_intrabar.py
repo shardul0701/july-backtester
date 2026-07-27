@@ -134,10 +134,12 @@ class TestEngineIntegration:
     def test_default_off_fills_at_stop_level(self):
         res = self._run(intrabar_on=False)
         t = res["trade_log"][0]
-        # Stop level is anchored to the raw (pre-slippage) entry price, not the
-        # slipped fill (see portfolio_simulations.py raw_entry_price anchoring).
-        raw_entry = t["EntryPrice"] / (1 + 0.0005)
-        stop_level = raw_entry * (1 - 0.05)
+        # This is an equity instrument (default_asset_class: "equity"), so the
+        # stop level is anchored to the SLIPPED entry_price -- the actual fill --
+        # not the raw pre-slippage price. Raw-price anchoring is reserved for
+        # margined (futures) instruments only (#238 review item #1: the
+        # margin_mode gate in portfolio_simulations.py's stop-setting block).
+        stop_level = t["EntryPrice"] * (1 - 0.05)
         assert t["ExitPrice"] == pytest.approx(stop_level * (1 - 0.0005), abs=1e-6)
         # And the enabled fill is strictly worse than the disabled one.
         assert self._run(True)["trade_log"][0]["ExitPrice"] < t["ExitPrice"]

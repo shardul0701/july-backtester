@@ -110,8 +110,9 @@ class TestIntegerContracts:
     def test_fractional_size_floored(self):
         # capital=100k, alloc=1.0. Margined futures size off margin_required(),
         # not full notional/point_value: raw = 100000 / (margin_pct * entry * $5/pt).
-        # (Pre-margin-fix math divided by full notional only, which floored contract
-        # counts toward 0 as price appreciated — see ZACH_HANDOFF_NOTES.md #2.)
+        # (Pre-fix math divided by full notional only, which floored contract
+        # counts toward 0 as price appreciated — see TestMarginAccounting above,
+        # which pins the equity-collapse regression this margin-based sizing fixes.)
         import math
         df = _df([5000, 5010, 5020, 5030])
         res = _run({"MESM6": df}, {"MESM6": _sig(df, {1: 1})}, initial_capital=100_000.0)
@@ -196,6 +197,30 @@ class TestNoFuturesBorrow:
         expected = shares * (t["EntryPrice"] - t["ExitPrice"]) * _PV - 2 * (shares * _COMM)
         assert t["Profit"] == pytest.approx(expected, abs=1e-6)
         assert t["Profit"] > 0  # price fell, short profits
+
+
+# ---------------------------------------------------------------------------
+class TestShortEntrySlippage:
+    """Futures short-to-open fills must pay sell-side slippage (#238 review item
+    #2), mirroring the buy-side slippage the long path already applies. Before
+    this fix, futures shorts filled at the raw, un-slipped price -- an
+    unrealistic free-fill asymmetry versus longs. This is a futures-only
+    change: the equity short path (cash_full instruments) is untouched and
+    still fills at the raw price (no slippage), so this test only pins the
+    futures (margin_mode == initial_margin) behaviour."""
+
+    def test_short_entry_price_pays_sell_slippage(self):
+        df = _df([5000, 4990, 4980, 4970, 4960, 4950])
+        res = _run({"MESM6": df}, {"MESM6": _sig(df, {1: -2, 5: -1})})
+        assert res is not None
+        t = res["trade_log"][0]
+        assert t["Trade"].startswith("Short")
+        raw_signal_close = df["Close"].iloc[1]  # un-slipped bar Close (the sell-to-open anchor)
+        tick = 0.25  # MES tick size; _FUT_CFG configures 1 tick of slippage
+        # A sell-to-open must fill WORSE (lower) than the raw price by one tick,
+        # not at the raw price itself.
+        assert t["EntryPrice"] == pytest.approx(raw_signal_close - tick, abs=1e-6)
+        assert t["EntryPrice"] < raw_signal_close
 
 
 # ---------------------------------------------------------------------------

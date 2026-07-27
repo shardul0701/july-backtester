@@ -94,17 +94,25 @@ def _build_intrabar_data(portfolio_data, config):
     if parquet_source:
         try:
             raw = pd.read_parquet(parquet_source).sort_index()
+            idx = raw.index
+            idx_naive = idx.tz_localize(None) if getattr(idx, "tz", None) is not None else idx
+            idf = pd.DataFrame({
+                "Open": raw["open"].to_numpy(), "High": raw["high"].to_numpy(),
+                "Low": raw["low"].to_numpy(), "Close": raw["close"].to_numpy(),
+            }, index=idx_naive)
+            idf.index.name = "Datetime"
         except Exception as e:
+            # Covers read failures AND a mismatched column schema (e.g. "Open"
+            # instead of "open") -- both are non-fatal here: the caller treats
+            # an empty dict as "no intrabar data available" and no-ops.
             logger.warning(f"  -> intrabar_parquet_source failed to load '{parquet_source}': {e}")
             return {}
-        idx = raw.index
-        idx_naive = idx.tz_localize(None) if getattr(idx, "tz", None) is not None else idx
-        idf = pd.DataFrame({
-            "Open": raw["open"].to_numpy(), "High": raw["high"].to_numpy(),
-            "Low": raw["low"].to_numpy(), "Close": raw["close"].to_numpy(),
-        }, index=idx_naive)
-        idf.index.name = "Datetime"
         out = {symbol: idf for symbol in portfolio_data}
+        if len(portfolio_data) > 1:
+            logger.warning(
+                f"  -> intrabar_parquet_source applies the SAME single-symbol parquet file "
+                f"to all {len(portfolio_data)} symbols in this portfolio ({len(portfolio_data)} "
+                f"symbols); this path is intended for single-symbol research runs only.")
         logger.info(f"  -> Sub-bar resolution: loaded 1-min parquet source ({len(idf)} rows) "
                     f"for {len(out)} symbol(s)")
         return out

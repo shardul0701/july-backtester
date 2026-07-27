@@ -914,13 +914,9 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                 # full history would use a future ATR value on early simulation dates.
                 inst = instruments[symbol]
                 if sizing_method == "risk_pct_capped":
-                    # TRUE native Sleeve-A reference convention (confirmed from
-                    # sleeve_a_alone_sizing_search.py::sim_equity_pct -- the actual
-                    # script that produced the artifact numbers, NOT
-                    # composite_v4_risk_managed.py's fixed-1-contract df_a, which
-                    # was a red herring): risk risk_pct_per_trade of CURRENT
-                    # (compounding) equity per trade, contracts = floor(risk_budget
-                    # / (stop_dist_pts * point_value)), hard-capped at
+                    # Compounding risk-percent sizing: risk risk_pct_per_trade of
+                    # CURRENT (compounding) equity per trade, contracts = floor(
+                    # risk_budget / (stop_dist_pts * point_value)), hard-capped at
                     # max_contracts_cap. This compounds with account growth --
                     # unlike fixed_contracts, which never scales.
                     _rp_stop_dist_pts = None
@@ -936,7 +932,12 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                                     _eff_sz = min(_eff_sz, _pc_sz)
                                 _rp_stop_dist_pts = _eff_sz
                     elif _stype_sz == "percentage":
-                        _rp_stop_dist_pts = stop_config.get("value", 0.05) * entry_price
+                        # Use the RAW pre-slippage price for consistency with the
+                        # stop-level anchor computed later in this function for
+                        # the same stop type -- using the slipped entry_price here
+                        # would size against a slightly different (shrunk) stop
+                        # distance than the one the position is actually stopped at.
+                        _rp_stop_dist_pts = stop_config.get("value", 0.05) * raw_entry_price
                     elif _stype_sz == "atr":
                         _dbe_sz = prev_trading_dates[symbol].get(entry_exec_date)
                         if pd.notna(_dbe_sz) and _dbe_sz in df.index:
@@ -965,15 +966,16 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         # observed), so check_portfolio_heat() spuriously rejects
                         # already-correctly-risk-capped trades once notional grows
                         # large relative to equity. Populate the real fraction so the
-                        # heat check evaluates the position's actual risk.
-                        sizing_kwargs["stop_distance_pct"] = _rp_stop_dist_pts / entry_price
+                        # heat check evaluates the position's actual risk. Divide by
+                        # raw_entry_price (not the slipped entry_price) to match the
+                        # anchor _rp_stop_dist_pts was computed against above.
+                        sizing_kwargs["stop_distance_pct"] = _rp_stop_dist_pts / raw_entry_price
                     else:
                         shares = 0.0
                 elif sizing_method == "fixed_contracts":
-                    # Native Sleeve-A reference convention: EXACTLY N contracts
-                    # every trade, forever -- never scaled to equity (see
-                    # ZACH_HANDOFF_NOTES.md sizing section). This is already a
-                    # contract count, not a dollar-notional target, so it
+                    # Fixed contract-count sizing: EXACTLY N contracts every
+                    # trade, forever -- never scaled to equity. This is already
+                    # a contract count, not a dollar-notional target, so it
                     # bypasses calculate_position_size and the point_value/
                     # margin conversion below entirely.
                     shares = float(CONFIG.get("fixed_contracts_per_trade", 1)) * _size_mult
@@ -994,20 +996,23 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
 
                     # Futures size in contracts: the sizing methods return a dollar-notional
                     # based size; dividing out $/point converts it to contracts (pv=1 for equities).
-                    if inst.point_value != 1.0:
-                        if inst.margin_mode == _inst.INITIAL_MARGIN:
-                            # Margined (leveraged) futures: the sizing target is a dollar
-                            # amount of equity to commit. Converting it via point_value
-                            # treats that dollar amount as full unlevered notional, so as
-                            # price appreciates the position size keeps shrinking below 1
-                            # contract and, once it floors to 0, equity never moves again
-                            # and it never recovers. Size off margin_required() instead,
-                            # which is what the account actually posts to hold the contract.
-                            _target_dollars = shares * entry_price
-                            _per_contract_margin = _inst.margin_required(inst, 1, entry_price)
-                            shares = _target_dollars / _per_contract_margin if _per_contract_margin > 0 else 0.0
-                        else:
-                            shares = shares / inst.point_value
+                    if inst.margin_mode == _inst.INITIAL_MARGIN:
+                        # Margined (leveraged) futures: the sizing target is a dollar
+                        # amount of equity to commit. Converting it via point_value
+                        # treats that dollar amount as full unlevered notional, so as
+                        # price appreciates the position size keeps shrinking below 1
+                        # contract and, once it floors to 0, equity never moves again
+                        # and it never recovers. Size off margin_required() instead,
+                        # which is what the account actually posts to hold the contract.
+                        # Checked BEFORE point_value (rather than nested inside a
+                        # `point_value != 1.0` gate) so a margined instrument whose
+                        # point_value happens to be 1.0 still gets margin-based sizing
+                        # instead of silently falling through as if it were unlevered.
+                        _target_dollars = shares * entry_price
+                        _per_contract_margin = _inst.margin_required(inst, 1, entry_price)
+                        shares = _target_dollars / _per_contract_margin if _per_contract_margin > 0 else 0.0
+                    elif inst.point_value != 1.0:
+                        shares = shares / inst.point_value
 
                 # --- PORTFOLIO HEAT CHECK ---
                 # Compute the dollar risk this position adds. For methods with a
@@ -1128,13 +1133,24 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     _atr_locked = None     # ATR frozen at the breakout bar for trailing_atr
                     _stype = stop_config.get("type")
                     if _stype in ('percentage', 'points'):
-                        # Anchor to the RAW pre-slippage price, not the slipped fill.
-                        # Slippage is a separate, symmetric friction applied to the
-                        # realized entry/exit fills; it must not also shift where the
-                        # stop/target levels themselves sit, or every stop distance
-                        # is silently shrunk (long side) by the entry-slippage amount.
+                        # Margined instruments (futures): anchor to the RAW pre-slippage
+                        # price, not the slipped fill. Slippage is a separate, symmetric
+                        # friction applied to the realized entry/exit fills; for futures it
+                        # must not also shift where the stop/target levels sit, or every
+                        # stop distance is silently shrunk (long side) by the entry-slippage
+                        # amount.
+                        #
+                        # Cash-full instruments (equities): keep the PRE-EXISTING behaviour
+                        # of anchoring to the slipped `entry_price`. The equity backtest path
+                        # is protected byte-for-byte by the golden-master suite
+                        # (tests/fixtures/engine_golden_master.json); changing this anchor
+                        # for equities would silently alter historical equity results, which
+                        # is out of scope for this futures-only fix.
+                        _stop_anchor = (
+                            raw_entry_price if inst.margin_mode == _inst.INITIAL_MARGIN
+                            else entry_price)
                         stop_loss_level = _inst.stop_level(
-                            instruments[symbol], raw_entry_price, stop_config, side="long")
+                            instruments[symbol], _stop_anchor, stop_config, side="long")
 
                     elif _stype == 'atr':
                         # Get the data from the day BEFORE entry (the signal day)
