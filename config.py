@@ -155,7 +155,10 @@ CONFIG = {
     # ============================================================
     # SECTION 18: MONTE CARLO SAMPLING
     # ============================================================
-    "mc_sampling": "iid",           # "iid" = independent; "block" = block-bootstrap
+    "mc_sampling": "iid",           # "iid" = independent; "block" = block-bootstrap;
+                                    # "auto" = block for a concentrated_futures smoothness
+                                    # profile, else iid (calibrates the MC "DD-Understated"
+                                    # verdict for single-instrument regime-dependent strategies)
     "mc_block_size": None,          # None = auto floor(sqrt(N))
 
     # ============================================================

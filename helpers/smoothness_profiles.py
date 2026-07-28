@@ -169,3 +169,22 @@ def mc_sampling_caveat(mc_verdict, profile_name: str, mc_sampling: str):
         "regime-dependent strategy — set mc_sampling='block' (block-bootstrap "
         "preserves streak clustering) before treating this as a red flag."
     )
+
+
+def resolve_mc_sampling(mc_sampling, profile_name: str):
+    """Resolve the effective Monte-Carlo resampling method for a run.
+
+    ``"auto"`` ties the method to the asset-class smoothness profile: a
+    ``concentrated_futures`` strategy uses ``"block"`` (block-bootstrap
+    preserves the win/loss streak clustering a single-instrument,
+    regime-dependent strategy lives on, so the MC "DD-Understated" verdict is
+    judged on the appropriate resampling rather than i.i.d. — which structurally
+    trips that verdict for this strategy class); any other profile uses
+    ``"iid"``. An explicit ``"iid"`` / ``"block"`` (or any non-``"auto"`` value)
+    is returned unchanged, so the default (``"iid"``) run is byte-for-byte
+    unaffected.
+    """
+    sampling = mc_sampling or "iid"  # normalise None/empty -> iid
+    if str(sampling).lower() == "auto":
+        return "block" if profile_name == CONCENTRATED_FUTURES else "iid"
+    return sampling

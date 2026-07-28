@@ -259,10 +259,28 @@ def run_single_simulation(args):
             
             if result.get('Trades', 0) > 0:
                 if result['Trades'] >= CONFIG.get("min_trades_for_mc", 10):
-                    mc_sim_results = run_monte_carlo_simulation(
-                        result['trade_pnl_list'], initial_equity=result['initial_capital'],
-                        num_simulations=CONFIG["num_mc_simulations"]
+                    # MC resampling: "auto" ties the method to the strategy's
+                    # asset-class smoothness profile (concentrated_futures ->
+                    # block-bootstrap, which preserves the streak clustering those
+                    # strategies live on; else i.i.d.). Explicit "iid"/"block" pass
+                    # through unchanged. Applied via a scoped CONFIG override because
+                    # run_monte_carlo_simulation reads CONFIG["mc_sampling"] directly
+                    # (helpers/monte_carlo.py is Do-Not-Touch).
+                    from helpers.smoothness_profiles import (
+                        resolve_profile_name as _rpn, resolve_mc_sampling as _rms,
                     )
+                    _mc_profile = _rpn(list(portfolio_data.keys()), CONFIG)
+                    _eff_sampling = _rms(CONFIG.get("mc_sampling", "iid"), _mc_profile)
+                    result["mc_sampling_effective"] = _eff_sampling
+                    _saved_sampling = CONFIG.get("mc_sampling", "iid")
+                    try:
+                        CONFIG["mc_sampling"] = _eff_sampling
+                        mc_sim_results = run_monte_carlo_simulation(
+                            result['trade_pnl_list'], initial_equity=result['initial_capital'],
+                            num_simulations=CONFIG["num_mc_simulations"]
+                        )
+                    finally:
+                        CONFIG["mc_sampling"] = _saved_sampling
                     mc_analysis = analyze_mc_results(result, mc_sim_results)
                     result.update(mc_analysis)
                 else:
@@ -351,7 +369,8 @@ def run_single_simulation(args):
             # Fold in the MC "DD Understated" caveat (reporting-layer only; no change
             # to monte_carlo.py or the MC score).
             _mc_note = mc_sampling_caveat(
-                result.get("mc_verdict"), _profile, CONFIG.get("mc_sampling", "iid")
+                result.get("mc_verdict"), _profile,
+                result.get("mc_sampling_effective", CONFIG.get("mc_sampling", "iid"))
             )
             if _mc_note:
                 result["mc_sampling_note"] = _mc_note

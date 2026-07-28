@@ -89,7 +89,7 @@ scripts/debug_data.py              # Compares Polygon vs Yahoo SPY data; run wit
 "sensitivity_sweep_min_val": 2   # floor for generated values (prevents SMA period = 0)
 "rolling_sharpe_window": 126     # rolling Sharpe window in trading days; 0 or None = disable
 "htb_rate_annual": 0.02          # annual hard-to-borrow rate debited daily on short positions
-"mc_sampling": "iid"             # "iid" = independent resampling; "block" = block-bootstrap
+"mc_sampling": "iid"             # "iid" = independent; "block" = block-bootstrap; "auto" = block for concentrated_futures profile else iid
 "mc_block_size": None            # block size for block-bootstrap; None = auto floor(sqrt(N))
 "smoothness_profile": "auto"     # smoothness-verdict thresholds: "auto"|"equity"|"concentrated_futures"
 "volume_impact_coeff": 0.0       # square-root market impact coefficient; 0.0 = disabled
@@ -488,11 +488,12 @@ Controlled by two config keys (SECTION 18):
 
 | Key | Default | Description |
 | --- | --- | --- |
-| `mc_sampling` | `"iid"` | `"iid"` = independent resampling (original behaviour); `"block"` = block-bootstrap |
+| `mc_sampling` | `"iid"` | `"iid"` = independent resampling (original behaviour); `"block"` = block-bootstrap; `"auto"` = block for a `concentrated_futures` smoothness profile, else iid |
 | `mc_block_size` | `None` | Trades per block. `None` = auto: `floor(sqrt(N))` (Politis-Romano rule of thumb) |
 
 - **`"iid"` (default)**: trades are resampled independently, each with equal probability. Fast and statistically clean for strategies with no autocorrelation.
 - **`"block"`**: consecutive blocks of `block_size` trades are sampled as a unit, preserving win/loss streaks and regime clustering. Use when the strategy shows known regime dependency (e.g., consistently loses only during bear markets / high-VIX periods identified by the Regime Heatmap).
+- **`"auto"` (issue #243)**: resolved per strategy in `main.py::run_single_simulation` via `helpers.smoothness_profiles.resolve_mc_sampling` — a `concentrated_futures` profile (single-instrument regime-dependent strategy, e.g. Sleeve A) gets `"block"`, everything else `"iid"`. This calibrates the MC **"DD-Understated"** verdict, which i.i.d. resampling structurally trips for that strategy class. Applied via a **scoped `CONFIG["mc_sampling"]` override** (restored in a `finally`) around the MC call — `helpers/monte_carlo.py` is Do-Not-Touch, so the effective method is chosen at the caller. The effective value is stored on the result as `mc_sampling_effective` and feeds `mc_sampling_caveat` (so the "consider block" note stays silent once block is actually used). Default stays `"iid"` → opt-in, no change to existing runs.
 - **Auto block size**: `max(1, int(N ** 0.5))`. For 100 trades → blocks of 10; for 400 trades → blocks of 20.
 - **Circular wrap**: blocks that extend past the end of the trade list wrap around — no trades are omitted and edge blocks are not under-represented.
 - **No caller changes**: `run_monte_carlo_simulation` signature is unchanged. The refactor extracted a `_equity_and_drawdown` helper used by both branches.
