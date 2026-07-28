@@ -19,18 +19,21 @@ pinpointing exactly which scenario and field diverged.
 
 Regression map — scenario -> engine behaviour proven unchanged
 --------------------------------------------------------------
-  long_basic        entries/exits, %-slippage, per-share commission, end-of-run
-                    mark-to-market of an open position, multi-trade sequencing
-  long_pct_stop     percentage stop-loss exit path + InitialRisk / RMultiple
-  long_atr_stop     ATR initial stop + ATR trailing-stop ratchet (the duplicated
-                    ATR derivation that Phase 1 consolidates)
-  short_borrow      short entry (-2) / cover (-1), HTB borrow-cost debit, short
-                    MAE/MFE, short P&L accounting
-  vol_impact        max_pct_adv liquidity cap + sqrt volume market-impact + bps log
-  risk_parity_stop  risk_parity position sizing deriving stop_distance_pct from a
-                    percentage stop + portfolio-heat check
-  exclude_open      realized-only reporting (exclude_open_positions=True)
-  multi_symbol      alphabetical entry ordering across >1 symbol, shared cash pool
+  long_basic           entries/exits, %-slippage, per-share commission, end-of-run
+                       mark-to-market of an open position, multi-trade sequencing
+  long_pct_stop        percentage stop-loss exit path + InitialRisk / RMultiple
+  long_atr_stop        ATR initial stop + ATR trailing-stop ratchet (the duplicated
+                       ATR derivation that Phase 1 consolidates)
+  short_borrow         short entry (-2) / cover (-1), HTB borrow-cost debit, short
+                       MAE/MFE, short P&L accounting
+  vol_impact           max_pct_adv liquidity cap + sqrt volume market-impact + bps log
+  risk_parity_stop     risk_parity position sizing deriving stop_distance_pct from a
+                       percentage stop + portfolio-heat check
+  exclude_open         realized-only reporting (exclude_open_positions=True)
+  multi_symbol         alphabetical entry ordering across >1 symbol, shared cash pool
+  trailing_atr_equity  trailing_atr stop on an equity (CASH_FULL) symbol — anchors
+                       stop/target/breakeven floor to slipped entry_price, not raw
+                       (#240 fix); arm + trail + floor all exercise the equity path
 
 Regenerate the fixture (ONLY when an intended behaviour change is reviewed):
     REGEN_GOLDEN=1 .venv/bin/python -m pytest tests/test_engine_characterization.py -q
@@ -157,12 +160,33 @@ def _scenario(name):
         return ({"AAA": df1, "BBB": df2}, {"AAA": sig1, "BBB": sig2}, {},
                 {"type": "none"}, {})
 
+    if name == "trailing_atr_equity":
+        # Exercises the equity (CASH_FULL) trailing_atr stop path introduced in #240.
+        # execution_time="open": signal fires on bar 2, fill is bar 3 Open.
+        # ATR locked at bar 2 = 2.0.  stop_mult=1, t1_mult=2, trail_mult=1.
+        # entry_price (slipped) = bar3_Open * (1 + slippage_pct).
+        # Under the #240 fix the stop/target/floor ANCHOR = slipped entry_price
+        # (not raw_entry_price), so stop = entry_price - 2.0, target = entry_price + 4.0.
+        # Price rises to 107 (hits target -> trail arms), then drops to 103 (trail fires).
+        closes = [100, 101, 100, 101, 103, 105, 107, 107, 105, 103, 101]
+        opens  = [100, 100, 101, 101, 102, 104, 106, 107, 106, 104, 102]
+        highs  = [101, 102, 101, 102, 104, 106, 108, 108, 106, 104, 102]
+        lows   = [99,   99,  99, 100, 101, 103, 105, 106, 104, 102, 100]
+        df = _df(closes, opens=opens, highs=highs, lows=lows,
+                 atr=[2.0] * len(closes))
+        sig = _sig(df, {2: 1})  # enter on bar 2, leave open -> trail fires or MTM
+        return ({"HHH": df}, {"HHH": sig},
+                {"execution_time": "open"},
+                {"type": "trailing_atr", "stop_mult": 1.0, "trail_mult": 1.0,
+                 "t1_mult": 2.0, "floor": "breakeven"}, {})
+
     raise ValueError(name)
 
 
 SCENARIOS = [
     "long_basic", "long_pct_stop", "long_atr_stop", "short_borrow",
     "vol_impact", "risk_parity_stop", "exclude_open", "multi_symbol",
+    "trailing_atr_equity",
 ]
 
 

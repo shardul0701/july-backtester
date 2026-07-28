@@ -377,6 +377,55 @@
       }
     ]
   },
+  "trailing_atr_equity": {
+    "equity_curve": [
+      100000.0,
+      100000.0,
+      100000.0,
+      100000.0,
+      100192.725419,
+      100390.646261,
+      100588.567103,
+      100588.567103,
+      100484.163859,
+      100484.163859,
+      100484.163859
+    ],
+    "equity_len": 11,
+    "scalars": {
+      "Trades": 1,
+      "avg_trade_duration": 6.0,
+      "calmar_ratio": 129.386805,
+      "initial_capital": 100000.0,
+      "max_drawdown": 0.001038,
+      "pnl_percent": 0.004842,
+      "profit_factor": null,
+      "sharpe_ratio": 4.31542,
+      "win_rate": 1.0
+    },
+    "trade_log": [
+      {
+        "EntryDate": "2023-01-05T00:00:00",
+        "EntryPrice": 101.0505,
+        "ExitDate": "2023-01-11T00:00:00",
+        "ExitPrice": 105.947,
+        "ExitReason": "Stop Loss (trailing_atr)",
+        "HoldDuration": 6,
+        "InitialRisk": 2.0,
+        "MAE_pct": -0.010396,
+        "MFE_pct": 0.068773,
+        "PosSizeMult": 1.0,
+        "Profit": 484.163859,
+        "ProfitPct": 0.048416,
+        "RMultiple": 2.44625,
+        "Shares": 98.960421,
+        "Symbol": "HHH",
+        "Trade": "Long 1",
+        "VolumeImpact_bps": 0.0,
+        "is_win": 1
+      }
+    ]
+  },
   "vol_impact": {
     "equity_curve": [
       100000.0,
