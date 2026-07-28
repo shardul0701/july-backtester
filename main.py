@@ -75,6 +75,21 @@ def init_worker(comparison_dfs_dict, benchmark_returns_dict, dependency_map_dict
     intrabar_data_global = intrabar_data_for_worker
 
 
+def _resolve_intrabar_source(path):
+    """Resolve ``intrabar_parquet_source`` to a portable absolute path.
+
+    Expands ``~`` and environment variables, and resolves a relative path
+    against the project root — so a config can point at a repo-relative file
+    (e.g. ``"data/nq_1min.parquet"``) or a ``$ENV``/``~`` path that works on any
+    machine, instead of a contributor-local absolute path (e.g. a Windows
+    ``C:\\Users\\...`` path that silently breaks everywhere else).
+    """
+    resolved = os.path.expanduser(os.path.expandvars(str(path)))
+    if not os.path.isabs(resolved):
+        resolved = os.path.join(os.path.dirname(os.path.abspath(__file__)), resolved)
+    return resolved
+
+
 def _build_intrabar_data(portfolio_data, config):
     """Fetch finer-resolution (intraday) bars per symbol for sub-bar stop resolution.
 
@@ -89,11 +104,27 @@ def _build_intrabar_data(portfolio_data, config):
     Sleeve A NQ reconciliation) where the CSV provider has no notion of timeframe (it
     always re-reads the same daily-bar file regardless of `timeframe`/`timeframe_multiplier`)
     and the real sub-minute source lives outside `csv_data_dir` as a parquet file.
+
+    The path is resolved portably via :func:`_resolve_intrabar_source` (``~`` /
+    ``$ENV`` expansion, relative paths resolved against the project root). If the
+    resolved file does not exist, the run warns and falls back to the per-symbol
+    provider fetch instead of silently disabling intrabar resolution.
     """
     parquet_source = config.get("intrabar_parquet_source")
-    if parquet_source:
+    resolved_source = _resolve_intrabar_source(parquet_source) if parquet_source else None
+    if resolved_source and not os.path.exists(resolved_source):
+        # Portability guard: a config pointing at a missing/contributor-local
+        # file (e.g. a Windows absolute path on another machine) no longer
+        # silently disables intrabar resolution -- warn and fall through to the
+        # normal per-symbol data-provider fetch below.
+        logger.warning(
+            f"  -> intrabar_parquet_source '{parquet_source}' (resolved: '{resolved_source}') "
+            f"not found; falling back to the per-symbol data provider for intraday bars. "
+            f"Point it at a repo-relative or $ENV/~ path for a portable config.")
+        resolved_source = None
+    if resolved_source:
         try:
-            raw = pd.read_parquet(parquet_source).sort_index()
+            raw = pd.read_parquet(resolved_source).sort_index()
             idx = raw.index
             idx_naive = idx.tz_localize(None) if getattr(idx, "tz", None) is not None else idx
             idf = pd.DataFrame({
@@ -105,7 +136,7 @@ def _build_intrabar_data(portfolio_data, config):
             # Covers read failures AND a mismatched column schema (e.g. "Open"
             # instead of "open") -- both are non-fatal here: the caller treats
             # an empty dict as "no intrabar data available" and no-ops.
-            logger.warning(f"  -> intrabar_parquet_source failed to load '{parquet_source}': {e}")
+            logger.warning(f"  -> intrabar_parquet_source failed to load '{resolved_source}': {e}")
             return {}
         out = {symbol: idf for symbol in portfolio_data}
         if len(portfolio_data) > 1:
