@@ -48,11 +48,12 @@ def _update_trailing_atr_stop(pos, sym_df, date, stop_config, side="long"):
         return
     row = sym_df.loc[date]
     trail_mult = stop_config.get("trail_mult", 1.0)
-    # Breakeven floor anchors to the RAW pre-slippage entry (matches the
-    # reference mechanic's `entry_price`, the unslipped bar Open) -- not the
-    # slipped fill stored in pos['entry_price'], which would shift the floor
-    # by the slippage amount.
-    entry = pos.get('raw_entry_price', pos['entry_price'])
+    # Breakeven floor anchors to the pre-slippage price for margined instruments
+    # (futures) and to the slipped fill for cash-full instruments (equities).
+    # The correct anchor is stored explicitly as 'trail_anchor' at entry time,
+    # gated on margin_mode (mirrors the percentage/points _stop_anchor pattern).
+    # Fall back to raw_entry_price for positions created before this key existed.
+    entry = pos.get('trail_anchor', pos.get('raw_entry_price', pos['entry_price']))
     floor = stop_config.get("floor")
 
     if side == "long":
@@ -703,7 +704,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
 
                 # Short-side stop / target / trail init (mirror of the long entry block).
                 # Stop sits ABOVE entry; target BELOW; ATR locked at the signal bar.
-                _s_stop, _s_target, _s_atr = np.nan, None, None
+                _s_stop, _s_target, _s_atr, _s_trail_anchor = np.nan, None, None, None
                 _sc_type = stop_config.get("type")
                 if _sc_type in ('percentage', 'points'):
                     _s_stop = _inst.stop_level(inst_se, ep, stop_config, side="short")
@@ -724,10 +725,18 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         _pc = stop_config.get("point_cap")
                         if _pc is not None and _pc > 0:
                             _eff = min(_eff, _pc)
-                        _s_stop = ep + _eff
+                        # Anchor mirrors the long-side margin_mode gate: futures
+                        # (INITIAL_MARGIN) use the raw pre-slippage price; equities
+                        # (CASH_FULL) use the fill price. For equity shorts the fill
+                        # price equals ep (no slippage applied on that path), so the
+                        # gate is consistent even though the values coincide today.
+                        _s_trail_anchor = (
+                            ep if inst_se.margin_mode == _inst.INITIAL_MARGIN
+                            else ep)   # equity fill = ep (no short slippage on CASH_FULL path)
+                        _s_stop = _s_trail_anchor + _eff
                         _t1 = stop_config.get("t1_mult", 0.0)
                         if _sm > 0 and _t1 > 0:
-                            _s_target = ep - _eff * (_t1 / _sm)
+                            _s_target = _s_trail_anchor - _eff * (_t1 / _sm)
                 _s_ir = float(_s_stop - ep) if (pd.notna(_s_stop) and _s_stop > ep) else None
 
                 # --- CAPTURE FEATURES AT ENTRY (mirror of the long entry block) ---
@@ -796,6 +805,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         'total_borrow_cost': 0.0, 'margin': _s_margin,
                         'stop_loss_level': _s_stop, 'initial_stop_loss_level': _s_stop,
                         'trail_target': _s_target, 'atr_locked': _s_atr,
+                        'trail_anchor': _s_trail_anchor,
                         'trail_armed': False, 'initial_risk': _s_ir, 'features': _s_features,
                     }
                 else:
@@ -811,6 +821,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         'margin': 0.0,
                         'stop_loss_level': _s_stop, 'initial_stop_loss_level': _s_stop,
                         'trail_target': _s_target, 'atr_locked': _s_atr,
+                        'trail_anchor': _s_trail_anchor,
                         'trail_armed': False, 'initial_risk': _s_ir, 'features': _s_features,
                     }
 
@@ -1131,6 +1142,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     stop_loss_level = np.nan
                     _trail_target = None   # arm price for trailing_atr (None otherwise)
                     _atr_locked = None     # ATR frozen at the breakout bar for trailing_atr
+                    _trail_anchor = None   # stop/target/floor anchor price for trailing_atr
                     _stype = stop_config.get("type")
                     if _stype in ('percentage', 'points'):
                         # Margined instruments (futures): anchor to the RAW pre-slippage
@@ -1187,15 +1199,17 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                             _pc = stop_config.get("point_cap")
                             if _pc is not None and _pc > 0:
                                 _eff_stop_dist = min(_eff_stop_dist, _pc)
-                            # Anchor to the RAW pre-slippage price (matches the reference
-                            # mechanic's entry_price, which is the unslipped bar Open).
-                            # Using the slipped `entry_price` here would shift the stop/
-                            # target levels by the slippage amount, silently shrinking
-                            # every trailing_atr trade's effective stop distance for longs.
-                            stop_loss_level = raw_entry_price - _eff_stop_dist
+                            # Anchor to the RAW pre-slippage price for margined
+                            # instruments (futures) and to the slipped fill for
+                            # cash-full instruments (equities) — mirrors the
+                            # percentage/points _stop_anchor gating pattern (#238).
+                            _trail_anchor = (
+                                raw_entry_price if inst.margin_mode == _inst.INITIAL_MARGIN
+                                else entry_price)
+                            stop_loss_level = _trail_anchor - _eff_stop_dist
                             _t1_mult = stop_config.get("t1_mult", 0.0)
                             if _stop_mult > 0 and _t1_mult > 0:
-                                _trail_target = raw_entry_price + _eff_stop_dist * (_t1_mult / _stop_mult)
+                                _trail_target = _trail_anchor + _eff_stop_dist * (_t1_mult / _stop_mult)
 
                     positions[symbol] = {
                         'shares': shares, 'entry_price': entry_price,
@@ -1209,6 +1223,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         'trail_armed': False,
                         'trail_target': _trail_target,
                         'atr_locked': _atr_locked,
+                        'trail_anchor': _trail_anchor,
                         'margin': _margin if inst.margin_mode == _inst.INITIAL_MARGIN else 0.0,
                     }
                     if inst.margin_mode == _inst.INITIAL_MARGIN:
