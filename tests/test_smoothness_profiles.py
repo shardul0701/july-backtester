@@ -24,6 +24,7 @@ from helpers.smoothness_profiles import (
     get_thresholds,
     resolve_profile_name,
     mc_sampling_caveat,
+    resolve_mc_sampling,
 )
 from helpers.llm_verdict import compute_smoothness
 
@@ -206,3 +207,24 @@ class TestMcSamplingCaveat:
     def test_fires_within_multi_verdict_string(self):
         note = mc_sampling_caveat("Perf. Outlier, DD Understated", CONCENTRATED_FUTURES, "iid")
         assert note is not None
+
+
+class TestResolveMcSampling:
+    def test_auto_concentrated_futures_uses_block(self):
+        assert resolve_mc_sampling("auto", CONCENTRATED_FUTURES) == "block"
+
+    def test_auto_equity_uses_iid(self):
+        assert resolve_mc_sampling("auto", EQUITY) == "iid"
+
+    def test_auto_is_case_insensitive(self):
+        assert resolve_mc_sampling("AUTO", CONCENTRATED_FUTURES) == "block"
+        assert resolve_mc_sampling("Auto", EQUITY) == "iid"
+
+    def test_explicit_values_pass_through_unchanged(self):
+        # Explicit settings are never overridden — the default "iid" run stays byte-identical.
+        assert resolve_mc_sampling("iid", CONCENTRATED_FUTURES) == "iid"
+        assert resolve_mc_sampling("block", EQUITY) == "block"
+        assert resolve_mc_sampling("iid", EQUITY) == "iid"
+
+    def test_none_defaults_to_iid_passthrough(self):
+        assert resolve_mc_sampling(None, CONCENTRATED_FUTURES) == "iid"
