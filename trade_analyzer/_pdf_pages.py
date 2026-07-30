@@ -66,35 +66,12 @@ def draw_kpi_tile(
     subtitle: str = '',
     positive: Optional[bool] = None,
 ):
-    """Render a single KPI tile into *ax* (axis should have been turned off)."""
-    T = _T()
-    ax.set_xlim(0, 1)
-    ax.set_ylim(0, 1)
-    ax.axis('off')
+    """Render a single KPI tile into *ax*.
 
-    # Background patch
-    bg = FancyBboxPatch((0.04, 0.06), 0.92, 0.88,
-                        boxstyle='round,pad=0.02',
-                        facecolor=T['kpi_bg'], edgecolor=T['kpi_border'],
-                        linewidth=0.8, zorder=0)
-    ax.add_patch(bg)
-
-    val_color = T['primary']
-    if positive is True:
-        val_color = T['positive']
-    elif positive is False:
-        val_color = T['negative']
-
-    ax.text(0.5, 0.80, label.upper(), ha='center', va='center',
-            fontsize=config.FONT_SIZE_KPI_LABEL, color=T['text_muted'],
-            fontweight='bold', transform=ax.transAxes)
-    ax.text(0.5, 0.50, str(value), ha='center', va='center',
-            fontsize=config.FONT_SIZE_KPI_VALUE, color=val_color,
-            fontweight='bold', transform=ax.transAxes)
-    if subtitle:
-        ax.text(0.5, 0.20, subtitle, ha='center', va='center',
-                fontsize=config.FONT_SIZE_KPI_LABEL, color=T['text_muted'],
-                transform=ax.transAxes)
+    Delegates to the shared v3 bordered gold-accent card so the classic and v3
+    layouts present an identical house identity (issue #248 rebrand)."""
+    from ._pdf_v3 import _draw_kpi_tile
+    _draw_kpi_tile(ax, label, value, subtitle=subtitle, positive=positive)
 
 
 def draw_dataframe_table(
@@ -152,16 +129,14 @@ def draw_dataframe_table(
 
 def _stamp_header_footer(fig: plt.Figure, strategy_name: str, run_date: str,
                           page_num: int, total_pages: int):
-    """Add a thin header line (strategy name) and footer (page X of Y) to fig."""
+    """Footer stamp only (name · date · page X of Y).
+
+    The former top-left/top-right header text is dropped so it no longer
+    collides with the navy title bar on each page (issue #248 rebrand)."""
     T = _T()
-    fig.text(0.01, 0.985, strategy_name, ha='left', va='top',
-             fontsize=7, color=T['text_muted'], style='italic',
-             transform=fig.transFigure)
-    fig.text(0.99, 0.985, run_date, ha='right', va='top',
-             fontsize=7, color=T['text_muted'],
-             transform=fig.transFigure)
-    fig.text(0.5, 0.008, f'Page {page_num} of {total_pages}',
-             ha='center', va='bottom', fontsize=7, color=T['text_muted'],
+    fig.text(0.5, 0.012,
+             f'{strategy_name}   ·   {run_date}   ·   Page {page_num} of {total_pages}',
+             ha='center', va='bottom', fontsize=6.5, color=T['text_muted'],
              transform=fig.transFigure)
 
 
@@ -180,16 +155,28 @@ def build_cover_page(report_meta: dict) -> plt.Figure:
     fig = plt.figure(figsize=config.FIG_FULL)
     fig.patch.set_facecolor(T['bg'])
 
-    # Navy banner at top
+    # Navy banner at top (house identity). NB: do not call axis('off') — it
+    # hides the navy fill on modern matplotlib (issue #248 bug fix).
+    from matplotlib.lines import Line2D
     banner_ax = fig.add_axes([0, 0.82, 1, 0.18])
     banner_ax.set_facecolor(T['primary'])
-    banner_ax.axis('off')
-    banner_ax.text(0.5, 0.65, 'Trade Analysis Report',
-                   ha='center', va='center', fontsize=20, color='white',
-                   fontweight='bold', transform=banner_ax.transAxes)
-    banner_ax.text(0.5, 0.25, report_meta.get('name', ''),
-                   ha='center', va='center', fontsize=13, color='#bbdefb',
+    banner_ax.set_xlim(0, 1)
+    banner_ax.set_ylim(0, 1)
+    banner_ax.set_xticks([])
+    banner_ax.set_yticks([])
+    for _sp in banner_ax.spines.values():
+        _sp.set_visible(False)
+    banner_ax.text(0.05, 0.80, 'STRATEGY TEARSHEET', ha='left', va='center',
+                   fontsize=8, color='#bbdefb', fontweight='bold',
                    transform=banner_ax.transAxes)
+    banner_ax.text(0.05, 0.45, report_meta.get('name', ''),
+                   ha='left', va='center', fontsize=22, color='white',
+                   fontweight='bold', transform=banner_ax.transAxes)
+    banner_ax.text(0.05, 0.16, 'Performance Report', ha='left', va='center',
+                   fontsize=11, color='#bbdefb', transform=banner_ax.transAxes)
+    # gold rule beneath the banner
+    fig.add_artist(Line2D([0.0, 1.0], [0.82, 0.82], transform=fig.transFigure,
+                          color=T['accent'], linewidth=2.5))
 
     # Date range
     period_ax = fig.add_axes([0.0, 0.74, 1.0, 0.08])
@@ -256,13 +243,9 @@ def build_executive_summary_page(
     fig = plt.figure(figsize=config.FIG_FULL)
     fig.patch.set_facecolor(T['bg'])
 
-    # Title strip
-    title_ax = fig.add_axes([0, 0.955, 1, 0.045])
-    title_ax.set_facecolor(T['primary'])
-    title_ax.axis('off')
-    title_ax.text(0.5, 0.5, 'Executive Summary',
-                  ha='center', va='center', fontsize=13, color='white',
-                  fontweight='bold', transform=title_ax.transAxes)
+    # Title strip (house navy bar + gold rule)
+    _house_navy_bar(fig, [0, 0.955, 1, 0.045], 'Executive Summary',
+                    title_size=12, eyebrow=False)
 
     # Build outer GridSpec
     gs = mgridspec.GridSpec(
@@ -1143,14 +1126,44 @@ def _draw_mc_percentile_table(ax, mc_results: dict, initial_equity: float, mc_dd
 # Utility functions
 # ---------------------------------------------------------------------------
 
-def _add_page_title(fig: plt.Figure, title: str):
+def _house_navy_bar(fig: plt.Figure, rect: list, title: str,
+                    title_size: int = 12, eyebrow: bool = True,
+                    subtitle: str = ''):
+    """Draw the house navy title bar with a gold rule beneath (v3 identity).
+
+    Keeps the axes patch visible — never call axis('off') here, which would
+    hide the navy fill on modern matplotlib (the bug fixed in issue #248)."""
+    from matplotlib.lines import Line2D
     T = _T()
-    title_ax = fig.add_axes([0, 0.955, 1, 0.045])
-    title_ax.set_facecolor(T['primary'])
-    title_ax.axis('off')
-    title_ax.text(0.5, 0.5, title, ha='center', va='center',
-                  fontsize=11, color='white', fontweight='bold',
-                  transform=title_ax.transAxes)
+    ax = fig.add_axes(rect)
+    ax.set_facecolor(T['primary'])
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    for sp in ax.spines.values():
+        sp.set_visible(False)
+    if eyebrow:
+        ax.text(0.03, 0.72, 'STRATEGY TEARSHEET', ha='left', va='center',
+                fontsize=6.5, color='#bbdefb', fontweight='bold',
+                transform=ax.transAxes)
+        ax.text(0.03, 0.33, title, ha='left', va='center', fontsize=title_size,
+                color='white', fontweight='bold', transform=ax.transAxes)
+    else:
+        ax.text(0.03, 0.5, title, ha='left', va='center', fontsize=title_size,
+                color='white', fontweight='bold', transform=ax.transAxes)
+    if subtitle:
+        ax.text(0.97, 0.5, subtitle, ha='right', va='center', fontsize=8,
+                color='#bbdefb', transform=ax.transAxes)
+    # gold rule flush with the bar's bottom edge
+    fig.add_artist(Line2D([0.0, 1.0], [rect[1], rect[1]],
+                          transform=fig.transFigure, color=T['accent'],
+                          linewidth=2.2))
+    return ax
+
+
+def _add_page_title(fig: plt.Figure, title: str):
+    _house_navy_bar(fig, [0, 0.94, 1, 0.06], title, title_size=12, eyebrow=True)
 
 
 def _build_text_page(page_title: str, text: str) -> plt.Figure:
