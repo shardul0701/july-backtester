@@ -178,6 +178,19 @@ output/
 - `report.py` auto-detects the run's `detailed_reports/` directory when given a path inside `analyzer_csvs/`. Pass `--output-dir` to override.
 - S3 uploads (if configured) use the same `<run_id>/` prefix as the key root.
 
+## PDF Tearsheet Layouts (`report.py --layout`)
+
+`report.py` produces one of two PDF layouts, selected with `--layout` (default `v3`):
+
+- **`v3`** (default, new in v1.12.0) — a dense, institutional **2-page** report in the house navy/gold identity (navy title bar + gold rule, bordered gold-accented KPI tiles, navy section headers with gold underlines). Deliberately **not** a clone of any vendor sheet: our own labels/grouping, no imitation "LIVE" pill or copied disclaimer. Page 1: navy title bar (strategy name + "STRATEGY TEARSHEET" eyebrow + version/date) → HEADLINE row of 5 bordered tiles (Net P&L, Return/DD, Sharpe, Max Drawdown, Win Rate) → two-column FULL METRICS (Performance / Periodic Returns | Risk & Shape / Trade Stats). Page 2: TRAILING RETURNS tiles (1M/3M/6M/YTD/1Y/ITD), a trailing-8-month **$ P&L strip** (TOTAL = sum of shown cells), then six small-multiple charts — Equity Curve (Net), Equity In-Sample vs Live (OOS region shaded from `wfa_split_date`), Drawdown ($), Deepest Drawdowns, 6-Month Rolling Sharpe, 6-Month Rolling Volatility. Serenity carries a `*` footnote pointing at its documented proxy definition.
+- **`classic`** — the legacy multi-page tearsheet (`trade_analyzer/_pdf_pages.py::generate_tearsheet_pdf`) with the deep-dive pages (MAE/MFE, per-symbol, MC fan, WFA split, etc.).
+
+**Files:**
+- `trade_analyzer/metrics_v3.py` — pure, stateless institutional metrics computed from the daily equity/return series + trades: Omega, Gain/Pain (Omega = Gain/Pain + 1 at threshold 0), Ulcer Index, % Time in DD, Serenity (documented Ulcer×tail-CVaR-penalized return proxy — reproducible, not vendor-exact), Recovery Factor / Ret-DD (net profit ÷ max DD $), annualized volatility, skewness/excess-kurtosis, payoff ratio, R-expectancy, period returns, monthly $ P&L strip, best/worst day-month-year, positive months/years, and 126-day rolling Sharpe/volatility. Entry point `compute_v3_metrics(...)`.
+- `trade_analyzer/_pdf_v3.py` — the 2-page builders (`build_v3_page1`, `build_v3_page2`) + `generate_tearsheet_v3(report_data, output_path)`. Renders in the existing `default_config.THEME` (navy/gold) with matplotlib only — no new dependencies.
+
+**Wiring:** `report.py` passes `LAYOUT` in `config_params`; `analyzer.py::_run_analysis` branches on it (`generate_tearsheet_v3` vs `generate_tearsheet_pdf`) and adds `trading_days` to `report_data`. Transaction fees are best-effort (summed from any recognised fee column, else `$0` since engine `Profit` is already net). **Tests:** `tests/test_metrics_v3.py` (hand-computed metric values), `tests/test_pdf_v3.py` (2-page smoke, in-range OOS split, empty-trades guard).
+
 ## Do Not Touch
 - `helpers/indicators.py` strategy **logic** (all working correctly) — docstring additions and documentation improvements are permitted provided no signal logic, parameter handling, imports, or formatting is changed
 - `helpers/simulations.py` and `helpers/portfolio_simulations.py` simulation engines — **the execution core was deliberately refactored for futures support (issue #229): every cost/sizing/accounting site now routes through the instrument-metadata layer (`helpers/instruments.py`). The equity path is protected byte-for-byte by the golden-master suite (`tests/test_engine_characterization.py`) — any change here MUST keep that suite green.**
