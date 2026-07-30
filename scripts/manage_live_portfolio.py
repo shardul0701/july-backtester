@@ -1,4 +1,4 @@
-"""Daily after-close manager for all 5 live paper strategies (T+1 model).
+"""Daily after-close manager for all 6 live paper strategies (T+1 model).
 
 Intended to run ONCE per weekday after the close (via a 5:30 PM ET scheduled task).
 The strategies are next-day-open (T+1): we observe day N's close, decide, and the
@@ -10,6 +10,11 @@ Flow:
            submits market/day orders). Its stdout is logged + split per strategy.
   Phase 2  S8        -> build_s8_alpaca_targets.py  -> reconcile vs live S8 account.
   Phase 3  SSD       -> build_ssd_alpaca_targets.py -> reconcile vs live SSD account.
+  Phase 4  AQR-B+MR  -> build_aqr_blend_targets.py -> reconcile vs live AQR account
+           (locked PR #18 design: 70% AQR-B + 30% MR_VG12_PIT blended into ONE
+           target book for the shared AQR paper account -- AQR-A is excluded,
+           held as research only, since A/B correlation ~0.75 means running
+           both isn't real diversification).
 
 Every order is appended to paper_state/logs/<STRATEGY>.log (a dated block listing
 each SELL/BUY with its reason), plus a combined paper_state/logs/daily_run.log.
@@ -41,10 +46,11 @@ LOGDIR = ROOT / "paper_state" / "logs"
 ALPACA_BASE = "https://paper-api.alpaca.markets"
 MIN_NOTIONAL = 25.0
 SSD_PRUNE = 0.005   # drop sub-0.5% dust (scale-approximation noise) before SSD orders
+AQR_RESUME_DATE = "2026-07-31"  # AQR liquidated to cash 2026-07-09; Zach approved resuming on the 07-31 quarterly boundary instead of 08-01
 
 # Per-strategy Alpaca env-key prefixes.
 PREFIX = {"B1_VG12_PIT": "B1", "B2_VG12_PIT": "B2", "MR_VG12_PIT": "MR",
-          "S8_DMVC35_PIT": "S8", "SSD_B2_DG20_PIT": "SSD"}
+          "S8_DMVC35_PIT": "S8", "SSD_B2_DG20_PIT": "SSD", "AQR_AB_PIT": "AQR"}
 
 
 def load_env() -> dict:
@@ -238,6 +244,17 @@ def main() -> int:
     blk = reconcile_and_submit("SSD_B2_DG20_PIT", ssd_book, env, args.dry_run, prune=SSD_PRUNE)
     log_block("SSD_B2_DG20_PIT", blk)
     print(blk)
+
+    # ── Phase 4: AQR-B + MR_VG12_PIT blend (one shared account, PR #18 locked) ───
+    print("\n[Phase 4] AQR-B+MR — build + reconcile")
+    if datetime.now().strftime("%Y-%m-%d") < AQR_RESUME_DATE:
+        print(f"  Paused until {AQR_RESUME_DATE} (liquidated to cash 2026-07-09). Skipping.")
+    else:
+        run(["scripts/build_aqr_blend_targets.py", "--account-equity", "100000"], env)
+        aqr_book = book_from_csv(ROOT / "output" / "live_aqr_alpaca" / "AQR_latest_target_weights.csv")
+        blk = reconcile_and_submit("AQR_AB_PIT", aqr_book, env, args.dry_run)
+        log_block("AQR_AB_PIT", blk)
+        print(blk)
 
     print(f"\nDone. Per-strategy logs in {LOGDIR}")
     return 0
