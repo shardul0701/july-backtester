@@ -132,11 +132,21 @@ def _stamp_header_footer(fig: plt.Figure, strategy_name: str, run_date: str,
     """Footer stamp only (name · date · page X of Y).
 
     The former top-left/top-right header text is dropped so it no longer
-    collides with the navy title bar on each page (issue #248 rebrand)."""
+    collides with the navy title bar on each page (issue #248 rebrand).
+
+    y=0.004 keeps the footer clear of the bottom x-axis label/ticks on
+    full-page charts (Equity & Drawdown, Benchmark Comparison, etc.) and the
+    rotated tick labels on the Executive Summary page's underwater panel.
+    The pre-rebrand footer lived at y=0.008 with just 'Page X of Y' and had
+    no collisions; the rebrand's longer combined name+date+page string
+    collided there once measured precisely (see
+    tests/test_pdf_layout.py::TestFooterStampNoOverlap, added while fixing
+    this during review of PR #249), so the footer sits a bit lower still,
+    with a smaller font for extra clearance."""
     T = _T()
-    fig.text(0.5, 0.012,
+    fig.text(0.5, 0.004,
              f'{strategy_name}   ·   {run_date}   ·   Page {page_num} of {total_pages}',
-             ha='center', va='bottom', fontsize=6.5, color=T['text_muted'],
+             ha='center', va='bottom', fontsize=6, color=T['text_muted'],
              transform=fig.transFigure)
 
 
@@ -248,9 +258,12 @@ def build_executive_summary_page(
                     title_size=12, eyebrow=False)
 
     # Build outer GridSpec
+    # bottom=0.06 (was 0.04): the underwater panel's rotated 20-degree x-tick
+    # labels dip low enough to collide with the footer stamp at bottom=0.04 —
+    # found and fixed during review of PR #249.
     gs = mgridspec.GridSpec(
         3, 1, figure=fig,
-        top=0.94, bottom=0.04, left=0.07, right=0.97,
+        top=0.94, bottom=0.06, left=0.07, right=0.97,
         hspace=0.35,
         height_ratios=[1, 2.8, 0.85],
     )

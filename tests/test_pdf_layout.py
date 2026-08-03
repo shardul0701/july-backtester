@@ -174,6 +174,97 @@ class TestKpiTile:
         plt.close(fig)
 
 
+class TestFooterStampNoOverlap:
+    """Regression test (found during adversarial review of PR #249): the
+    house-identity rebrand combined the old separate name/date/'Page X of Y'
+    text into one longer centered string and moved it from y=0.008 to
+    y=0.012. That put it close enough to the bottom x-axis label/ticks that
+    it visibly collided with 'Date' and rotated tick labels on full-page
+    charts (Equity & Drawdown, Benchmark Comparison) and with the Executive
+    Summary page's underwater panel — legible on ``main`` (y=0.008, short
+    text) but not on the rebrand branch. Fixed by keeping the footer at
+    y=0.008 and giving the Executive Summary GridSpec a taller bottom
+    margin. This test renders a real full-page chart, stamps the footer the
+    same way ``generate_tearsheet_pdf`` does, and asserts the footer's
+    bounding box never rises above the bottom axis's xlabel."""
+
+    def test_stamp_does_not_overlap_equity_drawdown_xlabel(self):
+        from trade_analyzer._pdf_pages import _stamp_header_footer
+        from trade_analyzer import plotting as _plotting
+
+        trades_df = _make_trades(60)
+        equity_dd_pct = (trades_df['Cumulative_Profit'].cummax()
+                         - trades_df['Cumulative_Profit'])
+        fig = _plotting.plot_equity_and_drawdown(trades_df, equity_dd_pct, None)
+        assert fig is not None
+
+        _stamp_header_footer(fig, 'Some Strategy Name', '2026-01-01_120000', 3, 13)
+
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+
+        footer_text = fig.texts[-1]
+        footer_bbox = footer_text.get_window_extent(renderer)
+
+        bottom_ax = fig.axes[-1]
+        xlabel_bbox = bottom_ax.xaxis.label.get_window_extent(renderer)
+
+        # Display coordinates increase upward from the bottom of the figure,
+        # so "no overlap" means the footer's top edge sits at/below the
+        # xlabel's bottom edge.
+        assert footer_bbox.y1 <= xlabel_bbox.y0, (
+            f"Footer stamp (y0={footer_bbox.y0}, y1={footer_bbox.y1}) overlaps "
+            f"the 'Date' xlabel (y0={xlabel_bbox.y0}, y1={xlabel_bbox.y1})"
+        )
+        plt.close(fig)
+
+    def test_stamp_y_position_is_low_enough_to_clear_axis_labels(self):
+        """Guard against silently reintroducing the higher y=0.012 that
+        caused the collision found in PR #249 review — the footer must stay
+        at/below the fixed, geometry-verified y=0.004."""
+        from trade_analyzer._pdf_pages import _stamp_header_footer
+        fig = plt.figure()
+        _stamp_header_footer(fig, 'Strategy', '2026-01-01', 1, 1)
+        footer_text = fig.texts[-1]
+        assert footer_text.get_position()[1] <= 0.004
+        plt.close(fig)
+
+    def test_stamp_does_not_overlap_executive_summary_underwater_ticks(self):
+        """The Executive Summary page's underwater panel uses rotated
+        20-degree x-tick labels that dip close to the figure's bottom edge —
+        another site of the same collision, fixed by widening that page's
+        GridSpec bottom margin (0.04 -> 0.06) alongside the footer fix."""
+        from trade_analyzer._pdf_pages import _stamp_header_footer, build_executive_summary_page
+
+        trades_df = _make_trades(60)
+        report_data = _make_report_data(trades_df, out_dir='.')
+        fig = build_executive_summary_page(
+            trades_df, report_data['daily_equity'], report_data['benchmark_df'],
+            report_data['benchmark_ticker'], report_data['equity_dd_percent'],
+            report_data['core_metrics'], report_data['risk_free_rate'],
+            report_data['initial_equity'], wfa_split_date=None,
+        )
+        _stamp_header_footer(fig, 'Some Strategy Name', '2026-01-01_120000', 2, 13)
+
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+
+        footer_text = fig.texts[-1]
+        footer_bbox = footer_text.get_window_extent(renderer)
+
+        underwater_ax = fig.axes[-1]
+        tick_bboxes = [lab.get_window_extent(renderer)
+                       for lab in underwater_ax.get_xticklabels() if lab.get_text()]
+        assert tick_bboxes, "expected rotated x-tick labels on the underwater panel"
+        lowest_tick_y0 = min(b.y0 for b in tick_bboxes)
+
+        assert footer_bbox.y1 <= lowest_tick_y0, (
+            f"Footer stamp (y1={footer_bbox.y1}) overlaps the underwater "
+            f"panel's x-tick labels (lowest y0={lowest_tick_y0})"
+        )
+        plt.close(fig)
+
+
 class TestDataframeTable:
     def test_dataframe_table_renders_correct_size(self):
         """draw_dataframe_table() should add a Table to the axes."""
