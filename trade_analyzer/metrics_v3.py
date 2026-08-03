@@ -85,10 +85,24 @@ def pct_time_in_drawdown(equity: pd.Series) -> float:
     return float((eq < peak).mean())
 
 
-def var_cvar_pct(daily_returns: pd.Series, level: float = 0.05):
+def var_cvar_pct(daily_returns: pd.Series, level: float = 0.05, active_only: bool = False):
     """Historical VaR / CVaR of the daily-return distribution (as fractions).
-    Both are returned as negative numbers for a loss-tail level."""
+    Both are returned as negative numbers for a loss-tail level.
+
+    ``active_only=True`` drops zero-return (flat/no-position) rows before the
+    quantile is taken. A low-exposure strategy that's flat on a supermajority
+    of days has its 5th-percentile land exactly on 0.0 when computed over the
+    *full* daily-return series (the flat days dominate the tail), which reads
+    as "no tail risk" even though the strategy has real, non-trivial losing
+    days when it *is* in the market. Restricting to active (non-zero-return)
+    days keeps the quantile meaningful for that class of strategy. For a
+    strategy that trades every day this is a no-op (no zero-return rows to
+    drop). Default is False so existing callers (e.g. serenity_index's
+    pitfall term, which pairs this CVaR with the std of the *same* full
+    return series) are unaffected."""
     r = _clean_returns(daily_returns)
+    if active_only:
+        r = r[r != 0]
     if len(r) < 2:
         return np.nan, np.nan
     var = float(r.quantile(level))
@@ -138,12 +152,21 @@ def recovery_factor(net_profit: float, max_drawdown_dollars: float) -> float:
     return float(net_profit) / mdd
 
 
-def serenity_index(equity: pd.Series, daily_returns: pd.Series) -> float:
+def serenity_index(equity: pd.Series, daily_returns: pd.Series, annualized_return: float) -> float:
     """Serenity Ratio — an Ulcer-penalized return that also charges for tail risk.
 
     Definition used here (documented so it is reproducible):
-        serenity = total_return / (ulcer_index * pitfall)
+        serenity = annualized_return / (ulcer_index * pitfall)
         pitfall  = |CVaR_5% of daily returns| / std(daily returns)
+
+    The numerator is the strategy's **annualized** return (CAGR), not raw
+    cumulative total return. Using cumulative return here would make Serenity
+    scale with backtest length even for two strategies with identical
+    risk-adjusted quality — a 10-year history structurally outscores an
+    otherwise-identical 2-year history. The denominator (Ulcer Index and the
+    pitfall tail-risk term) is already duration-invariant, so annualizing the
+    numerator is what makes Serenity comparable across strategies tested over
+    different periods, which is the entire point of using it to rank them.
 
     The pitfall term (~1.6 for a normal distribution) inflates the denominator
     when the loss tail is fatter than normal, so a strategy with rare large
@@ -156,9 +179,8 @@ def serenity_index(equity: pd.Series, daily_returns: pd.Series) -> float:
     r = _clean_returns(daily_returns)
     if len(eq) < 2 or len(r) < 2:
         return np.nan
-    total_return = eq.iloc[-1] / eq.iloc[0] - 1.0 if eq.iloc[0] > 0 else np.nan
     ui = ulcer_index(eq)
-    if pd.isna(total_return) or pd.isna(ui) or ui < 1e-9:
+    if pd.isna(annualized_return) or pd.isna(ui) or ui < 1e-9:
         return np.nan
     std = r.std(ddof=1)
     _, cvar = var_cvar_pct(r, level=0.05)
@@ -167,7 +189,7 @@ def serenity_index(equity: pd.Series, daily_returns: pd.Series) -> float:
     pitfall = abs(cvar) / std
     if pitfall < 1e-9:
         return np.nan
-    return float(total_return / (ui * pitfall))
+    return float(annualized_return / (ui * pitfall))
 
 
 # ---------------------------------------------------------------------------
@@ -320,18 +342,30 @@ def rolling_volatility(daily_returns: pd.Series, window: int = 126,
 # ---------------------------------------------------------------------------
 
 _FEE_COLUMNS = ("Commission", "Commissions", "Fees", "Total_Fees",
-                "TransactionCost", "Transaction_Cost", "Cost")
+                "TransactionCost", "Transaction_Cost")
 
 
 def total_fees(trades_df: pd.DataFrame) -> float:
-    """Sum of any recognised per-trade fee/commission column; 0.0 when none of
-    them are present (Profit is already net of costs in this engine)."""
+    """Sum of every recognised per-trade fee/commission column; 0.0 when none
+    of them are present (Profit is already net of costs in this engine).
+
+    A trades CSV can legitimately carry multiple distinct fee line items
+    (e.g. a broker ``Commission`` column plus a separate regulatory/exchange
+    ``Fees`` column) -- all matched columns are summed rather than returning
+    on the first match, so real fee data isn't silently discarded.
+
+    ``"Cost"`` is deliberately not in ``_FEE_COLUMNS``: it's a common header
+    for position cost basis / notional (e.g. shares * entry_price), not a
+    transaction fee, and auto-detecting it inflated "fees" by orders of
+    magnitude.
+    """
     if not isinstance(trades_df, pd.DataFrame) or trades_df.empty:
         return 0.0
+    total = 0.0
     for col in _FEE_COLUMNS:
         if col in trades_df.columns and pd.api.types.is_numeric_dtype(trades_df[col]):
-            return float(trades_df[col].abs().sum())
-    return 0.0
+            total += float(trades_df[col].abs().sum())
+    return total
 
 
 # ---------------------------------------------------------------------------
@@ -387,7 +421,13 @@ def compute_v3_metrics(
             best_trade = float(profit.max())
             worst_trade = float(profit.min())
 
-    var95, cvar95 = var_cvar_pct(r, level=0.05)
+    # active_only=True: VaR/CVaR are computed on days the strategy actually
+    # held a position, so flat days (return == 0) don't drag the 5th
+    # percentile to 0.00% for low-exposure strategies. See var_cvar_pct
+    # docstring. The rendered label (_pdf_v3.py) is suffixed "(active)" so
+    # this basis is disclosed rather than silently differing from a
+    # naive full-series VaR.
+    var95, cvar95 = var_cvar_pct(r, level=0.05, active_only=True)
     fees = total_fees(trades_df)
 
     return {
@@ -400,7 +440,7 @@ def compute_v3_metrics(
         "calmar": calmar,
         "omega": omega_ratio(mret if not mret.empty else r, 0.0),
         "gain_to_pain": gain_to_pain(mret if not mret.empty else r),
-        "serenity": serenity_index(eq, r),
+        "serenity": serenity_index(eq, r, cagr),
         "recovery_factor": recovery_factor(total_profit, max_dd_dollars),
         "ret_dd": recovery_factor(total_profit, max_dd_dollars),
         "cagr": cagr,

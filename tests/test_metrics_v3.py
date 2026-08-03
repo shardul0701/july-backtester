@@ -93,6 +93,102 @@ class TestRecoveryAndPayoff:
         assert np.isinf(m.payoff_ratio(200, 0))
 
 
+class TestSerenityIndex:
+    """Covers the annualized-numerator fix (issue: Serenity scaled with
+    backtest length because it used cumulative total_return instead of an
+    annualized return in the numerator)."""
+
+    def _fixture(self):
+        eq = pd.Series([100.0, 90.0, 105.0, 95.0, 115.0],
+                        index=pd.bdate_range("2020-01-01", periods=5))
+        r = eq.pct_change().dropna()
+        return eq, r
+
+    def test_uses_passed_in_annualized_return_not_cumulative_total_return(self):
+        eq, r = self._fixture()
+        ann_ret = 0.25  # deliberately distinct from the cumulative total return
+        ui = m.ulcer_index(eq)
+        std = r.std(ddof=1)
+        _, cvar = m.var_cvar_pct(r, level=0.05)
+        pitfall = abs(cvar) / std
+        expected = ann_ret / (ui * pitfall)
+
+        assert m.serenity_index(eq, r, ann_ret) == pytest.approx(expected)
+
+        # Sanity: the pre-fix (cumulative) formula would have given a
+        # different number, confirming the numerator actually changed.
+        total_return = eq.iloc[-1] / eq.iloc[0] - 1.0
+        assert total_return != pytest.approx(ann_ret)
+        old_style = total_return / (ui * pitfall)
+        assert m.serenity_index(eq, r, ann_ret) != pytest.approx(old_style)
+
+    def test_nan_when_annualized_return_is_nan(self):
+        eq, r = self._fixture()
+        assert np.isnan(m.serenity_index(eq, r, np.nan))
+
+    def test_nan_for_short_series(self):
+        eq = pd.Series([100.0], index=pd.bdate_range("2020-01-01", periods=1))
+        r = pd.Series([], dtype=float)
+        assert np.isnan(m.serenity_index(eq, r, 0.10))
+
+
+class TestSerenityDurationInvariance:
+    """Regression test for the reviewer's exact bug shape: the same
+    risk-adjusted profile (identical per-cycle return pattern, hence
+    identical Ulcer Index / tail-risk 'pitfall' and identical CAGR) measured
+    over a short vs. a 5x-longer backtest must now produce comparable
+    Serenity scores — not one that balloons with duration."""
+
+    @staticmethod
+    def _cyclic_equity(pattern, cycles, start="2020-01-01"):
+        rets = np.tile(np.array(pattern, dtype=float), cycles)
+        idx = pd.bdate_range(start, periods=len(rets) + 1)
+        growth = np.concatenate([[1.0], np.cumprod(1 + rets)])
+        return pd.Series(100_000.0 * growth, index=idx)
+
+    def _serenity_for(self, eq):
+        from trade_analyzer import calculations
+        r = eq.pct_change().dropna()
+        duration_years = (eq.index[-1] - eq.index[0]).days / 365.25
+        cagr = calculations.calculate_cagr(eq.iloc[0], eq.iloc[-1], duration_years)
+        return m.serenity_index(eq, r, cagr)
+
+    def test_fixed_annualization_keeps_serenity_comparable_across_durations(self):
+        pattern = [0.02, -0.01, 0.015, -0.02, 0.03]  # one repeating weekly cycle
+        short_eq = self._cyclic_equity(pattern, cycles=4)    # ~1 month
+        long_eq = self._cyclic_equity(pattern, cycles=20)    # ~5x the duration
+
+        short_serenity = self._serenity_for(short_eq)
+        long_serenity = self._serenity_for(long_eq)
+
+        assert not np.isnan(short_serenity)
+        assert not np.isnan(long_serenity)
+        assert short_serenity == pytest.approx(long_serenity, rel=0.05)
+
+    def test_old_cumulative_formula_would_have_diverged_with_duration(self):
+        """Documents the bug being fixed: substituting raw cumulative
+        total_return for the numerator (the pre-fix formula) makes Serenity
+        balloon with backtest length even though the risk profile and
+        per-cycle return are identical -- exactly the reviewer's finding."""
+        pattern = [0.02, -0.01, 0.015, -0.02, 0.03]
+        short_eq = self._cyclic_equity(pattern, cycles=4)
+        long_eq = self._cyclic_equity(pattern, cycles=20)
+
+        def _old_style_serenity(eq):
+            r = eq.pct_change().dropna()
+            total_return = eq.iloc[-1] / eq.iloc[0] - 1.0
+            ui = m.ulcer_index(eq)
+            std = r.std(ddof=1)
+            _, cvar = m.var_cvar_pct(r, level=0.05)
+            pitfall = abs(cvar) / std
+            return total_return / (ui * pitfall)
+
+        short_old = _old_style_serenity(short_eq)
+        long_old = _old_style_serenity(long_eq)
+
+        assert long_old / short_old > 2.0
+
+
 class TestVolatilityAndDistribution:
     def test_annualized_volatility(self):
         r = pd.Series([0.01, -0.01, 0.01, -0.01])
@@ -108,6 +204,47 @@ class TestVolatilityAndDistribution:
     def test_skewness_matches_pandas(self):
         r = pd.Series(np.random.default_rng(1).normal(0, 1, 500))
         assert m.skewness(r) == pytest.approx(r.skew())
+
+
+class TestVarCvar:
+    """Covers the reported bug (VaR 95% prints 0.00% for a low-exposure
+    strategy) and the active_only fix."""
+
+    def _mostly_flat_returns(self):
+        # 100 days: 3 real losses, 92 flat (no position), 5 small gains --
+        # a low-exposure strategy shape like the reviewer's 87.7%-flat case.
+        return pd.Series([-0.05, -0.03, -0.02] + [0.0] * 92 + [0.01] * 5)
+
+    def test_full_series_quantile_diluted_to_zero_by_flat_days(self):
+        # Documents the pre-fix behavior: with active_only left at its
+        # default (False), the flat days dominate the tail and the 5th
+        # percentile lands exactly on 0.0, masking real losing days.
+        r = self._mostly_flat_returns()
+        var_full, _ = m.var_cvar_pct(r, level=0.05)
+        assert var_full == pytest.approx(0.0)
+
+    def test_active_only_excludes_flat_days_and_surfaces_real_tail_risk(self):
+        r = self._mostly_flat_returns()
+        active = r[r != 0]
+        expected_var = float(active.quantile(0.05))
+        expected_cvar = float(active[active <= expected_var].mean())
+
+        var_active, cvar_active = m.var_cvar_pct(r, level=0.05, active_only=True)
+
+        assert var_active == pytest.approx(expected_var)
+        assert cvar_active == pytest.approx(expected_cvar)
+        assert var_active < 0.0  # no longer masked to 0.00%
+
+    def test_active_only_is_noop_when_no_flat_days(self):
+        r = pd.Series([0.01, -0.02, 0.015, -0.03, 0.02, -0.01])
+        assert m.var_cvar_pct(r, level=0.05, active_only=True) == \
+            m.var_cvar_pct(r, level=0.05, active_only=False)
+
+    def test_active_only_too_few_nonzero_points_is_nan(self):
+        r = pd.Series([0.0, 0.0, 0.0, -0.01])
+        var, cvar = m.var_cvar_pct(r, level=0.05, active_only=True)
+        assert np.isnan(var)
+        assert np.isnan(cvar)
 
 
 class TestPeriodReturns:
@@ -208,3 +345,58 @@ class TestAggregator:
                                  max_dd_dollars=1500.0, max_dd_pct=1.5, trading_days=252)
         assert M["recovery_factor"] == pytest.approx(6000.0 / 1500.0)
         assert M["ret_dd"] == pytest.approx(M["recovery_factor"])
+
+
+class TestTotalFees:
+    """Blocker #3 (PR #249, reviewer shardul0701): total_fees() must sum
+    every recognised fee column instead of returning on the first match,
+    and must never treat a "Cost" column (position notional, not a fee) as
+    a fee."""
+
+    def test_multiple_distinct_fee_columns_are_summed(self):
+        # Reviewer's repro shape: Commission ($249) and Fees ($1,245) are two
+        # genuinely separate fee line items -- both must count.
+        trades = pd.DataFrame({
+            "Commission": [100.0, 149.0],
+            "Fees": [620.0, 625.0],
+        })
+        assert m.total_fees(trades) == pytest.approx(249.0 + 1245.0)
+
+    def test_cost_column_is_ignored_entirely(self):
+        # "Cost" is position cost basis / notional, not a fee -- a lone
+        # Cost column must contribute $0, not be auto-detected as fees.
+        trades = pd.DataFrame({
+            "Cost": [3_000_000.0, 3_225_000.0],
+        })
+        assert m.total_fees(trades) == pytest.approx(0.0)
+
+    def test_cost_column_alongside_real_fees_not_double_counted(self):
+        # A Cost (notional) column sitting next to a genuine Commission
+        # column must not leak into the fee total.
+        trades = pd.DataFrame({
+            "Commission": [100.0, 149.0],
+            "Cost": [3_000_000.0, 3_225_000.0],
+        })
+        assert m.total_fees(trades) == pytest.approx(249.0)
+
+    def test_single_fee_column_no_regression(self):
+        trades = pd.DataFrame({"Commission": [10.0, 20.0, 30.0]})
+        assert m.total_fees(trades) == pytest.approx(60.0)
+
+    def test_singular_and_plural_commission_columns_both_summed(self):
+        # Header-naming inconsistency across data sources (Commission vs
+        # Commissions) is still two matched columns per the literal
+        # sum-all-matches fix -- no deduplication heuristic is applied.
+        trades = pd.DataFrame({
+            "Commission": [10.0, 20.0],
+            "Commissions": [5.0, 5.0],
+        })
+        assert m.total_fees(trades) == pytest.approx(40.0)
+
+    def test_empty_or_non_dataframe_returns_zero(self):
+        assert m.total_fees(pd.DataFrame()) == 0.0
+        assert m.total_fees(None) == 0.0
+
+    def test_no_recognised_columns_returns_zero(self):
+        trades = pd.DataFrame({"Profit": [10.0, -5.0]})
+        assert m.total_fees(trades) == pytest.approx(0.0)
