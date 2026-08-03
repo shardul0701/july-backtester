@@ -53,8 +53,17 @@ def annualized_volatility(daily_returns: pd.Series, trading_days: int = 252) -> 
 
 def ulcer_index(equity: pd.Series) -> float:
     """Ulcer Index = sqrt(mean(drawdown_pct**2)), drawdown measured off the
-    running peak as a fraction. Penalizes deep *and* prolonged drawdowns."""
+    running peak as a fraction. Penalizes deep *and* prolonged drawdowns.
+
+    The upstream daily_equity Series (data_handler.calculate_daily_returns)
+    is built on a calendar-day pd.date_range + ffill, so weekends carry a
+    synthetic flat-forward copy of the prior Friday's value. Those rows are
+    never a new peak or a new trough relative to the trading day they were
+    ffilled from, so dropping them here doesn't change the drawdown shape at
+    surviving (trading-day) rows — it just keeps them out of the mean."""
     eq = _clean_equity(equity)
+    if len(eq):
+        eq = eq[eq.index.dayofweek < 5]
     if len(eq) < 2:
         return np.nan
     peak = eq.cummax()
@@ -63,8 +72,13 @@ def ulcer_index(equity: pd.Series) -> float:
 
 
 def pct_time_in_drawdown(equity: pd.Series) -> float:
-    """Fraction of bars where equity sits below its prior peak (0..1)."""
+    """Fraction of bars where equity sits below its prior peak (0..1).
+
+    Restricted to business days (Mon-Fri) — see ulcer_index docstring for why
+    the calendar-day ffilled weekend rows are excluded from the denominator."""
     eq = _clean_equity(equity)
+    if len(eq):
+        eq = eq[eq.index.dayofweek < 5]
     if len(eq) < 2:
         return np.nan
     peak = eq.cummax()
@@ -245,9 +259,11 @@ def monthly_pnl_strip(equity: pd.Series, initial_equity: float, n_months: int = 
 def period_returns(equity: pd.Series) -> dict:
     """Trailing return over standard windows, each as a fraction.
 
-    A window whose start predates the first equity bar falls back to the
-    inception value, so a short backtest reports its since-inception return for
-    the longer windows rather than N/A."""
+    A window whose start predates the first equity bar returns NaN (N/A) —
+    the window genuinely doesn't fit inside the available history, so a short
+    backtest must not silently report its since-inception return as if it
+    were a real 3M/6M/YTD/1Y figure. ITD is exempt: it is defined as the
+    full-history return, so it always equals inception-to-date."""
     eq = _clean_equity(equity)
     out = {k: np.nan for k in ("1M", "3M", "6M", "YTD", "1Y", "ITD")}
     if len(eq) < 2 or eq.iloc[0] <= 0:
@@ -256,6 +272,8 @@ def period_returns(equity: pd.Series) -> dict:
     end_date = eq.index[-1]
 
     def _ret_since(start_date) -> float:
+        if start_date < eq.index[0]:
+            return np.nan
         prior = eq.loc[:start_date]
         base = prior.iloc[-1] if not prior.empty else eq.iloc[0]
         return float(end_val / base - 1.0) if base > 0 else np.nan
@@ -279,7 +297,7 @@ def rolling_sharpe(daily_returns: pd.Series, window: int = 126,
     r = _clean_returns(daily_returns)
     if len(r) < window:
         return pd.Series(dtype=float)
-    rf_daily = risk_free_rate / trading_days
+    rf_daily = (1 + risk_free_rate) ** (1 / trading_days) - 1
     excess = r - rf_daily
     mean = excess.rolling(window).mean()
     std = excess.rolling(window).std(ddof=1)
@@ -375,7 +393,7 @@ def compute_v3_metrics(
     return {
         # overall performance
         "total_profit": total_profit,
-        "gross_profit_net": total_profit + fees if pd.notna(total_profit) else np.nan,
+        "gross_profit": total_profit + fees if pd.notna(total_profit) else np.nan,
         "transaction_fees": fees,
         "sharpe": core_metrics.get("sharpe", np.nan),
         "sortino": core_metrics.get("sortino", np.nan),

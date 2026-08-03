@@ -241,17 +241,16 @@ def build_v3_page1(meta: dict, M: dict) -> plt.Figure:
     left_blocks = [
         ("Performance", [
             ("Net P&L", _curr(M.get("total_profit")), (M.get("total_profit") or 0) < 0),
-            ("Gross P&L", _curr(M.get("gross_profit_net")), False),
+            ("Gross P&L", _curr(M.get("gross_profit")), False),
             ("Est. Costs", _curr(-abs(M.get("transaction_fees") or 0)),
              (M.get("transaction_fees") or 0) > 0),
             ("Sharpe", _num(M.get("sharpe")), False),
             ("Sortino", _num(M.get("sortino")), False),
             ("Calmar", _num(M.get("calmar")), False),
             ("Omega", _num(M.get("omega")), False),
-            ("Gain / Pain", _num(M.get("gain_to_pain")), False),
+            ("Gain / Pain (Ω-1)", _num(M.get("gain_to_pain")), False),
             ("Serenity*", _num(M.get("serenity")), False),
             ("Recovery Factor", _num(M.get("recovery_factor")), False),
-            ("Return / DD", _num(M.get("ret_dd")), False),
         ]),
         ("Periodic Returns", [
             ("Avg Month P&L", _curr(M.get("avg_monthly_pnl")), (M.get("avg_monthly_pnl") or 0) < 0),
@@ -281,8 +280,8 @@ def build_v3_page1(meta: dict, M: dict) -> plt.Figure:
             ("CVaR 95%", _pct(M.get("cvar_95")), True),
             ("Ulcer Index", _num(M.get("ulcer_index"), 4), False),
             ("% Time in Drawdown", _pct(M.get("pct_time_in_dd"), decimals=1), False),
-            ("Skewness", _num(M.get("skewness")), False),
-            ("Excess Kurtosis", _num(M.get("excess_kurtosis")), False),
+            ("Skewness (mo.)", _num(M.get("skewness")), False),
+            ("Excess Kurtosis (mo.)", _num(M.get("excess_kurtosis")), False),
         ]),
         ("Trade Stats", [
             ("Trades", _int(M.get("total_trades")), False),
