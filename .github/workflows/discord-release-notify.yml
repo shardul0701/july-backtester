@@ -13,7 +13,7 @@ jobs:
     steps:
       - name: Post release notice to Discord
         env:
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_RELEASE_WEBHOOK_URL }}
           RELEASE_NAME: ${{ github.event.release.name || 'Manual test trigger' }}
           TAG_NAME: ${{ github.event.release.tag_name || 'v0.0.0-test' }}
           RELEASE_BODY: ${{ github.event.release.body || 'No release notes provided.' }}
@@ -23,7 +23,7 @@ jobs:
           REPO_NAME: ${{ github.repository }}
         run: |
           if [ -z "$DISCORD_WEBHOOK_URL" ]; then
-            echo "::error::DISCORD_WEBHOOK_URL secret is not set. Run: gh secret set DISCORD_WEBHOOK_URL --repo $REPO_NAME"
+            echo "::error::DISCORD_RELEASE_WEBHOOK_URL secret is not set. Run: gh secret set DISCORD_RELEASE_WEBHOOK_URL --repo $REPO_NAME"
             exit 1
           fi
 
