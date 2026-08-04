@@ -218,6 +218,13 @@ def main():
         default=None,
         help="Custom name for the generated PDF/Markdown report and its parent folder. If not provided, the CSV filename will be used.",
     )
+    parser.add_argument(
+        "--layout",
+        choices=["v3", "classic"],
+        default="v3",
+        help="PDF tearsheet layout. 'v3' (default) = dense 2-page institutional "
+             "report; 'classic' = the legacy multi-page tearsheet.",
+    )
     args = parser.parse_args()
 
     # Base config shared across both modes (BASE_OUTPUT_DIRECTORY set per mode below)
@@ -244,6 +251,7 @@ def main():
         'CRITICAL_COLS': CRITICAL_COLS,
         'NUMERIC_COLS': NUMERIC_COLS,
         'WFA_SPLIT_RATIO': WFA_SPLIT_RATIO,
+        'LAYOUT': args.layout,
     }
 
     if args.all:

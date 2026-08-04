@@ -237,6 +237,13 @@ graph TD
     I --> J[PDF & Markdown Reports generated in detailed_reports/]
 ```
 
+**PDF tearsheet layout** — `report.py` renders one of two layouts, selected with `--layout`:
+
+- **`v3`** (default) — dense 2-page institutional tearsheet (headline KPIs, full metrics, trailing returns, and six small-multiple charts).
+- **`classic`** — the full 14-page deep-dive (MAE/MFE, per-symbol breakdown, Monte Carlo fan, WFA split, appendices).
+
+`python report.py <csv>` produces the v3 layout; add `--layout classic` for the deep-dive. See [`docs/tearsheet_samples/`](docs/tearsheet_samples/) for side-by-side samples of both.
+
 ---
 
 ## LLM Verdict
