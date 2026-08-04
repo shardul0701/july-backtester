@@ -41,39 +41,29 @@ class TestUlcerAndDrawdown:
 
     def test_ulcer_known_value(self):
         # equity 100 -> 90: dd = [0, -0.1]; UI = sqrt((0 + 0.01)/2)
-        # Explicit weekday dates (Thu/Fri) -- the shared _equity() default
-        # (freq="ME" from 2020-01-31) lands its 2nd point on Sat 2020-02-29,
-        # which the business-day filter in ulcer_index() would now drop.
         assert m.ulcer_index(_equity([100, 90], start="2020-01-30", freq="D")) == pytest.approx(np.sqrt(0.01 / 2))
 
     def test_pct_time_in_drawdown(self):
-        # Default fixture dates (freq="ME" from 2020-01-31) are
-        # Fri 1/31, Sat 2/29, Tue 3/31, Thu 4/30 -- the Sat row (value 90)
-        # is now excluded as a weekend by pct_time_in_drawdown(), leaving
-        # eq = [100, 95, 105]; peaks = [100, 100, 105]; below-peak bar =
-        # index 1 (95 < 100) -> 1/3.
-        assert m.pct_time_in_drawdown(_equity([100, 90, 95, 105])) == pytest.approx(1 / 3)
+        # Every real equity row counts (no weekday filter since issue #248
+        # review — see test_real_weekend_exit_row_is_counted).
+        # eq = [100, 90, 95, 105]; peaks = [100, 100, 100, 105];
+        # below-peak bars = index 1 (90) and index 2 (95) -> 2/4.
+        assert m.pct_time_in_drawdown(_equity([100, 90, 95, 105])) == pytest.approx(0.5)
 
     def test_pct_time_zero_for_monotonic(self):
         assert m.pct_time_in_drawdown(_equity([100, 110, 120])) == pytest.approx(0.0)
 
-    def test_weekend_ffill_rows_excluded(self):
-        # Simulate the upstream calendar-day ffill from
-        # data_handler.calculate_daily_returns(): a trading-day series
-        # Fri/Mon/Tue/Wed with the Sat/Sun gap flat-forwarded from Friday's
-        # close should score identically to the trading-day-only series,
-        # since the ffilled weekend rows are never a new peak or trough.
-        trading_days = pd.to_datetime(["2020-01-03", "2020-01-06", "2020-01-07", "2020-01-08"])
-        trading_only = pd.Series([100.0, 90.0, 95.0, 105.0], index=trading_days)
-
-        calendar_days = pd.to_datetime(
-            ["2020-01-03", "2020-01-04", "2020-01-05", "2020-01-06", "2020-01-07", "2020-01-08"]
-        )
-        with_weekend_ffill = pd.Series([100.0, 100.0, 100.0, 90.0, 95.0, 105.0], index=calendar_days)
-
-        assert m.pct_time_in_drawdown(with_weekend_ffill) == pytest.approx(m.pct_time_in_drawdown(trading_only))
-        assert m.pct_time_in_drawdown(with_weekend_ffill) == pytest.approx(0.5)
-        assert m.ulcer_index(with_weekend_ffill) == pytest.approx(m.ulcer_index(trading_only))
+    def test_real_weekend_exit_row_is_counted(self):
+        # Since issue #251, data_handler.calculate_daily_returns builds a
+        # business-day index UNIONED with the actual trade-exit dates, so a
+        # trade that exits on a weekend produces a REAL equity row on that
+        # Sat/Sun. It must be counted: an earlier unconditional weekday filter
+        # dropped it, hiding the loss and returning ulcer/%DD = 0 even for a
+        # genuine drawdown (issue #248 review, shardul0701).
+        idx = pd.to_datetime(["2021-01-08", "2021-01-09"])  # Fri, then Sat exit
+        eq = pd.Series([100.0, 50.0], index=idx)            # -50% booked on the Sat row
+        assert m.pct_time_in_drawdown(eq) == pytest.approx(0.5)
+        assert m.ulcer_index(eq) == pytest.approx(np.sqrt((0.0 + 0.5 ** 2) / 2))
 
 
 class TestRecoveryAndPayoff:

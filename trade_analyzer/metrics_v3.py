@@ -55,15 +55,15 @@ def ulcer_index(equity: pd.Series) -> float:
     """Ulcer Index = sqrt(mean(drawdown_pct**2)), drawdown measured off the
     running peak as a fraction. Penalizes deep *and* prolonged drawdowns.
 
-    The upstream daily_equity Series (data_handler.calculate_daily_returns)
-    is built on a calendar-day pd.date_range + ffill, so weekends carry a
-    synthetic flat-forward copy of the prior Friday's value. Those rows are
-    never a new peak or a new trough relative to the trading day they were
-    ffilled from, so dropping them here doesn't change the drawdown shape at
-    surviving (trading-day) rows — it just keeps them out of the mean."""
+    Every row of the upstream daily_equity Series is a real equity point.
+    Since issue #251, data_handler.calculate_daily_returns builds the index as
+    a business-day range unioned with the actual trade-exit dates — it no
+    longer ffills a synthetic flat copy onto every calendar weekend. The only
+    non-business-day rows that survive are genuine trade exits (or the
+    initial-equity anchor) that happened to land on a weekend/holiday, so we
+    must NOT drop weekends here: doing so discards real drawdown information
+    (e.g. a Saturday exit booking a loss) and understates risk."""
     eq = _clean_equity(equity)
-    if len(eq):
-        eq = eq[eq.index.dayofweek < 5]
     if len(eq) < 2:
         return np.nan
     peak = eq.cummax()
@@ -74,11 +74,10 @@ def ulcer_index(equity: pd.Series) -> float:
 def pct_time_in_drawdown(equity: pd.Series) -> float:
     """Fraction of bars where equity sits below its prior peak (0..1).
 
-    Restricted to business days (Mon-Fri) — see ulcer_index docstring for why
-    the calendar-day ffilled weekend rows are excluded from the denominator."""
+    Counts every real equity row — see ulcer_index docstring: since issue #251
+    the upstream series carries no synthetic weekend ffill rows, so weekend
+    rows are genuine trade exits and must be included in the denominator."""
     eq = _clean_equity(equity)
-    if len(eq):
-        eq = eq[eq.index.dayofweek < 5]
     if len(eq) < 2:
         return np.nan
     peak = eq.cummax()
