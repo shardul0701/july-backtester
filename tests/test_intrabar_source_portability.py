@@ -31,12 +31,18 @@ class TestResolveIntrabarSource:
     def test_tilde_expanded(self):
         resolved = _resolve_intrabar_source("~/nq_1min.parquet")
         assert "~" not in resolved
-        assert resolved == os.path.join(os.path.expanduser("~"), "nq_1min.parquet")
+        # normpath so the comparison is separator-agnostic: expanduser keeps the
+        # input's "/" on Windows while os.path.join emits "\".
+        assert os.path.normpath(resolved) == os.path.normpath(
+            os.path.join(os.path.expanduser("~"), "nq_1min.parquet"))
 
-    def test_env_var_expanded(self, monkeypatch):
-        monkeypatch.setenv("MY_INTRABAR_DIR", "/data/intrabar")
+    def test_env_var_expanded(self, monkeypatch, tmp_path):
+        # Use an OS-native absolute dir: a POSIX "/data/..." path is not absolute
+        # on Windows, so _resolve_intrabar_source would prepend the project drive.
+        monkeypatch.setenv("MY_INTRABAR_DIR", str(tmp_path))
         resolved = _resolve_intrabar_source("$MY_INTRABAR_DIR/nq.parquet")
-        assert resolved == "/data/intrabar/nq.parquet"
+        assert os.path.normpath(resolved) == os.path.normpath(
+            os.path.join(str(tmp_path), "nq.parquet"))
 
 
 class TestBuildIntrabarDataFallback:
