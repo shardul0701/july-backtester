@@ -64,17 +64,20 @@ def fetch_year(pair: str, year: int, api_key: str, session: requests.Session) ->
     frames, pages = [], 0
 
     while url:
+        r = None
         for attempt in range(5):
             try:
                 r = session.get(url, params=params, timeout=60)
             except requests.RequestException:
                 time.sleep(2 * (attempt + 1))
                 continue
-            if r.status_code == 429:
+            if r.status_code == 429 or 500 <= r.status_code < 600:
                 time.sleep(5 * (attempt + 1))
                 continue
             break
         else:
+            if r is not None and 500 <= r.status_code < 600:
+                raise RuntimeError(f"{pair} {year}: HTTP {r.status_code} {r.text[:200]}")
             raise RuntimeError(f"{pair} {year}: repeated request failures")
 
         if r.status_code != 200:

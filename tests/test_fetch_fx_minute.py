@@ -184,6 +184,18 @@ class TestFetchYear:
         assert len(df) == 1
         assert s.get.call_count == 2
 
+    @pytest.mark.parametrize("status_code", [500, 502, 503, 504])
+    def test_transient_5xx_is_retried_then_succeeds(self, status_code):
+        s = MagicMock()
+        s.get.side_effect = [
+            _resp([], status_code=status_code),
+            _resp([_bar("2020-06-01 13:30")]),
+        ]
+        df = ffm.fetch_year("C:EURUSD", 2020, "KEY", s)
+
+        assert len(df) == 1
+        assert s.get.call_count == 2
+
     def test_transient_network_error_is_retried(self):
         s = MagicMock()
         s.get.side_effect = [
@@ -201,11 +213,21 @@ class TestFetchYear:
         with pytest.raises(RuntimeError, match="repeated request failures"):
             ffm.fetch_year("C:EURUSD", 2020, "KEY", s)
 
+    def test_persistent_5xx_raises_with_status_code(self):
+        s = MagicMock()
+        s.get.return_value = _resp([], status_code=503)
+        with pytest.raises(RuntimeError, match="HTTP 503"):
+            ffm.fetch_year("C:EURUSD", 2020, "KEY", s)
+
+        assert s.get.call_count == 5
+
     def test_non_200_raises(self):
         s = MagicMock()
         s.get.return_value = _resp([], status_code=403)
         with pytest.raises(RuntimeError, match="HTTP 403"):
             ffm.fetch_year("C:EURUSD", 2020, "KEY", s)
+
+        assert s.get.call_count == 1
 
 
 class TestLoadPair:
