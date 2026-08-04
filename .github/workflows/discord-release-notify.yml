@@ -5,9 +5,10 @@ on:
     types: [published]
   workflow_dispatch:
 
+permissions: {}
+
 jobs:
   notify:
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'release'
     runs-on: ubuntu-latest
 
     steps:
@@ -27,14 +28,6 @@ jobs:
             exit 1
           fi
 
-          # Discord embed descriptions cap at 4096 chars — truncate long release notes.
-          BODY_TRUNCATED=$(printf '%s' "$RELEASE_BODY" | head -c 3500)
-          if [ "${#RELEASE_BODY}" -gt 3500 ]; then
-            BODY_TRUNCATED="${BODY_TRUNCATED}...
-
-_(truncated — see full notes on GitHub)_"
-          fi
-
           if [ "$IS_PRERELEASE" = "true" ]; then
             TITLE_PREFIX="🧪 Pre-release published"
             COLOR=15844367
@@ -43,21 +36,26 @@ _(truncated — see full notes on GitHub)_"
             COLOR=3066993
           fi
 
+          # Truncate long release notes inside jq so the cut is codepoint-safe
+          # (never splits a multibyte char) — Discord embed descriptions cap at 4096.
           payload=$(jq -n \
             --arg title "$TITLE_PREFIX — $REPO_NAME" \
             --arg release_name "$RELEASE_NAME" \
             --arg tag "$TAG_NAME" \
             --arg author "$RELEASE_AUTHOR" \
-            --arg body "$BODY_TRUNCATED" \
+            --arg body "$RELEASE_BODY" \
             --arg url "$RELEASE_URL" \
             --argjson color "$COLOR" \
-            '{
-              embeds: [{
-                title: $title,
-                description: ("**" + $release_name + "** (`" + $tag + "`)\nby " + $author + "\n\n" + $body),
-                url: $url,
-                color: $color
-              }]
-            }')
+            '($body | if (. | length) > 3500
+                      then .[:3500] + "\n\n_(truncated — see full notes on GitHub)_"
+                      else . end) as $b
+             | {
+                embeds: [{
+                  title: $title,
+                  description: ("**" + $release_name + "** (`" + $tag + "`)\nby " + $author + "\n\n" + $b),
+                  url: $url,
+                  color: $color
+                }]
+              }')
 
-          curl -sf -H "Content-Type: application/json" -d "$payload" "$DISCORD_WEBHOOK_URL"
+          curl -sf --max-time 30 -H "Content-Type: application/json" -d "$payload" "$DISCORD_WEBHOOK_URL"
