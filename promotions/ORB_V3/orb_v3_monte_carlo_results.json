@@ -1,0 +1,50 @@
+{
+  "generated_utc": "2026-08-05T19:14:22.392549+00:00",
+  "seed": 20260803,
+  "point_value": 2.0,
+  "declared_capital_base": 25000.0,
+  "intraday_margin_per_contract": 2500.0,
+  "sizing_mode": "dollar_fixed_1_contract",
+  "window_start": "2021-01-26",
+  "window_end": "2026-07-30",
+  "realised_net_points": 6790.242499999991,
+  "realised_net_usd": 13580.484999999982,
+  "results": {
+    "iid": {
+      "mode": "iid",
+      "block_size": null,
+      "n_paths": 10000,
+      "n_trades": 137,
+      "net_p5": 6354.7814999999855,
+      "net_p25": 10280.418749999977,
+      "net_p50": 13298.079999999973,
+      "net_p95": 21862.571749999985,
+      "prob_net_negative": 0.0008,
+      "maxdd_p50": -1463.2175000000025,
+      "maxdd_p95": -2605.964500000002,
+      "maxdd_worst": -5149.0400000000445,
+      "ratio_p5": 2.896609510358156,
+      "ratio_p50": 9.056141346185628,
+      "min_equity_p5": 22394.035499999998,
+      "prob_ruin_declared_base": 0.0
+    },
+    "block": {
+      "mode": "block",
+      "block_size": 11,
+      "n_paths": 10000,
+      "n_trades": 137,
+      "net_p5": 6773.929249999977,
+      "net_p25": 10811.099999999984,
+      "net_p50": 13580.782499999987,
+      "net_p95": 20492.644749999985,
+      "prob_net_negative": 0.0003,
+      "maxdd_p50": -1564.305000000004,
+      "maxdd_p95": -2768.9155000000155,
+      "maxdd_worst": -5557.110000000019,
+      "ratio_p5": 2.8175514761516323,
+      "ratio_p50": 8.545230655258248,
+      "min_equity_p5": 22231.084499999983,
+      "prob_ruin_declared_base": 0.0
+    }
+  }
+}
