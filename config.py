@@ -9,6 +9,7 @@ Research-specific presets (e.g. config_weekly_rsi.py) should NOT be committed
 to the repo. Keep experiment configs locally and copy values into this file
 temporarily when reproducing an experiment, then restore before committing.
 """
+import os
 
 CONFIG = {
     # ============================================================
@@ -20,8 +21,12 @@ CONFIG = {
     "polygon_api_secret_name": "POLYGON_API_KEY",
     # Only used when data_provider = "csv":
     "csv_data_dir": "csv_data",
-    # Only used when data_provider = "norgate" and the merged dataset is present:
-    # "merged_data_root": os.environ.get("MERGED_DATA_ROOT", ""),
+    # Only used when data_provider = "merged" — root of the built unified
+    # Norgate+Polygon store (see src/data/unified_market_data_provider.py).
+    # Empty string / unset falls back to data/market_data/merged/. Build the
+    # store with `python scripts/build_merged_dataset.py` before switching to
+    # "merged"; the provider raises at startup if this path doesn't exist.
+    "merged_data_root": os.environ.get("MERGED_DATA_ROOT", ""),
 
     # ============================================================
     # SECTION 2: BACKTEST PERIOD & CAPITAL

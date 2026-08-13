@@ -34,6 +34,7 @@ KNOWN_KEYS: set[str] = {
     "polygon_api_secret_name",  # PR #187: added — was triggering "unknown key" warning
     "csv_data_dir",
     "parquet_data_dir",
+    "merged_data_root",
     # SECTION 2: Backtest Period & Capital
     "start_date",
     "end_date",

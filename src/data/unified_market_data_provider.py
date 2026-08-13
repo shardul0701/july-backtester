@@ -30,6 +30,30 @@ class UnifiedMarketDataProvider:
         self.metadata_dir = metadata_dir or paths.METADATA
         self._class = None
         self._range_cache = {}
+        self._check_store_exists()
+
+    def _check_store_exists(self):
+        """Fail loudly at init time if the merged store isn't built yet.
+
+        Without this, a missing store silently produces zero symbols fetched
+        and the engine reports a generic "Could not fetch data for any
+        symbols" a run later, with no indication why."""
+        if not os.path.isdir(self.merged_dir):
+            raise FileNotFoundError(
+                f"Merged market-data store not found at: {self.merged_dir}\n"
+                f"Fix: run `python scripts/build_merged_dataset.py` to build it, "
+                f"or set config['merged_data_root'] (env MERGED_DATA_ROOT) to an "
+                f"existing store."
+            )
+        with os.scandir(self.merged_dir) as it:
+            if not any(entry.name.endswith(".parquet") for entry in it):
+                raise FileNotFoundError(
+                    f"Merged market-data store at {self.merged_dir} exists but "
+                    f"contains no .parquet files.\n"
+                    f"Fix: run `python scripts/build_merged_dataset.py` to build it, "
+                    f"or set config['merged_data_root'] (env MERGED_DATA_ROOT) to an "
+                    f"existing store."
+                )
 
     # ------------------------------------------------------------- internals ---
     def _candidate_paths(self, symbol):
@@ -399,16 +423,21 @@ class UnifiedMarketDataProvider:
 _PROVIDER = None
 
 
-def _provider():
+def _provider(config=None):
+    """Lazily build the singleton, honoring config['merged_data_root'] the
+    first time it's supplied. Later calls (including with config=None, e.g.
+    from load_universe/available_symbols which don't thread config through)
+    reuse the already-configured instance."""
     global _PROVIDER
     if _PROVIDER is None:
-        _PROVIDER = UnifiedMarketDataProvider()
+        merged_dir = (config or {}).get("merged_data_root") or None
+        _PROVIDER = UnifiedMarketDataProvider(merged_dir=merged_dir)
     return _PROVIDER
 
 
 def get_price_data(symbol, start_date=None, end_date=None, config=None):
     """Module-level fetcher matching services.* signature."""
-    return _provider().get_price_data(symbol, start_date, end_date, config)
+    return _provider(config).get_price_data(symbol, start_date, end_date, config)
 
 
 def get_price_data_for_intervals(symbol, intervals, warmup_days=400,
