@@ -40,8 +40,21 @@ special-casing.
 Public API
 ----------
 run_rotation(data, rank_fn, config, *, regime_gate=None, params=None) -> dict | None
+run_rotation_from_config(data, config) -> dict | None   (honors rotation.enabled)
 build_rebalance_dates(data, rebalance_days) -> list[pd.Timestamp]
 WEIGHTING_SCHEMES -> dict[str, Callable]     (pluggable weighting registry)
+
+Deferred integration (finding F7)
+---------------------------------
+The ``main.py`` multiprocessing Pool / ``init_worker`` orchestration is
+deliberately NOT wired to auto-run rotation strategies — that path is the
+Do-Not-Touch engine architecture and is out of scope here. Consequently the
+``rotation.enabled`` and ``rotation.rank_strategy`` config keys are not honored
+by a bare ``python main.py`` run yet. They are NOT silently inert, though:
+:func:`run_rotation_from_config` is the caller-facing, non-Pool entry point that
+reads both keys, resolves the named ``@register_rotation`` plugin, and runs it —
+so a script or notebook can drive the capability today with the config it
+already declares. Full Pool wiring is a tracked follow-up.
 """
 
 from __future__ import annotations
@@ -69,6 +82,16 @@ _DEFAULT_ROTATION = {
     "sell_buffer_rank": 0,    # hysteresis: keep a holding while rank <= top_n + this
     "drift_trim_pct": 0.0,    # only trim/add when |weight - target| > this fraction
 }
+
+
+# Cash-affordability comparisons must not trip on floating-point noise at the
+# fully-invested boundary (weights summing to exactly 1.0). Without a tolerance a
+# final buy can clamp at one capital scale but not another purely from FP
+# rounding, breaking scale-invariance (issue #293). This tolerance is a tiny
+# absolute floor plus a relative term, both far below any economically-meaningful
+# shortfall and far above FP residue at any scale.
+def _over_budget(cost: float, cash: float) -> bool:
+    return cost - cash > 1e-6 + 1e-9 * abs(cash)
 
 
 def get_rotation_config(config: dict) -> dict:
@@ -153,6 +176,23 @@ def _price(df: pd.DataFrame, date, col: str = "Close"):
     return float(df.at[date, col])
 
 
+def _carry_forward_close(df: pd.DataFrame, date) -> float:
+    """Close on *date*, or the most recent prior Close when *date* has no bar
+    (calendar gap). NaN only when *date* precedes the symbol's first bar.
+
+    This is the single carry-forward rule shared by the intraday MTM (`_mtm`)
+    and the daily equity curve (`_build_daily_timeline`) so the two never
+    disagree (finding F3). Falling back to the entry price — as an earlier draft
+    did — made the two equity computations diverge on a missing bar.
+    """
+    if df is None:
+        return np.nan
+    if date in df.index:
+        return float(df.at[date, "Close"])
+    prior = df.index[df.index <= date]
+    return float(df.at[prior[-1], "Close"]) if len(prior) else np.nan
+
+
 # ---------------------------------------------------------------------------
 # Core rotation loop
 # ---------------------------------------------------------------------------
@@ -174,7 +214,12 @@ def run_rotation(
     rank_fn : Callable
         ``rank_fn(data, rebalance_date, **params) -> ranking``. ``ranking`` is an
         ordered list (best first) or a ``{symbol: score}`` dict / Series. Only
-        symbols present in ``data`` are honoured.
+        symbols present in ``data`` are honoured. The function must decide using
+        data **up to and including** ``rebalance_date`` only — it must not read
+        any bar after it. The framework enforces the fill side: decisions made on
+        the signal bar are executed at the **next** trading bar's Open (no
+        same-bar look-ahead — finding F1), mirroring the engine's
+        ``execution_time="open"`` convention.
     config : dict
         The CONFIG dict. Read keys: ``rotation`` (see :data:`_DEFAULT_ROTATION`),
         ``max_position_pct``, ``initial_capital``, ``allocation_per_trade``, plus
@@ -232,10 +277,16 @@ def run_rotation(
     # reconstructed from these: cash + live MTM changes only at rebalance dates.
     snapshots: list = []
 
-    def _mtm(date) -> float:
+    def _mtm(date, col: str = "Close") -> float:
+        """Equity = cash + live position value at *date*. ``col`` selects the
+        mark price: ``"Close"`` (curve MTM) or ``"Open"`` (execution-bar mark).
+        Missing bars carry the last known Close forward — the same rule the daily
+        equity curve uses — so the two never disagree (finding F3)."""
         total = cash
         for sym, pos in positions.items():
-            p = _price(data[sym], date, "Close")
+            p = _price(data[sym], date, col) if col != "Close" else np.nan
+            if np.isnan(p):
+                p = _carry_forward_close(data[sym], date)
             if np.isnan(p):
                 p = pos["entry_price"]
             total += _inst.market_value(insts[sym], pos["shares"], p)
@@ -296,7 +347,7 @@ def run_rotation(
             return
         commission = _inst.commission(inst, shares)
         total_cost = _inst.market_value(inst, shares, entry_price) + commission
-        if total_cost > cash:
+        if _over_budget(total_cost, cash):
             # Trim to what cash allows (still scale-invariant).
             affordable = (cash - commission) / (entry_price * pv)
             shares = _inst.round_units(inst, affordable)
@@ -304,13 +355,54 @@ def run_rotation(
                 return
             commission = _inst.commission(inst, shares)
             total_cost = _inst.market_value(inst, shares, entry_price) + commission
-            if total_cost > cash:
+            if _over_budget(total_cost, cash):
                 return
         cash -= total_cost
         positions[sym] = {
             "shares": shares, "entry_price": entry_price,
             "entry_date": exec_date, "cost_basis": total_cost,
         }
+
+    def _do_add(sym, exec_date, target_dollars):
+        """Top up an UNDER-weight holding back toward its target (drift add — the
+        add side of trim/add, finding F5). Buys the share deficit at the exec bar's
+        Open, subject to cash; blends the entry price share-weighted so the
+        eventual close's PnL stays honest. No trade_log entry — an add is an entry,
+        not a realised round trip; it folds into the position's eventual sale."""
+        nonlocal cash
+        pos = positions[sym]
+        inst = insts[sym]
+        raw = _price(data[sym], exec_date, "Open")
+        if np.isnan(raw) or raw <= 0:
+            return
+        entry_price = _inst.apply_slippage(inst, raw, "buy")
+        pv = inst.point_value
+        cur_val = _inst.market_value(inst, pos["shares"], entry_price)
+        deficit = target_dollars - cur_val
+        if deficit <= 0:
+            return
+        add_shares = _inst.round_units(inst, deficit / (entry_price * pv))
+        if add_shares <= 0:
+            return
+        commission = _inst.commission(inst, add_shares)
+        add_cost = _inst.market_value(inst, add_shares, entry_price) + commission
+        if _over_budget(add_cost, cash):
+            affordable = (cash - commission) / (entry_price * pv)
+            add_shares = _inst.round_units(inst, affordable)
+            if add_shares <= 0:
+                return
+            commission = _inst.commission(inst, add_shares)
+            add_cost = _inst.market_value(inst, add_shares, entry_price) + commission
+            if _over_budget(add_cost, cash):
+                return
+        cash -= add_cost
+        new_shares = pos["shares"] + add_shares
+        pos["entry_price"] = (
+            (pos["entry_price"] * pos["shares"] + entry_price * add_shares) / new_shares
+        )
+        pos["shares"] = new_shares
+        pos["cost_basis"] += add_cost
+        # entry_date stays the original (earliest) fill.
 
     def _do_trim(sym, exec_date, target_dollars):
         """Reduce an over-weight position back toward its target (partial sell)."""
@@ -356,10 +448,67 @@ def run_rotation(
         pos["shares"] -= sell_shares
         pos["cost_basis"] -= realized_basis
 
+    def _do_close_mtm(sym, close_date, reason="End of Backtest"):
+        """End-of-backtest mark-to-market close at the last Close — NOT a same-bar
+        buy+sell round trip (finding F2). Parallel to the engine's EoB MTM: it
+        records a trade for the log/metrics but does NOT touch cash (the daily
+        equity curve already carries the open position's value to the last bar)."""
+        nonlocal trade_counter
+        pos = positions[sym]
+        inst = insts[sym]
+        last_close = _carry_forward_close(data[sym], close_date)
+        if np.isnan(last_close) or last_close <= 0:
+            del positions[sym]
+            return
+        exit_price = _inst.apply_slippage(inst, last_close, "sell")
+        shares = pos["shares"]
+        pv = inst.point_value
+        commission = _inst.commission(inst, shares)
+        net_pnl = (exit_price - pos["entry_price"]) * shares * pv - 2 * commission
+        window = data[sym].loc[pos["entry_date"]:close_date]
+        ep = pos["entry_price"]
+        mae_pct = (window["Low"].min() - ep) / ep if not window.empty else 0.0
+        mfe_pct = (window["High"].max() - ep) / ep if not window.empty else 0.0
+        initial_risk = ep * 0.01
+        r_multiple = (net_pnl / (initial_risk * shares * pv)
+                      if initial_risk > 0 and shares > 0 else None)
+        trade_counter += 1
+        notional = _inst.notional(inst, shares, ep)
+        trade_log.append({
+            "Symbol": sym, "Trade": f"Long {trade_counter}",
+            "EntryDate": pos["entry_date"].isoformat(), "EntryPrice": ep,
+            "ExitDate": close_date.isoformat(), "ExitPrice": exit_price,
+            "Profit": net_pnl,
+            "ProfitPct": net_pnl / notional if notional > 0 else 0.0,
+            "Shares": shares, "is_win": 1 if net_pnl > 0 else 0,
+            "HoldDuration": (close_date - pos["entry_date"]).days,
+            "MAE_pct": mae_pct, "MFE_pct": mfe_pct, "ExitReason": reason,
+            "InitialRisk": initial_risk, "RMultiple": r_multiple,
+        })
+        del positions[sym]
+
+    # Next-bar execution map (finding F1): a decision made on the signal bar is
+    # filled at the FOLLOWING trading bar's Open, mirroring the engine's
+    # execution_time="open" one-day lag. The terminal master bar has no next bar,
+    # so a signal there executes nothing (and thus can create no zero-duration
+    # round trip — finding F2).
+    date_to_next = {all_dates[i]: all_dates[i + 1] for i in range(len(all_dates) - 1)}
+    terminal_date = all_dates[-1]
+
+    # Seed the equity curve before the first fill (fully in cash).
+    snapshots.append((all_dates[0], cash, {}))
+
     # --- Rebalance loop -----------------------------------------------------
     for signal_date in rebalance_dates:
-        exec_date = signal_date  # execute at the same bar's Open (deterministic)
+        exec_date = date_to_next.get(signal_date)
+        if exec_date is None:
+            # Signal on the last bar -> nothing to execute. The end-of-backtest
+            # MTM close below marks any open book to that bar's Close.
+            continue
 
+        # Decisions read data strictly up to and including signal_date; fills land
+        # on exec_date (the next bar). rank_fn is contractually bound to the
+        # signal bar, so there is no look-ahead into the execution bar.
         risk_on = True
         if regime_gate is not None:
             try:
@@ -369,7 +518,7 @@ def run_rotation(
                 risk_on = True
 
         if not risk_on:
-            # Risk-off: liquidate everything to cash.
+            # Risk-off: liquidate everything to cash at the execution bar.
             for sym in list(positions.keys()):
                 _do_sell(sym, exec_date, "Regime Off")
             snapshots.append((exec_date, cash, {}))
@@ -378,60 +527,72 @@ def run_rotation(
         raw_ranking = rank_fn(data, signal_date, **params)
         ranking = [s for s in _normalise_ranking(raw_ranking) if s in data]
         target = ranking[:top_n]
-        keep_rank_cutoff = top_n + sell_buffer  # hysteresis band
-        keep_set = set(ranking[:keep_rank_cutoff])
+        keep_set = set(ranking[:top_n + sell_buffer])  # hysteresis band
 
         # 1. Sell holdings that fell out of the keep band (or vanished from rank).
         for sym in list(positions.keys()):
             if sym not in keep_set:
                 _do_sell(sym, exec_date, "Rank Drop")
 
-        # 2. Selection = current holds still in target + new names to reach top_n.
-        selected = [s for s in target]
-        for sym in list(positions.keys()):
-            if sym not in selected:
-                selected.append(sym)
-        selected = selected[:max(top_n, len(positions))]
+        # 2. Final desired book = kept holdings (all now within the keep band) plus
+        #    new top-ranked names filling the remaining slots up to top_n. This set
+        #    is EXACTLY what will be held, so every kept name is weighted and
+        #    drift-controlled, and target weights cannot silently exceed 1 (F4).
+        kept = list(positions.keys())
+        slots = max(0, top_n - len(kept))
+        new_names = [s for s in target if s not in positions][:slots]
+        selected = kept + new_names
 
-        # 3. Target weights (capped by the relative max_position_pct).
+        # 3. Coherent target weights: cap each at max_position_pct, then normalise
+        #    so the book sums to <= 1 (no silent cash-clamp underweighting — F4).
         weights = weight_fn(selected, data, signal_date, config)
-        equity_now = _mtm(signal_date)
-        for sym in list(weights.keys()):
-            weights[sym] = min(weights[sym], max_pos_pct)
+        weights = {s: min(w, max_pos_pct) for s, w in weights.items()}
+        total_w = sum(weights.values())
+        if total_w > 1.0:
+            weights = {s: w / total_w for s, w in weights.items()}
 
-        # 4. Trim over-weight existing positions (drift control).
+        # New positions cannot be opened on the terminal bar — they could not be
+        # held for even one bar and would be immediate friction (finding F2).
+        allow_new = exec_date != terminal_date
+
+        # Mark equity at the EXECUTION bar (not a future bar) for sizing (F1).
+        equity_now = _mtm(exec_date, "Open")
+
+        # 4. Drift control on existing holdings: trim over-weight, top up under-weight.
         for sym in list(positions.keys()):
             w = weights.get(sym)
             if w is None:
                 continue
             target_dollars = equity_now * w
-            inst = insts[sym]
             cur_price = _price(data[sym], exec_date, "Open")
-            if np.isnan(cur_price):
+            if np.isnan(cur_price) or cur_price <= 0:
                 continue
-            cur_val = _inst.market_value(inst, positions[sym]["shares"], cur_price)
+            cur_val = _inst.market_value(insts[sym], positions[sym]["shares"], cur_price)
             if cur_val <= 0:
                 continue
             drift = (cur_val - target_dollars) / target_dollars if target_dollars > 0 else 0.0
             if drift > drift_trim:
                 _do_trim(sym, exec_date, target_dollars)
+            elif drift < -drift_trim:
+                _do_add(sym, exec_date, target_dollars)
 
         # 5. Buy new names to fill the target, from the top of the ranking.
-        for sym in target:
-            if sym in positions:
-                continue
-            w = min(weights.get(sym, 0.0), max_pos_pct)
-            if w <= 0:
-                continue
-            _do_buy(sym, exec_date, equity_now * w)
+        if allow_new:
+            for sym in new_names:
+                w = weights.get(sym, 0.0)
+                if w <= 0:
+                    continue
+                _do_buy(sym, exec_date, equity_now * w)
 
         snapshots.append((exec_date, cash, {s: p["shares"] for s, p in positions.items()}))
 
-    # --- Close everything at the last rebalance date ------------------------
-    last_exec = rebalance_dates[-1]
+    # --- End of backtest: mark any remaining book to the last Close ----------
+    # A close-at-last-Close MTM, NOT a same-bar buy+sell round trip (finding F2).
+    # No terminal empty snapshot: the last rebalance snapshot's holdings are marked
+    # to each day's Close by _build_daily_timeline, so the terminal equity already
+    # includes open-position value (parallel to the engine's EoB mark-to-market).
     for sym in list(positions.keys()):
-        _do_sell(sym, last_exec, "End of Backtest")
-    snapshots.append((last_exec, cash, {}))
+        _do_close_mtm(sym, terminal_date)
 
     pnl_list = [t["Profit"] for t in trade_log]
     if not pnl_list:
@@ -484,13 +645,51 @@ def _build_daily_timeline(data, insts, snapshots, all_dates) -> pd.Series:
         _, cash, holdings = snapshots[si]
         val = cash
         for sym, shares in holdings.items():
-            close = _price(data[sym], d, "Close")
-            if np.isnan(close):
-                # carry the last known close for a symbol with a calendar gap
-                df = data[sym]
-                prior = df.index[df.index <= d]
-                close = float(df.at[prior[-1], "Close"]) if len(prior) else np.nan
+            # Same carry-forward rule as _mtm so the two equity paths agree (F3).
+            close = _carry_forward_close(data[sym], d)
             if not np.isnan(close):
                 val += _inst.market_value(insts[sym], shares, close)
         equity.loc[d] = val
     return equity
+
+
+# ---------------------------------------------------------------------------
+# Config-driven entry point (finding F7): the non-Pool integration that lets a
+# caller honor rotation.enabled / rotation.rank_strategy today.
+# ---------------------------------------------------------------------------
+def run_rotation_from_config(data: dict, config: dict) -> dict | None:
+    """Run the rotation named by ``config["rotation"]["rank_strategy"]``, honoring
+    ``config["rotation"]["enabled"]``.
+
+    Returns ``None`` (and logs) when rotation is disabled, no ``rank_strategy`` is
+    set, or the named plugin is not registered. This is the caller-facing bridge
+    that makes the ``rotation.enabled`` / ``rotation.rank_strategy`` config keys
+    active without touching main.py's Do-Not-Touch multiprocessing Pool
+    (see the module docstring's deferral note).
+    """
+    rcfg = get_rotation_config(config)
+    if not rcfg.get("enabled"):
+        logger.info("rotation disabled (rotation.enabled is False) — nothing to run.")
+        return None
+    name = rcfg.get("rank_strategy")
+    if not name:
+        logger.warning("[WARNING] rotation.enabled but rotation.rank_strategy is unset.")
+        return None
+
+    from helpers.registry import get_rotation_strategies  # lazy: avoid import cycle
+    rots = get_rotation_strategies()
+    entry = rots.get(name)
+    if entry is None:
+        logger.warning(
+            "[WARNING] rotation.rank_strategy '%s' is not a registered @register_rotation "
+            "plugin. Available: %s", name, sorted(rots.keys()),
+        )
+        return None
+
+    return run_rotation(
+        data,
+        entry["logic"],
+        config,
+        regime_gate=entry.get("regime_gate"),
+        params=entry.get("params"),
+    )

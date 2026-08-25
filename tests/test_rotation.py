@@ -1,13 +1,20 @@
 """tests/test_rotation.py
 
-Tests for the cross-sectional rotation mechanism (issue #294).
+Tests for the cross-sectional rotation mechanism (issue #294) and the QA
+findings F1-F7 raised on PR #296.
 
 Covers:
 - registry: kind="rotation" registration + register_rotation sugar + backward
   compatibility of the classic signal path;
 - portfolio construction (top-N selection, equal weighting);
-- rebalance / rank-drop / trim mechanics;
-- config-key validation (rotation, max_position_pct recognised);
+- rebalance / rank-drop / regime mechanics;
+- F1 no same-bar look-ahead (decide on signal bar, fill at next bar's Open);
+- F2 no zero-duration same-bar buy+sell round trips;
+- F4 coherent weighting over exactly-held names;
+- F5 drift add/top-up of under-weight holdings;
+- F6 a real (non-tautological) sell-buffer churn assertion;
+- F7 config-driven entry point honoring rotation.enabled / rank_strategy;
+- config-key validation;
 - CRITICAL: scale-invariance regression — 100k vs 1M produce identical %
   returns and proportional share counts (the #293 lesson).
 
@@ -33,11 +40,13 @@ from helpers.registry import (
 # ---------------------------------------------------------------------------
 # Deterministic synthetic universe
 # ---------------------------------------------------------------------------
-def _make_df(prices, start="2020-01-01"):
+def _make_df(prices, start="2020-01-01", opens=None):
     idx = pd.date_range(start, periods=len(prices), freq="D")
     p = np.asarray(prices, dtype=float)
+    o = np.asarray(opens, dtype=float) if opens is not None else p
     return pd.DataFrame(
-        {"Open": p, "High": p * 1.01, "Low": p * 0.99, "Close": p, "Volume": 1e6},
+        {"Open": o, "High": np.maximum(o, p) * 1.01, "Low": np.minimum(o, p) * 0.99,
+         "Close": p, "Volume": 1e6},
         index=idx,
     )
 
@@ -86,7 +95,6 @@ def _base_config(initial_capital=100_000.0, **rotation_overrides):
         "commission_per_share": 0.0,
         "slippage_pct": 0.0,
         "rotation": rot,
-        # instruments resolves an equity instrument from these defaults
         "instruments": {"default_asset_class": "equity"},
     }
 
@@ -117,7 +125,6 @@ class TestRegistryKind:
 
         entry = REGISTRY[name]
         assert entry["kind"] == SIGNAL
-        # backward-compatible shape: logic / dependencies / params all present
         assert set(["logic", "dependencies", "params"]).issubset(entry.keys())
 
     def test_get_active_strategies_excludes_rotation(self, monkeypatch):
@@ -134,7 +141,6 @@ class TestRegistryKind:
         def _s(df, **kwargs):
             return df
 
-        # get_active_strategies imports CONFIG lazily; provide a minimal one.
         import config as _cfg
         monkeypatch.setitem(_cfg.CONFIG, "strategies", "all")
 
@@ -165,8 +171,7 @@ class TestHelpers:
         dates = rotation.build_rebalance_dates(data, rebalance_days=21)
         all_dates = sorted(set(data["STRONG"].index))
         assert dates[0] == all_dates[0]
-        assert dates[-1] == all_dates[-1]  # last date always included
-        # stride of 21 across 100 days -> indices 0,21,42,63,84 (+last)
+        assert dates[-1] == all_dates[-1]
         assert dates[1] == all_dates[21]
 
     def test_normalise_ranking_dict_sorts_desc(self):
@@ -179,6 +184,14 @@ class TestHelpers:
     def test_normalise_ranking_none_empty(self):
         assert rotation._normalise_ranking(None) == []
 
+    def test_carry_forward_close_fills_gap(self):
+        df = _make_df([10, 11, 12], start="2020-01-01")
+        # A date between bars carries the last known close forward.
+        gap = pd.Timestamp("2020-01-02T12:00:00")
+        assert rotation._carry_forward_close(df, gap) == 11.0
+        # A date before the first bar -> NaN.
+        assert np.isnan(rotation._carry_forward_close(df, pd.Timestamp("2019-12-01")))
+
 
 # ---------------------------------------------------------------------------
 # Portfolio construction
@@ -190,20 +203,21 @@ class TestConstruction:
         res = rotation.run_rotation(data, _momentum_rank(), cfg)
         assert res is not None
         held = {t["Symbol"] for t in res["trade_log"]}
-        # top-2 momentum are always STRONG and MID; WEAK/FLAT never selected
         assert held == {"STRONG", "MID"}
 
     def test_equal_weight_two_positions_half_each(self):
+        # Suppress drift churn (drift_trim_pct high) so each symbol has exactly one
+        # closing trade whose entry notional is the original equal-weight sizing.
         data = _linear_universe()
-        cfg = _base_config(top_n=2, rebalance_days=200)  # single rebalance window
+        cfg = _base_config(top_n=2, rebalance_days=21, drift_trim_pct=99.0)
         res = rotation.run_rotation(data, _momentum_rank(), cfg)
         assert res is not None
-        # Two equal-weight positions => each ~50% of initial equity at entry.
-        # Reconstruct entry notional from the trade log.
         entries = {t["Symbol"]: t["EntryPrice"] * t["Shares"] for t in res["trade_log"]}
         assert set(entries) == {"STRONG", "MID"}
+        # Equity is 100% cash at the first buy -> 50% each, exact with fractional
+        # shares and zero commission/slippage.
         for notional in entries.values():
-            assert notional == pytest.approx(50_000.0, rel=0.02)
+            assert notional == pytest.approx(50_000.0, rel=1e-9)
 
     def test_result_shape_matches_pipeline(self):
         data = _linear_universe()
@@ -213,7 +227,6 @@ class TestConstruction:
                     "max_drawdown", "sharpe_ratio", "win_rate"):
             assert key in res
         assert isinstance(res["portfolio_timeline"], pd.Series)
-        # trade log entries carry the engine-shaped keys
         t0 = res["trade_log"][0]
         for key in ("Symbol", "EntryDate", "ExitDate", "EntryPrice", "ExitPrice",
                     "Shares", "Profit", "ProfitPct", "HoldDuration", "ExitReason",
@@ -225,11 +238,84 @@ class TestConstruction:
 
 
 # ---------------------------------------------------------------------------
-# Rebalance / rank-drop / regime gate mechanics
+# F1: no same-bar look-ahead — decide on signal bar, fill at NEXT bar Open
+# ---------------------------------------------------------------------------
+class TestNoLookAhead:
+    def _spike_universe(self):
+        # A rises steadily; C is worthless until a one-bar spike on d3.
+        # Open == Close for a clean fill-price assertion.
+        A = _make_df([10, 11, 12, 13, 14, 15, 16, 17])
+        B = _make_df([9, 9, 9, 9, 9, 9, 9, 9])
+        C = _make_df([1, 1, 1, 100, 1, 1, 1, 1])
+        return {"A": A, "B": B, "C": C}
+
+    def _close_ranker(self):
+        # Ranks purely by the Close ON the rebalance date (no history needed).
+        def rank(data, rebalance_date, **kwargs):
+            return {s: rotation._price(df, rebalance_date, "Close")
+                    for s, df in data.items()
+                    if rebalance_date in df.index}
+        return rank
+
+    def test_execution_bar_not_visible_to_ranking(self):
+        data = self._spike_universe()
+        cfg = _base_config(top_n=1, rebalance_days=1, drift_trim_pct=99.0)
+        res = rotation.run_rotation(data, self._close_ranker(), cfg)
+        assert res is not None
+        d3 = pd.Timestamp("2020-01-04").isoformat()  # the spike bar
+        # If the ranking could see the execution bar (d3), the d2->d3 rebalance
+        # would rank C highest and buy it. With correct next-bar execution the
+        # decision uses d2 (C worthless) so C is NEVER entered on the spike bar.
+        c_entries_on_spike = [t for t in res["trade_log"]
+                              if t["Symbol"] == "C" and t["EntryDate"] == d3]
+        assert c_entries_on_spike == []
+
+    def test_fill_is_next_bar_open_not_signal_bar(self):
+        # Distinct Open != Close so we can tell which bar the fill used.
+        opens = [10, 20, 30, 40, 50, 60]
+        closes = [11, 21, 31, 41, 51, 61]
+        data = {"ONLY": _make_df(closes, opens=opens),
+                "CASH": _make_df([5, 5, 5, 5, 5, 5], opens=[5, 5, 5, 5, 5, 5])}
+
+        def rank(data_, rebalance_date, **kwargs):
+            # ONLY always wins; decision is made on the signal bar.
+            return {"ONLY": 1.0, "CASH": 0.0} if rebalance_date in data_["ONLY"].index else {}
+
+        cfg = _base_config(top_n=1, rebalance_days=1, drift_trim_pct=99.0)
+        res = rotation.run_rotation(data, rank, cfg)
+        assert res is not None
+        first = min(res["trade_log"], key=lambda t: t["EntryDate"])
+        # First rebalance signals on d0 and MUST fill at d1's Open (20), never d0's.
+        assert first["Symbol"] == "ONLY"
+        assert first["EntryPrice"] == pytest.approx(20.0)
+        assert first["EntryDate"] == pd.Timestamp("2020-01-02").isoformat()
+
+
+# ---------------------------------------------------------------------------
+# F2: no zero-duration same-bar buy+sell round trips
+# ---------------------------------------------------------------------------
+class TestNoZeroDurationRoundTrip:
+    def test_no_trade_has_same_entry_and_exit_date(self):
+        data = _linear_universe()
+        res = rotation.run_rotation(data, _momentum_rank(), _base_config(top_n=2))
+        assert res is not None
+        for t in res["trade_log"]:
+            assert t["EntryDate"] != t["ExitDate"], (
+                f"same-bar round trip: {t}")
+            assert t["HoldDuration"] >= 1
+
+    def test_terminal_close_is_end_of_backtest_mtm(self):
+        data = _linear_universe()
+        res = rotation.run_rotation(data, _momentum_rank(), _base_config(top_n=2))
+        # Open positions are closed via an EoB mark, not a buy+sell friction trade.
+        assert any(t["ExitReason"] == "End of Backtest" for t in res["trade_log"])
+
+
+# ---------------------------------------------------------------------------
+# F4 / F5 / mechanics: rank-drop, regime, drift add & trim, buffer
 # ---------------------------------------------------------------------------
 class TestMechanics:
     def test_rank_drop_triggers_sell(self):
-        # Build a universe where the leader flips halfway so a held name drops out.
         n = 80
         base = np.arange(n, dtype=float)
         up_then_flat = np.concatenate([100 + base[:40] * 3.0, np.full(40, 100 + 39 * 3.0)])
@@ -243,7 +329,6 @@ class TestMechanics:
         res = rotation.run_rotation(data, _momentum_rank(lookback=10), cfg)
         assert res is not None
         reasons = {t["ExitReason"] for t in res["trade_log"]}
-        # A held leader that loses its rank is sold with a "Rank Drop" reason.
         assert "Rank Drop" in reasons
         symbols = {t["Symbol"] for t in res["trade_log"]}
         assert "EARLY" in symbols and "LATE" in symbols
@@ -252,7 +337,6 @@ class TestMechanics:
         data = _linear_universe()
 
         def gate(_data, date):
-            # Risk-off after day 40 -> everything sold, nothing re-bought.
             return pd.Timestamp(date) < pd.Timestamp("2020-02-10")
 
         cfg = _base_config(top_n=2, rebalance_days=10)
@@ -260,20 +344,108 @@ class TestMechanics:
         assert res is not None
         reasons = [t["ExitReason"] for t in res["trade_log"]]
         assert "Regime Off" in reasons
-        # After liquidation the book is flat -> final equity is pure cash, so the
-        # last portion of the timeline is constant.
         tl = res["portfolio_timeline"]
+        # After liquidation the book is pure cash -> the tail is flat.
         assert tl.iloc[-1] == pytest.approx(tl.iloc[-5], rel=1e-9)
 
+    def test_drift_add_tops_up_underweight_holding(self):
+        # A declines after entry so its value drifts BELOW target; with drift
+        # rebalancing on it must be topped up (more shares accumulated) vs a run
+        # where rebalancing is suppressed. B is flat to provide the second slot.
+        decline = np.concatenate([np.linspace(100, 100, 10),
+                                   np.linspace(100, 40, 70)])
+        flat = np.full(80, 100.0)
+        data = {"A": _make_df(decline), "B": _make_df(flat)}
+
+        def rank(data_, rebalance_date, **kwargs):
+            # Fixed ranking: A then B, both always eligible after some history.
+            out = {}
+            for s in ("A", "B"):
+                if rebalance_date in data_[s].index:
+                    out[s] = 2.0 if s == "A" else 1.0
+            return out
+
+        cfg_add = _base_config(top_n=2, rebalance_days=10, drift_trim_pct=0.0)
+        cfg_none = _base_config(top_n=2, rebalance_days=10, drift_trim_pct=99.0)
+        res_add = rotation.run_rotation(data, rank, cfg_add)
+        res_none = rotation.run_rotation(data, rank, cfg_none)
+        assert res_add is not None and res_none is not None
+
+        def a_shares(res):
+            a_trades = [t for t in res["trade_log"] if t["Symbol"] == "A"]
+            # total shares that eventually exited A (trims + final close)
+            return sum(t["Shares"] for t in a_trades)
+
+        # With top-ups the accumulated A share count strictly exceeds the
+        # no-rebalance baseline (which only ever holds the initial buy).
+        assert a_shares(res_add) > a_shares(res_none)
+
     def test_sell_buffer_reduces_churn(self):
-        # With a generous buffer a name kept just outside top_n is not churned.
+        # Two anti-phase oscillators: without a buffer the top_n=1 leader flips
+        # every phase and churns; a buffer keeps the incumbent while it stays
+        # within the band, strictly cutting the trade count.
+        n = 120
+        t = np.arange(n, dtype=float)
+        wave = np.sin(2 * np.pi * t / 40.0)
+        A = _make_df(100 + 8 * wave)
+        B = _make_df(100 - 8 * wave)
+        data = {"A": A, "B": B}
+        cfg_nb = _base_config(top_n=1, rebalance_days=5, sell_buffer_rank=0,
+                              drift_trim_pct=99.0)
+        cfg_b = _base_config(top_n=1, rebalance_days=5, sell_buffer_rank=1,
+                             drift_trim_pct=99.0)
+        res_nb = rotation.run_rotation(data, _momentum_rank(lookback=10), cfg_nb)
+        res_b = rotation.run_rotation(data, _momentum_rank(lookback=10), cfg_b)
+        assert res_nb is not None and res_b is not None
+        # Real assertion (F6): the buffer STRICTLY reduces the number of trades.
+        assert res_b["Trades"] < res_nb["Trades"]
+
+    def test_weights_never_exceed_one_with_fixed_alloc(self):
+        # fixed_alloc with alloc 0.5 on top_n=3 would sum to 1.5 pre-normalisation;
+        # the framework must normalise so the book never over-commits (F4).
         data = _linear_universe()
-        cfg_no_buffer = _base_config(top_n=1, rebalance_days=10, sell_buffer_rank=0)
-        cfg_buffer = _base_config(top_n=1, rebalance_days=10, sell_buffer_rank=3)
-        res_nb = rotation.run_rotation(data, _momentum_rank(), cfg_no_buffer)
-        res_b = rotation.run_rotation(data, _momentum_rank(), cfg_buffer)
-        # Buffer never increases the trade count.
-        assert res_b["Trades"] <= res_nb["Trades"] + 0  # deterministic universe: equal or fewer
+        cfg = _base_config(top_n=3, rebalance_days=21, weighting="fixed_alloc")
+        cfg["allocation_per_trade"] = 0.5
+        res = rotation.run_rotation(data, _momentum_rank(), cfg)
+        assert res is not None
+        # Equity curve must never require negative cash (would manifest as an
+        # equity dip below the sum of position values); a proxy check: no NaN and
+        # the curve stays finite and positive.
+        tl = res["portfolio_timeline"]
+        assert (tl > 0).all()
+
+
+# ---------------------------------------------------------------------------
+# F7: config-driven entry point honoring rotation.enabled / rank_strategy
+# ---------------------------------------------------------------------------
+class TestConfigDriven:
+    def test_disabled_returns_none(self):
+        data = _linear_universe()
+        cfg = _base_config()
+        cfg["rotation"]["enabled"] = False
+        assert rotation.run_rotation_from_config(data, cfg) is None
+
+    def test_missing_rank_strategy_returns_none(self):
+        data = _linear_universe()
+        cfg = _base_config()
+        cfg["rotation"]["rank_strategy"] = None
+        assert rotation.run_rotation_from_config(data, cfg) is None
+
+    def test_runs_named_registered_plugin(self):
+        name = "test-cfg-driven-rot"
+
+        @register_rotation(name=name, params={})
+        def _r(data, rebalance_date, **kwargs):
+            # rank by close level on the rebalance date
+            return {s: rotation._price(df, rebalance_date, "Close")
+                    for s, df in data.items() if rebalance_date in df.index}
+
+        data = _linear_universe()
+        cfg = _base_config(top_n=2)
+        cfg["rotation"]["rank_strategy"] = name
+        res = rotation.run_rotation_from_config(data, cfg)
+        assert res is not None
+        assert res["Trades"] > 0
 
 
 # ---------------------------------------------------------------------------
@@ -305,17 +477,15 @@ class TestScaleInvariance:
         res_100k = rotation.run_rotation(data, rank, _base_config(100_000.0, top_n=2))
         res_1m = rotation.run_rotation(data, rank, _base_config(1_000_000.0, top_n=2))
 
-        # Same percentage return regardless of capital scale.
         assert res_100k["pnl_percent"] == pytest.approx(res_1m["pnl_percent"], rel=1e-9)
-        # Same max drawdown / sharpe.
         assert res_100k["max_drawdown"] == pytest.approx(res_1m["max_drawdown"], rel=1e-9)
-
-        # Same number of trades, and share counts scale by exactly 10x.
         assert res_100k["Trades"] == res_1m["Trades"]
-        tl_100 = sorted(res_100k["trade_log"], key=lambda t: (t["Symbol"], t["EntryDate"]))
-        tl_1m = sorted(res_1m["trade_log"], key=lambda t: (t["Symbol"], t["EntryDate"]))
-        for a, b in zip(tl_100, tl_1m):
+
+        # Same deterministic order in both runs -> pair by index; shares & profit
+        # scale by exactly 10x.
+        for a, b in zip(res_100k["trade_log"], res_1m["trade_log"]):
             assert a["Symbol"] == b["Symbol"]
+            assert a["EntryDate"] == b["EntryDate"]
             assert b["Shares"] == pytest.approx(a["Shares"] * 10.0, rel=1e-9)
             assert b["Profit"] == pytest.approx(a["Profit"] * 10.0, rel=1e-9)
 
@@ -327,6 +497,5 @@ class TestScaleInvariance:
         a = res_100k["portfolio_timeline"]
         b = res_1m["portfolio_timeline"]
         assert list(a.index) == list(b.index)
-        # Every equity point scales by exactly 10x.
         ratio = (b / a).dropna()
         assert np.allclose(ratio.values, 10.0, rtol=1e-9)
