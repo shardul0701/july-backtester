@@ -36,6 +36,17 @@ def get_cached_data(symbol: str, start: str, end: str, timeframe: str, multiplie
             logger.debug(f"  -> Cache HIT for '{symbol}'. Loading from '{filepath}'.")
             try:
                 df = pd.read_parquet(filepath)
+                # Integrity guard: a cache file with a non-DatetimeIndex (e.g. a
+                # parquet dropped in the cache dir by hand / an external tool)
+                # would break the engine downstream. Treat it as a miss and
+                # re-fetch, rather than serving it (the pre-#315 outer try/except
+                # rejected this by accident; keep that useful behavior).
+                if not isinstance(df.index, pd.DatetimeIndex):
+                    logger.warning(
+                        f"  -> Cache file '{filepath}' has a {type(df.index).__name__}, "
+                        f"not a DatetimeIndex — discarding and re-fetching."
+                    )
+                    return None
                 # The cache is keyed by the REQUESTED start (it is in the
                 # filename), so a fixed request always maps to this one file. If
                 # the cached data begins later than the requested start it is
@@ -57,9 +68,10 @@ def get_cached_data(symbol: str, start: str, end: str, timeframe: str, multiplie
                     if lag_days > 30:
                         logger.info(
                             f"  -> Cache for '{symbol}' starts {cache_start.date()}, "
-                            f"{lag_days} days after requested {start} — expected for a "
-                            f"symbol listed after {start}. If you upgraded data plans, the "
-                            f"24h TTL will refresh it (or clear '{CACHE_DIR}/')."
+                            f"{lag_days} days after requested {start} — either the symbol "
+                            f"listed after {start} or the provider plan-capped the fetch. "
+                            f"If you upgraded data plans, the 24h TTL refreshes it "
+                            f"(or clear '{CACHE_DIR}/')."
                         )
                 except Exception:
                     pass  # visibility only — never fail a cache read on this
