@@ -194,22 +194,31 @@ def _build_strat_name(name, stop_config):
     """Build the display name for a strategy given its stop-loss config.
 
     Percentage and ATR stops get a descriptive suffix; every other stop
-    type (``none``, ``points``, ``signal_bar``, ``trailing_atr`` …) leaves
-    the base name unchanged.
+    type (``none``, ``points``, ``signal_bar``, ``trailing_atr`` …) — and a
+    config with no ``type`` key at all — leaves the base name unchanged,
+    matching the engine, which resolves the type via ``.get("type", "none")``.
 
-    The ATR label defaults the period to 14 because the engine always uses
-    the ``ATR_14`` column — the documented config shape
-    (``{"type": "atr", "multiplier": 2.0}``) carries no ``period`` key, and
-    only the CLI shorthand ``atr:14:3.0`` injects one. Reading
-    ``stop_config['period']`` unconditionally used to raise ``KeyError`` and
-    fail every worker task (issue #309).
+    This helper must never raise on a config the *engine* would happily run,
+    otherwise the label crashes the worker before the simulation starts and
+    the whole run completes with zero results (issue #309). It therefore
+    mirrors the engine's own defaults for every key it reads:
+
+    - ATR ``period`` defaults to 14 — the engine always uses the ``ATR_14``
+      column; the documented shape ``{"type": "atr", "multiplier": 2.0}``
+      carries no ``period`` (only the CLI shorthand ``atr:14:3.0`` injects
+      one). Reading ``stop_config['period']`` unconditionally was the #309
+      crash.
+    - ATR ``multiplier`` defaults to 3.0 (``portfolio_simulations`` uses the
+      same default at its sizing/stop-level sites).
+    - percentage ``value`` defaults to 0.05 (ditto).
     """
     stop_type = stop_config.get('type')
     if stop_type == 'percentage':
-        return f"{name} w/ {stop_config['value']:.0%} SL"
+        return f"{name} w/ {stop_config.get('value', 0.05):.0%} SL"
     if stop_type == 'atr':
+        multiplier = stop_config.get('multiplier', 3.0)
         period = stop_config.get('period', 14)
-        return f"{name} w/ {stop_config['multiplier']}x ATR({period}) SL"
+        return f"{name} w/ {multiplier}x ATR({period}) SL"
     return name
 
 # --------------------------------------------------------------------
