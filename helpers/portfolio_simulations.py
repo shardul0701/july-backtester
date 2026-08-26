@@ -883,19 +883,22 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                 _s_ir = float(_s_stop - ep) if (pd.notna(_s_stop) and _s_stop > ep) else None
 
                 # --- CAPTURE FEATURES AT ENTRY (mirror of the long entry block) ---
+                # Read from the SIGNAL bar (sig_date), not the fill bar (issue
+                # #310): under execution_time="open" the fill bar's same-day
+                # close/volume were not known when the short was decided.
                 _s_features = {}
                 try:
-                    _s_features['entry_RSI_14'] = df.loc[date, 'RSI_14']
-                    _s_features['entry_ATR_14_pct'] = df.loc[date, 'ATR_14_pct']
-                    _s_features['entry_SMA200_dist_pct'] = df.loc[date, 'SMA200_dist_pct']
-                    _s_features['entry_Volume_Spike'] = df.loc[date, 'Volume_Spike']
+                    _s_features['entry_RSI_14'] = df.loc[sig_date, 'RSI_14']
+                    _s_features['entry_ATR_14_pct'] = df.loc[sig_date, 'ATR_14_pct']
+                    _s_features['entry_SMA200_dist_pct'] = df.loc[sig_date, 'SMA200_dist_pct']
+                    _s_features['entry_Volume_Spike'] = df.loc[sig_date, 'Volume_Spike']
                     if spy_df is not None:
-                        _s_features['entry_SPY_RSI_14'] = spy_df.loc[date, 'RSI_14']
-                        _s_features['entry_SPY_SMA200_dist_pct'] = spy_df.loc[date, 'SMA200_dist_pct']
+                        _s_features['entry_SPY_RSI_14'] = spy_df.loc[sig_date, 'RSI_14']
+                        _s_features['entry_SPY_SMA200_dist_pct'] = spy_df.loc[sig_date, 'SMA200_dist_pct']
                     if vix_df is not None:
-                        _s_features['entry_VIX_Close'] = vix_df.loc[date, 'Close']
+                        _s_features['entry_VIX_Close'] = vix_df.loc[sig_date, 'Close']
                     if tnx_df is not None:
-                        _s_features['entry_TNX_Close'] = tnx_df.loc[date, 'Close']
+                        _s_features['entry_TNX_Close'] = tnx_df.loc[sig_date, 'Close']
                 except KeyError:
                     pass
 
@@ -1236,19 +1239,26 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                 # Final check: Ensure we can afford the trade and it's a meaningful size
                 if can_afford:
                     # --- CAPTURE FEATURES AT ENTRY ---
+                    # Read from the SIGNAL bar, not the fill bar (issue #310).
+                    # ``signal_date`` is the bar before the fill under
+                    # execution_time="open" (whose close/volume were known when
+                    # the entry was decided) and the fill bar itself under
+                    # "close". Reading the fill bar (entry_exec_date) leaked the
+                    # fill bar's same-day close/volume into the entry_* features,
+                    # contaminating ml_features.parquet under open execution.
                     features = {}
                     try:
-                        features['entry_RSI_14'] = df.loc[entry_exec_date, 'RSI_14']
-                        features['entry_ATR_14_pct'] = df.loc[entry_exec_date, 'ATR_14_pct']
-                        features['entry_SMA200_dist_pct'] = df.loc[entry_exec_date, 'SMA200_dist_pct']
-                        features['entry_Volume_Spike'] = df.loc[entry_exec_date, 'Volume_Spike']
+                        features['entry_RSI_14'] = df.loc[signal_date, 'RSI_14']
+                        features['entry_ATR_14_pct'] = df.loc[signal_date, 'ATR_14_pct']
+                        features['entry_SMA200_dist_pct'] = df.loc[signal_date, 'SMA200_dist_pct']
+                        features['entry_Volume_Spike'] = df.loc[signal_date, 'Volume_Spike']
                         if spy_df is not None:
-                            features['entry_SPY_RSI_14'] = spy_df.loc[entry_exec_date, 'RSI_14']
-                            features['entry_SPY_SMA200_dist_pct'] = spy_df.loc[entry_exec_date, 'SMA200_dist_pct']
+                            features['entry_SPY_RSI_14'] = spy_df.loc[signal_date, 'RSI_14']
+                            features['entry_SPY_SMA200_dist_pct'] = spy_df.loc[signal_date, 'SMA200_dist_pct']
                         if vix_df is not None:
-                            features['entry_VIX_Close'] = vix_df.loc[entry_exec_date, 'Close']
+                            features['entry_VIX_Close'] = vix_df.loc[signal_date, 'Close']
                         if tnx_df is not None:
-                            features['entry_TNX_Close'] = tnx_df.loc[entry_exec_date, 'Close']
+                            features['entry_TNX_Close'] = tnx_df.loc[signal_date, 'Close']
                     except KeyError:
                         pass
                     
