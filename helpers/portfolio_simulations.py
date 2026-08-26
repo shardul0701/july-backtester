@@ -1097,7 +1097,13 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
             if date not in df.index:
                 continue
 
-            if symbol in positions: continue
+            # Mirror the short-entry guard: never open a long while a short is
+            # still open on the same symbol (issue #313). A signal of 1 does not
+            # cover a short (only <= -1 covers), so without this the long would
+            # stack on top of the open short — a hedged double position the
+            # strategy never intended. A flip is still expressible: -1 covers the
+            # short first (exits run before entries), then 1 enters the long.
+            if symbol in positions or symbol in short_positions: continue
             if (not _pit_flag(symbol, date, '_pit_member', True)
                     or _pit_flag(symbol, date, '_pit_force_exit', False)):
                 continue
