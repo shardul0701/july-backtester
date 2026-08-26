@@ -421,28 +421,35 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
         value = df.at[date, column]
         return default if pd.isna(value) else bool(value)
 
+    def _mtm_close(df, at_date):
+        """Close used to mark a held position to market on `at_date`: the bar's
+        own Close when present and non-NaN, else the most recent prior non-NaN
+        Close, else None. Symmetric across long and short (issue #320): the long
+        missing-bar fallback previously had no NaN guard (a NaN last-known Close
+        propagated NaN into equity, then got dropped, shortening the return
+        series), and the short side had no fallback at all (its MTM silently
+        dropped to 0 on a missing bar, spiking equity by the whole open P&L)."""
+        if at_date in df.index:
+            c = df.at[at_date, 'Close']
+            if pd.notna(c):
+                return c
+        # Rare fallback (missing/NaN bar only): last non-NaN Close at or before.
+        prior = df.loc[:at_date, 'Close'].dropna()
+        return prior.iloc[-1] if len(prior) else None
+
     for date in portfolio_timeline.index:
         # --- EQUITY CALCULATION ---
         current_market_value = 0.0
         for symbol, pos in positions.items():
-            # <-- NEW CHECK: Make sure the date exists for this symbol before getting its price
-            if date in portfolio_data[symbol].index:
-                close_price = portfolio_data[symbol].loc[date]['Close']
-                if pd.notna(close_price):
-                    current_market_value += _equity_contribution(instruments[symbol], pos, close_price, side="long")
-            else:
-                # If date doesn't exist, use the last known price for a more stable equity curve
-                # This is an edge case, but good practice.
-                last_valid_date = portfolio_data[symbol].index[portfolio_data[symbol].index < date][-1]
-                close_price = portfolio_data[symbol].loc[last_valid_date]['Close']
+            close_price = _mtm_close(portfolio_data[symbol], date)
+            if close_price is not None:
                 current_market_value += _equity_contribution(instruments[symbol], pos, close_price, side="long")
 
         for symbol, spos in short_positions.items():
-            if date in portfolio_data[symbol].index:
-                cur = portfolio_data[symbol].loc[date].get('Close')
-                if pd.notna(cur):
-                    current_market_value += _inst.unrealized_pnl(
-                        instruments[symbol], spos['shares'], spos['entry_price'], cur, side="short")
+            cur = _mtm_close(portfolio_data[symbol], date)
+            if cur is not None:
+                current_market_value += _inst.unrealized_pnl(
+                    instruments[symbol], spos['shares'], spos['entry_price'], cur, side="short")
 
         total_equity = cash + current_market_value
         portfolio_timeline[date] = total_equity
