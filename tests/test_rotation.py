@@ -404,15 +404,46 @@ class TestMechanics:
         # fixed_alloc with alloc 0.5 on top_n=3 would sum to 1.5 pre-normalisation;
         # the framework must normalise so the book never over-commits (F4).
         data = _linear_universe()
-        cfg = _base_config(top_n=3, rebalance_days=21, weighting="fixed_alloc")
+        # drift_trim_pct pinned high so no later drift-add/trim can fold
+        # into a name's position before the backtest ends — the trade_log
+        # row for each name then reflects *only* the very first buy, with
+        # nothing else blended into its EntryPrice/Shares.
+        cfg = _base_config(top_n=3, rebalance_days=21, weighting="fixed_alloc",
+                            drift_trim_pct=99.0)
         cfg["allocation_per_trade"] = 0.5
         res = rotation.run_rotation(data, _momentum_rank(), cfg)
         assert res is not None
-        # Equity curve must never require negative cash (would manifest as an
-        # equity dip below the sum of position values); a proxy check: no NaN and
-        # the curve stays finite and positive.
+
+        # Equity curve must never require negative cash.
         tl = res["portfolio_timeline"]
         assert (tl > 0).all()
+
+        # Real check on the normalisation itself, not a positivity proxy: at
+        # the very first rebalance (no existing positions, so every fill is a
+        # fresh buy against known starting equity), each name's entry notional
+        # must reflect the normalised (not raw) weight — 0.5 / 1.5 = 1/3 each,
+        # not 0.5 each — and the three together must not exceed capital. A
+        # disabled `total_w > 1.0` normalisation still passes the positivity
+        # check above (buys are clamped by `_over_budget`, not rejected) but
+        # produces unequal, order-dependent notionals here: the first name(s)
+        # processed get their full raw (uncapped) weight, and whichever name
+        # is processed last is starved of whatever cash remains.
+        first_date = min(t["EntryDate"] for t in res["trade_log"])
+        first_trades = [t for t in res["trade_log"] if t["EntryDate"] == first_date]
+        symbols_entered = {t["Symbol"] for t in first_trades}
+        assert symbols_entered == {"STRONG", "MID", "WEAK"}
+
+        notional_by_symbol = {}
+        for t in first_trades:
+            notional_by_symbol[t["Symbol"]] = (
+                notional_by_symbol.get(t["Symbol"], 0.0) + t["Shares"] * t["EntryPrice"]
+            )
+
+        assert sum(notional_by_symbol.values()) <= cfg["initial_capital"] * (1 + 1e-6)
+
+        expected_each = cfg["initial_capital"] * (0.5 / 1.5)
+        for notional in notional_by_symbol.values():
+            assert notional == pytest.approx(expected_each, rel=0.05)
 
 
 # ---------------------------------------------------------------------------
@@ -499,6 +530,46 @@ class TestScaleInvariance:
         assert list(a.index) == list(b.index)
         ratio = (b / a).dropna()
         assert np.allclose(ratio.values, 10.0, rtol=1e-9)
+
+
+# ---------------------------------------------------------------------------
+# Regression: drift-loop trims must run before adds, so an add's fill cannot
+# depend on the arbitrary order rank_fn returns names in (the single-pass ->
+# two-pass restructuring of the drift-control loop, MED-1 in the second
+# adversarial review).
+# ---------------------------------------------------------------------------
+class TestDriftLoopOrderIndependence:
+    @staticmethod
+    def _crash_rally_universe(n_days=80):
+        # A crashes 50%, B rallies 2x, over the same middle stretch. With
+        # top_n=2 BOTH names are held in BOTH runs below — only the order
+        # rank_fn returns them in differs. B's trim (over-weight, since it
+        # rallied) frees cash that A's add (under-weight, since it crashed)
+        # needs in the same cycle.
+        a = np.concatenate([np.full(20, 100.0), np.linspace(100, 50, 40), np.full(20, 50.0)])
+        b = np.concatenate([np.full(20, 100.0), np.linspace(100, 200, 40), np.full(20, 200.0)])
+        return {"A": _make_df(a), "B": _make_df(b)}
+
+    def test_final_equity_independent_of_rank_return_order(self):
+        data = self._crash_rally_universe()
+
+        def rank_a_first(data_, rebalance_date, **kwargs):
+            return {"A": 2.0, "B": 1.0}
+
+        def rank_b_first(data_, rebalance_date, **kwargs):
+            return {"B": 2.0, "A": 1.0}
+
+        cfg = _base_config(top_n=2, rebalance_days=5, sell_buffer_rank=0,
+                            drift_trim_pct=0.0, weighting="equal")
+
+        res_a_first = rotation.run_rotation(data, rank_a_first, cfg)
+        res_b_first = rotation.run_rotation(data, rank_b_first, cfg)
+        assert res_a_first is not None and res_b_first is not None
+
+        assert res_a_first["portfolio_timeline"].iloc[-1] == pytest.approx(
+            res_b_first["portfolio_timeline"].iloc[-1], abs=1e-6
+        )
+        assert res_a_first["Trades"] == res_b_first["Trades"]
 
 
 # ---------------------------------------------------------------------------

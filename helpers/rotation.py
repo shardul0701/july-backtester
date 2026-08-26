@@ -566,6 +566,14 @@ def run_rotation(
         equity_now = _mtm(exec_date, "Open")
 
         # 4. Drift control on existing holdings: trim over-weight, top up under-weight.
+        # Trims run to completion before any add is attempted. Trims and adds
+        # were previously interleaved in ranking-order, so an add early in the
+        # pass could be starved of cash that a same-cycle trim later in the
+        # pass would have freed — an add's fill (and thus the strategy's
+        # realised weights) depended on the arbitrary order rank_fn returned
+        # names in, with nothing logged. Two-pass ordering removes that
+        # path-dependence: every trim's freed cash is available to every add.
+        pending_adds = []
         for sym in list(positions.keys()):
             w = weights.get(sym)
             if w is None:
@@ -588,7 +596,10 @@ def run_rotation(
                 # buys shares that the End-of-Backtest MTM immediately closes
                 # on that same bar: a same-day buy+sell hidden inside a
                 # longer-duration trade.
-                _do_add(sym, exec_date, target_dollars)
+                pending_adds.append((sym, target_dollars))
+
+        for sym, target_dollars in pending_adds:
+            _do_add(sym, exec_date, target_dollars)
 
         # 5. Buy new names to fill the target, from the top of the ranking.
         if allow_new:
