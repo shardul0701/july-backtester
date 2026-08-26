@@ -39,26 +39,30 @@ def get_bars_for_period(period_str: str, timeframe: str, multiplier: int = 1) ->
     elif timeframe == 'H':
         # Each bar spans `multiplier` hours. The multiplier used to be ignored
         # here (issues #318 / #267), over-counting bars by the multiplier — e.g.
-        # "20d" on 2h bars returned 130 instead of 20*6.5/2 = 65.
+        # "20d" on 2h bars returned 130 instead of 20*6.5/2 = 65. Truncate (not
+        # round) so every multiplier=1 result is byte-for-byte unchanged
+        # (int(value*6.5) as before), and floor at 1 so a sub-bar period never
+        # returns 0 (which would make rolling(0) an all-NaN column).
         if unit == 'd':
-            return int(round(value * HOURS_PER_DAY / multiplier))
+            return max(1, int(value * HOURS_PER_DAY / multiplier))
         elif unit == 'h':
-            return int(round(value / multiplier))
+            return max(1, int(value / multiplier))
         else:
             raise ValueError(f"Cannot use period unit '{unit}' with Hourly ('H') timeframe. Use 'd' or 'h'.")
 
     elif timeframe == 'MIN':
         # Each bar spans `multiplier` minutes. Compute bars-per-day as an EXACT
-        # float and round only at the end: the old code truncated BARS_PER_DAY
+        # float and truncate only at the end: the old code truncated BARS_PER_DAY
         # first (int(390/60) = 6 for 60-min bars), losing up to 7.7% — "200d" on
-        # 60-min bars returned 1200 instead of 1300 (issue #318).
+        # 60-min bars returned 1200 instead of 1300 (issue #318). multiplier=1
+        # results are unchanged; floor at 1 as above.
         bars_per_day = (HOURS_PER_DAY * MINUTES_PER_HOUR) / multiplier
         if unit == 'd':
-            return int(round(value * bars_per_day))
+            return max(1, int(value * bars_per_day))
         elif unit == 'h':
-            return int(round(value * MINUTES_PER_HOUR / multiplier))
+            return max(1, int(value * MINUTES_PER_HOUR / multiplier))
         elif unit == 'min':
-            return int(round(value / multiplier))
+            return max(1, int(value / multiplier))
         else:
             raise ValueError(f"Cannot use period unit '{unit}' with Minute ('MIN') timeframe. Use 'd', 'h', or 'min'.")
             
@@ -280,7 +284,9 @@ def get_bars_per_day(config: dict) -> int:
     lookback lengths; this returns an ADV rescale factor), though both now
     honour `timeframe_multiplier` on the H/MIN timeframes — get_bars_for_period's
     multiplier bug was fixed in #318 (which also closed the H-branch half of
-    #267).
+    #267). Note: get_bars_for_period still hard-codes a 6.5h session while this
+    function honours config['trading_hours_per_day'], so the two diverge on a
+    non-6.5h (e.g. 23h futures) session — tracked as a follow-up.
 
     NOTE (issue #268): this returns a truncated bar COUNT and is therefore
     lossy whenever the multiplier does not divide the session evenly (4H ->
