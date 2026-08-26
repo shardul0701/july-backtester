@@ -298,7 +298,14 @@ def run_rotation(
         inst = insts[sym]
         raw = _price(data[sym], exec_date, "Open")
         if np.isnan(raw) or raw <= 0:
-            return
+            # The symbol has no bar at exec_date — its data ended mid-backtest
+            # (delisting / provider dropout). Falling back to the same
+            # carry-forward Close that _mtm / _do_close_mtm already use still
+            # liquidates the position now, instead of leaving it an unkillable
+            # zombie that free-rides on a frozen mark until End of Backtest.
+            raw = _carry_forward_close(data[sym], exec_date)
+            if np.isnan(raw) or raw <= 0:
+                return
         exit_price = _inst.apply_slippage(inst, raw, "sell")
         shares = pos["shares"]
         commission = _inst.commission(inst, shares)
@@ -572,8 +579,15 @@ def run_rotation(
                 continue
             drift = (cur_val - target_dollars) / target_dollars if target_dollars > 0 else 0.0
             if drift > drift_trim:
+                # A trim only sells shares already held for a real (non-zero)
+                # duration, so it's fine on the terminal bar too.
                 _do_trim(sym, exec_date, target_dollars)
-            elif drift < -drift_trim:
+            elif drift < -drift_trim and allow_new:
+                # Same "no new capital commitment on the terminal bar" rule
+                # that gates _do_buy (finding F2) — without it, an add here
+                # buys shares that the End-of-Backtest MTM immediately closes
+                # on that same bar: a same-day buy+sell hidden inside a
+                # longer-duration trade.
                 _do_add(sym, exec_date, target_dollars)
 
         # 5. Buy new names to fill the target, from the top of the ranking.
