@@ -1101,8 +1101,10 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
             # still open on the same symbol (issue #313). A signal of 1 does not
             # cover a short (only <= -1 covers), so without this the long would
             # stack on top of the open short — a hedged double position the
-            # strategy never intended. A flip is still expressible: -1 covers the
-            # short first (exits run before entries), then 1 enters the long.
+            # strategy never intended. A flip is still expressible as a two-bar
+            # sequence: -1 on one bar covers the short, then 1 on a later bar
+            # enters the long (same-bar stop/margin/PIT covers also free the
+            # symbol before this loop, so a 1 that bar can enter).
             if symbol in positions or symbol in short_positions: continue
             if (not _pit_flag(symbol, date, '_pit_member', True)
                     or _pit_flag(symbol, date, '_pit_force_exit', False)):
