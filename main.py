@@ -190,6 +190,30 @@ def _build_intrabar_data(portfolio_data, config):
 
 # --------------------------------------------------------------------
 
+def _build_strat_name(name, stop_config):
+    """Build the display name for a strategy given its stop-loss config.
+
+    Percentage and ATR stops get a descriptive suffix; every other stop
+    type (``none``, ``points``, ``signal_bar``, ``trailing_atr`` …) leaves
+    the base name unchanged.
+
+    The ATR label defaults the period to 14 because the engine always uses
+    the ``ATR_14`` column — the documented config shape
+    (``{"type": "atr", "multiplier": 2.0}``) carries no ``period`` key, and
+    only the CLI shorthand ``atr:14:3.0`` injects one. Reading
+    ``stop_config['period']`` unconditionally used to raise ``KeyError`` and
+    fail every worker task (issue #309).
+    """
+    stop_type = stop_config.get('type')
+    if stop_type == 'percentage':
+        return f"{name} w/ {stop_config['value']:.0%} SL"
+    if stop_type == 'atr':
+        period = stop_config.get('period', 14)
+        return f"{name} w/ {stop_config['multiplier']}x ATR({period}) SL"
+    return name
+
+# --------------------------------------------------------------------
+
 def run_single_simulation(args):
     """
     Function to run one combination of (portfolio, strategy, stop-loss).
@@ -211,11 +235,7 @@ def run_single_simulation(args):
     tnx_df_local = comparison_dfs_global.get(dependency_map_global.get("tnx"))
 
     try:
-        strat_name = name
-        if stop_config['type'] == 'percentage':
-            strat_name = f"{name} w/ {stop_config['value']:.0%} SL"
-        elif stop_config['type'] == 'atr':
-            strat_name = f"{name} w/ {stop_config['multiplier']}x ATR({stop_config['period']}) SL"
+        strat_name = _build_strat_name(name, stop_config)
 
         base_signals_with_dfs = {}
         for symbol, df in portfolio_data.items():
