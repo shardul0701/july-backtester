@@ -20,7 +20,16 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import helpers.portfolio_simulations as ps
 from helpers.portfolio_simulations import run_portfolio_simulation
+
+
+@pytest.fixture
+def open_execution(monkeypatch):
+    """Force execution_time='open' so open-mode tests don't pass vacuously when
+    config.py is set to 'close' (under close execution signal bar == fill bar,
+    which would satisfy the assertions with or without the fix)."""
+    monkeypatch.setitem(ps.CONFIG, "execution_time", "open")
 
 
 def _feature_frame(rows):
@@ -59,7 +68,7 @@ _ROWS = [
 
 
 class TestLongEntryFeatureCapture:
-    def test_open_execution_captures_signal_bar_not_fill_bar(self):
+    def test_open_execution_captures_signal_bar_not_fill_bar(self, open_execution):
         df = _feature_frame(_ROWS)
         # signal on bar 0 -> fill bar 1 open; exit signal bar 2 -> fill bar 3.
         res = run_portfolio_simulation(
@@ -77,7 +86,7 @@ class TestLongEntryFeatureCapture:
         assert row["entry_SMA200_dist_pct"] == pytest.approx(0.101)
         assert row["entry_Volume_Spike"] == pytest.approx(1.1)
 
-    def test_open_execution_captures_signal_bar_comparison_features(self):
+    def test_open_execution_captures_signal_bar_comparison_features(self, open_execution):
         df = _feature_frame(_ROWS)
         spy = _feature_frame([
             ("2024-01-02", 400.0, 55.0, 0.05, -0.10, 1.0),  # bar 0
@@ -85,15 +94,57 @@ class TestLongEntryFeatureCapture:
             ("2024-01-04", 402.0, 77.0, 0.07, -0.30, 3.0),
             ("2024-01-05", 403.0, 88.0, 0.08, -0.40, 4.0),
         ])
+        vix = _feature_frame([
+            ("2024-01-02", 15.0, 0, 0, 0, 0),  # bar 0 Close = 15.0
+            ("2024-01-03", 16.0, 0, 0, 0, 0),  # bar 1 Close = 16.0
+            ("2024-01-04", 17.0, 0, 0, 0, 0),
+            ("2024-01-05", 18.0, 0, 0, 0, 0),
+        ])
+        tnx = _feature_frame([
+            ("2024-01-02", 4.10, 0, 0, 0, 0),  # bar 0 Close = 4.10
+            ("2024-01-03", 4.20, 0, 0, 0, 0),
+            ("2024-01-04", 4.30, 0, 0, 0, 0),
+            ("2024-01-05", 4.40, 0, 0, 0, 0),
+        ])
         res = run_portfolio_simulation(
             portfolio_data={"TEST": df},
             signals={"TEST": pd.Series([1, 0, -1, 0], index=df.index)},
             initial_capital=100_000.0, allocation_pct=1.0,
-            spy_df=spy, vix_df=None, tnx_df=None, stop_config={"type": "none"},
+            spy_df=spy, vix_df=vix, tnx_df=tnx, stop_config={"type": "none"},
         )
         row = pd.DataFrame(res["trade_log"]).iloc[0]
         assert row["entry_SPY_RSI_14"] == pytest.approx(55.0)          # bar 0, not 66.0
         assert row["entry_SPY_SMA200_dist_pct"] == pytest.approx(-0.10)
+        assert row["entry_VIX_Close"] == pytest.approx(15.0)           # bar 0, not 16.0
+        assert row["entry_TNX_Close"] == pytest.approx(4.10)           # bar 0, not 4.20
+
+    def test_spy_missing_signal_bar_does_not_drop_vix_tnx(self, open_execution):
+        # SPY frame starts at the FILL bar (2024-01-03), so signal_date
+        # (2024-01-02) is absent from it. VIX/TNX contain the signal bar. The
+        # per-frame guards must still capture VIX/TNX (not drop them with SPY),
+        # and must NOT fall back to the fill bar (which would re-leak).
+        df = _feature_frame(_ROWS)
+        spy = _feature_frame([
+            ("2024-01-03", 401.0, 66.0, 0.06, -0.20, 2.0),  # starts at fill bar
+            ("2024-01-04", 402.0, 77.0, 0.07, -0.30, 3.0),
+            ("2024-01-05", 403.0, 88.0, 0.08, -0.40, 4.0),
+        ])
+        vix = _feature_frame([
+            ("2024-01-02", 15.0, 0, 0, 0, 0),
+            ("2024-01-03", 16.0, 0, 0, 0, 0),
+            ("2024-01-04", 17.0, 0, 0, 0, 0),
+            ("2024-01-05", 18.0, 0, 0, 0, 0),
+        ])
+        res = run_portfolio_simulation(
+            portfolio_data={"TEST": df},
+            signals={"TEST": pd.Series([1, 0, -1, 0], index=df.index)},
+            initial_capital=100_000.0, allocation_pct=1.0,
+            spy_df=spy, vix_df=vix, tnx_df=None, stop_config={"type": "none"},
+        )
+        row = pd.DataFrame(res["trade_log"]).iloc[0]
+        assert row["entry_VIX_Close"] == pytest.approx(15.0)       # VIX kept despite SPY miss
+        assert pd.isna(row.get("entry_SPY_RSI_14"))                # SPY dropped, not fill-bar filled
+        assert row["entry_RSI_14"] == pytest.approx(11.0)          # symbol feature unaffected
 
     def test_close_execution_captures_the_signal_which_is_the_fill_bar(self, monkeypatch):
         # Under close execution the signal bar IS the fill bar, so the feature
@@ -113,7 +164,7 @@ class TestLongEntryFeatureCapture:
 
 
 class TestShortEntryFeatureCapture:
-    def test_open_execution_short_captures_signal_bar(self):
+    def test_open_execution_short_captures_signal_bar(self, open_execution):
         df = _feature_frame(_ROWS)
         # -2 enter short on bar 0 -> fill bar 1 open; -1 cover signal bar 2.
         res = run_portfolio_simulation(
@@ -127,3 +178,16 @@ class TestShortEntryFeatureCapture:
         row = log.iloc[0]
         assert row["entry_RSI_14"] == pytest.approx(11.0)   # bar 0 signal, not bar 1 fill
         assert row["entry_Volume_Spike"] == pytest.approx(1.1)
+
+    def test_close_execution_short_captures_signal_equals_fill_bar(self, monkeypatch):
+        monkeypatch.setitem(ps.CONFIG, "execution_time", "close")
+        df = _feature_frame(_ROWS)
+        # -2 enter short on bar 1 -> fill bar 1 close; -1 cover signal bar 2.
+        res = run_portfolio_simulation(
+            portfolio_data={"TEST": df},
+            signals={"TEST": pd.Series([0, -2, -1, 0], index=df.index)},
+            initial_capital=100_000.0, allocation_pct=1.0,
+            spy_df=None, vix_df=None, tnx_df=None, stop_config={"type": "none"},
+        )
+        row = pd.DataFrame(res["trade_log"]).iloc[0]
+        assert row["entry_RSI_14"] == pytest.approx(22.0)   # bar 1 (signal == fill bar)

@@ -892,15 +892,25 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     _s_features['entry_ATR_14_pct'] = df.loc[sig_date, 'ATR_14_pct']
                     _s_features['entry_SMA200_dist_pct'] = df.loc[sig_date, 'SMA200_dist_pct']
                     _s_features['entry_Volume_Spike'] = df.loc[sig_date, 'Volume_Spike']
-                    if spy_df is not None:
-                        _s_features['entry_SPY_RSI_14'] = spy_df.loc[sig_date, 'RSI_14']
-                        _s_features['entry_SPY_SMA200_dist_pct'] = spy_df.loc[sig_date, 'SMA200_dist_pct']
-                    if vix_df is not None:
-                        _s_features['entry_VIX_Close'] = vix_df.loc[sig_date, 'Close']
-                    if tnx_df is not None:
-                        _s_features['entry_TNX_Close'] = tnx_df.loc[sig_date, 'Close']
                 except KeyError:
                     pass
+                # Per-frame guards (see the long-entry block, issue #310).
+                if spy_df is not None:
+                    try:
+                        _s_features['entry_SPY_RSI_14'] = spy_df.loc[sig_date, 'RSI_14']
+                        _s_features['entry_SPY_SMA200_dist_pct'] = spy_df.loc[sig_date, 'SMA200_dist_pct']
+                    except KeyError:
+                        pass
+                if vix_df is not None:
+                    try:
+                        _s_features['entry_VIX_Close'] = vix_df.loc[sig_date, 'Close']
+                    except KeyError:
+                        pass
+                if tnx_df is not None:
+                    try:
+                        _s_features['entry_TNX_Close'] = tnx_df.loc[sig_date, 'Close']
+                    except KeyError:
+                        pass
 
                 if inst_se.margin_mode == _inst.INITIAL_MARGIN:
                     # Futures short: integer contracts, reserve initial margin, pay commission.
@@ -1252,15 +1262,28 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         features['entry_ATR_14_pct'] = df.loc[signal_date, 'ATR_14_pct']
                         features['entry_SMA200_dist_pct'] = df.loc[signal_date, 'SMA200_dist_pct']
                         features['entry_Volume_Spike'] = df.loc[signal_date, 'Volume_Spike']
-                        if spy_df is not None:
-                            features['entry_SPY_RSI_14'] = spy_df.loc[signal_date, 'RSI_14']
-                            features['entry_SPY_SMA200_dist_pct'] = spy_df.loc[signal_date, 'SMA200_dist_pct']
-                        if vix_df is not None:
-                            features['entry_VIX_Close'] = vix_df.loc[signal_date, 'Close']
-                        if tnx_df is not None:
-                            features['entry_TNX_Close'] = tnx_df.loc[signal_date, 'Close']
                     except KeyError:
                         pass
+                    # Per-frame guards: a comparison frame that starts later than
+                    # the symbol (e.g. Polygon caps I:VIX/I:TNX at 2023-02-14) may
+                    # not contain signal_date at a boundary. Isolate each read so
+                    # a miss on one frame does not drop the others (issue #310).
+                    if spy_df is not None:
+                        try:
+                            features['entry_SPY_RSI_14'] = spy_df.loc[signal_date, 'RSI_14']
+                            features['entry_SPY_SMA200_dist_pct'] = spy_df.loc[signal_date, 'SMA200_dist_pct']
+                        except KeyError:
+                            pass
+                    if vix_df is not None:
+                        try:
+                            features['entry_VIX_Close'] = vix_df.loc[signal_date, 'Close']
+                        except KeyError:
+                            pass
+                    if tnx_df is not None:
+                        try:
+                            features['entry_TNX_Close'] = tnx_df.loc[signal_date, 'Close']
+                        except KeyError:
+                            pass
                     
                     # --- STRATEGIC DECISION: ATR TRAILING STOP CALCULATION METHOD ---
                     #
