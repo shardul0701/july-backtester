@@ -318,7 +318,11 @@ def generate_final_summary(all_results, benchmark_returns):
     mc_score_min = CONFIG.get("mc_score_min_to_show_in_summary", -999)
     min_pnl = CONFIG.get("min_pandl_to_show_in_summary", -999.0)
     min_calmar = CONFIG.get("min_calmar_to_show_in_summary", -999.0)
-    max_dd_filter = CONFIG.get("max_acceptable_drawdown", -9999.0)
+    # Default 1.0 (100% DD allowed = show all), matching the other three summary
+    # functions. max_drawdown is a positive magnitude, so the old -9999.0 default
+    # made `max_drawdown <= max_dd_filter` unsatisfiable and dropped every
+    # strategy whenever the key was absent from the config (issue #319).
+    max_dd_filter = CONFIG.get("max_acceptable_drawdown", 1.0)
     min_trades = CONFIG.get("min_trades_for_mc", 15)
 
     # Build filter mask
