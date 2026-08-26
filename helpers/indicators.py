@@ -978,12 +978,14 @@ def chaikin_money_flow_with_stop_loss_logic(df, length=20, buy_threshold=0.05, s
     # 1. Get the original, stateless signals from the base strategy
     df_base = chaikin_money_flow_logic(df.copy(), length, buy_threshold, sell_threshold)
     
-    # 2. Extract just the entry and exit events (ignore the ffill part)
-    # A buy event is a change from not 1 to 1.
-    # A sell event is a change from not -1 to -1.
-    base_signal = df_base['Signal'].diff().fillna(0)
-    entry_event = base_signal == 1
-    exit_event = base_signal == -2 # A change from 1 to -1 is a diff of -2
+    # 2. Extract entry/exit events as STATE TRANSITIONS of the base signal.
+    # df_base['Signal'] is the base strategy's already-ffilled state (…1,1,-1,-1,
+    # 1,1…). The old code used base_signal.diff()==1, which only caught the first
+    # 0->1: every re-entry is a -1->1 transition (diff 2), so all but the first
+    # trade were silently dropped (issue #316). Detect transitions instead.
+    base_signal = df_base['Signal']
+    entry_event = (base_signal == 1) & (base_signal.shift(1) != 1)   # into long
+    exit_event = (base_signal == -1) & (base_signal.shift(1) != -1)  # into flat/short
     
     # 3. Iteratively process signals to include the stop-loss
     events = pd.Series(0, index=df.index)
