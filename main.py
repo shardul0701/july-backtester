@@ -815,9 +815,11 @@ def main():
                 # --- FEATURE ENGINEERING ---
                 # These columns are captured at trade entry time for each
                 # position and stored in the trade log for later analysis.
-                # All calculations use .shift(1) where needed to ensure
-                # no look-ahead bias — indicators are based only on data
-                # available at the close of the previous bar.
+                # Each column reflects its own bar's close/volume; the engine
+                # captures them from the SIGNAL bar (the bar before the fill
+                # under execution_time="open"), so no look-ahead reaches the
+                # entry_* features — see the capture sites in
+                # helpers/portfolio_simulations.py (issue #310).
 
                 # RSI (14-period)
                 _delta = df['Close'].diff()
