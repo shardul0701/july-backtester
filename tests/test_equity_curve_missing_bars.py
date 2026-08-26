@@ -81,3 +81,25 @@ def test_long_nan_last_close_does_not_propagate_nan(monkeypatch):
     # Under the bug d3's equity became NaN and was dropped, silently shortening
     # the return series. The fix keeps d3 valued at the last non-NaN close.
     assert D3 in tl.index, "missing bar dropped from the equity curve (#320)"
+    # Value pin: d2 (present-but-NaN) and d3 (missing) are both valued at the
+    # last non-NaN close (d1=101), i.e. equal to the d1 equity — not 0 and not NaN.
+    assert tl.loc[D3] == pytest.approx(tl.loc[_ALL[1]])
+    assert tl.loc[_ALL[2]] == pytest.approx(tl.loc[_ALL[1]])
+
+
+def test_eob_mtm_logs_trade_when_holder_misses_the_last_date(monkeypatch):
+    _patch(monkeypatch)
+    # AAA (holds a long) has no bar on the union's last date d4; BBB supplies it.
+    # The end-of-backtest MTM must still log AAA's open trade (valued at its last
+    # known close), matching the equity curve — the old code skipped it.
+    aaa = _ohlc([_ALL[0], _ALL[1], _ALL[2], _ALL[3]], [100, 101, 102, 103])
+    bbb = _ohlc(list(_ALL), [50, 50, 50, 50, 50])
+    sa = pd.Series(0.0, index=aaa.index); sa.iloc[0] = 1.0
+    sb = pd.Series(0.0, index=bbb.index)
+    res = run_portfolio_simulation(
+        portfolio_data={"AAA": aaa, "BBB": bbb}, signals={"AAA": sa, "BBB": sb},
+        initial_capital=100_000.0, allocation_pct=0.5,
+        spy_df=None, vix_df=None, tnx_df=None, stop_config={"type": "none"})
+    trades = res["trade_log"] if res else []
+    assert any(t["Symbol"] == "AAA" and t["ExitReason"] == "End of Backtest"
+               for t in trades), "open trade not logged when holder misses the last bar (#320)"

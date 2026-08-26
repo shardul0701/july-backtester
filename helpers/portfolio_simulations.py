@@ -1657,9 +1657,12 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
     last_date = all_dates[-1]
     if positions and not exclude_open:
         for symbol, pos in list(positions.items()):
-            # Get the closing price on the very last day of the backtest
-            last_price = portfolio_data[symbol]['Close'].get(last_date)
-            if pd.notna(last_price):
+            # Value at the last-known non-NaN close (issue #320): if the symbol
+            # has no bar on the union's last_date, the daily loop still valued
+            # this position there, so the EoB trade must be logged to match the
+            # equity curve (otherwise headline P&L diverges from the trade log).
+            last_price = _mtm_close(portfolio_data[symbol], last_date)
+            if last_price is not None:
                 exit_date = last_date
                 exit_reason = "End of Backtest"
 
@@ -1691,8 +1694,8 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
     # trade, run returns None), even though the equity curve already carries its MTM.
     if short_positions and not exclude_open:
         for symbol, spos in list(short_positions.items()):
-            last_price = portfolio_data[symbol]['Close'].get(last_date)
-            if pd.isna(last_price):
+            last_price = _mtm_close(portfolio_data[symbol], last_date)  # last-known close (#320)
+            if last_price is None:
                 continue
             _s_inst = instruments[symbol]
             cover_slip = _inst.apply_slippage(_s_inst, last_price, "buy")
@@ -1745,13 +1748,13 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
             for dt in portfolio_timeline.index[mask]:
                 if pd.isna(portfolio_timeline.loc[dt]):
                     continue
-                # What the daily loop added for this symbol on this date.
-                if dt in sym_df.index:
-                    mtm_close = sym_df.loc[dt, 'Close']
-                else:
-                    prior_idx = sym_df.index[sym_df.index < dt]
-                    mtm_close = sym_df.loc[prior_idx[-1], 'Close'] if len(prior_idx) else np.nan
-                if pd.isna(mtm_close):
+                # What the daily loop added for this symbol on this date — must
+                # use the SAME valuation as the loop (issue #320), otherwise this
+                # correction skips exactly the missing/NaN bars the loop now
+                # values at the last non-NaN close, leaving phantom MTM in the
+                # post-delisting equity curve.
+                mtm_close = _mtm_close(sym_df, dt)
+                if mtm_close is None:
                     continue
                 # x point_value: the daily loop's contribution was $/point-scaled
                 # (unrealized_pnl for futures, market value with pv=1 for equities),
