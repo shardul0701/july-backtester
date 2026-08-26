@@ -373,6 +373,15 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
         nonlocal cash, reserved_margin, trade_counter
         inst_c = instruments[symbol]
         cover_slip = _inst.apply_slippage(inst_c, raw_cover_price, "buy")
+        # Cover-leg market impact (mirror of the strategy-cover path, #312 QA).
+        _cover_impact_bps = 0.0
+        _cov_coeff = CONFIG.get('volume_impact_coeff', 0.0)
+        if _cov_coeff > 0 and 'Volume' in portfolio_data[symbol].columns:
+            _cov_adv = _daily_adv(portfolio_data[symbol]['Volume'], exit_date, symbol)
+            if pd.notna(_cov_adv) and _cov_adv > 0:
+                _cov_imp = _cov_coeff * np.sqrt(spos['shares'] / _cov_adv)
+                cover_slip = cover_slip * (1 + _cov_imp)
+                _cover_impact_bps = round(_cov_imp * 10000, 1)
         commission = _inst.commission(inst_c, spos['shares'])
         _gross = (spos['shares'] * (spos['entry_price'] - cover_slip)) * inst_c.point_value
         net_pnl = _gross - (2 * commission) - spos.get('total_borrow_cost', 0.0)
@@ -401,7 +410,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
             'ExitReason': cover_reason,
             'InitialRisk': _s_ir if (_s_ir and _s_ir > 0) else 0.0,
             'RMultiple': _s_rm,
-            'VolumeImpact_bps': round(spos.get('entry_impact_bps', 0.0), 1),
+            'VolumeImpact_bps': round(spos.get('entry_impact_bps', 0.0) + _cover_impact_bps, 1),
         })
         trade_log[-1].update(spos.get('features', {}))
 
@@ -763,6 +772,18 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
 
             # --- EXECUTE COVER ---
             cover_slip = _inst.apply_slippage(inst_c, cover_raw, "buy")
+            # Market impact on the cover buy-back: fills HIGHER as size grows
+            # (mirror of the long exit, sign-flipped for a buy). Summed with the
+            # entry impact into VolumeImpact_bps so the short column is round-trip
+            # like the long trade's (#312 QA).
+            _cover_impact_bps = 0.0
+            _cov_coeff = CONFIG.get('volume_impact_coeff', 0.0)
+            if _cov_coeff > 0 and 'Volume' in portfolio_data[symbol].columns:
+                _cov_adv = _daily_adv(portfolio_data[symbol]['Volume'], date, symbol)
+                if pd.notna(_cov_adv) and _cov_adv > 0:
+                    _cov_imp = _cov_coeff * np.sqrt(spos['shares'] / _cov_adv)
+                    cover_slip = cover_slip * (1 + _cov_imp)
+                    _cover_impact_bps = round(_cov_imp * 10000, 1)
             commission = _inst.commission(inst_c, spos['shares'])
             _gross = (spos['shares'] * (spos['entry_price'] - cover_slip)) * inst_c.point_value
             net_pnl = _gross - (2 * commission) - spos.get('total_borrow_cost', 0.0)
@@ -792,7 +813,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                 'ExitReason': cover_reason,
                 'InitialRisk': _s_ir if (_s_ir and _s_ir > 0) else 0.0,
                 'RMultiple': _s_rm,
-                'VolumeImpact_bps': round(spos.get('entry_impact_bps', 0.0), 1),
+                'VolumeImpact_bps': round(spos.get('entry_impact_bps', 0.0) + _cover_impact_bps, 1),
             })
             trade_log[-1].update(spos.get('features', {}))
             short_exited.append(symbol)
@@ -870,14 +891,14 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         _pc = stop_config.get("point_cap")
                         if _pc is not None and _pc > 0:
                             _eff = min(_eff, _pc)
-                        # Anchor mirrors the long-side margin_mode gate: futures
-                        # (INITIAL_MARGIN) use the raw pre-slippage price; equities
-                        # (CASH_FULL) use the fill price. For equity shorts the fill
-                        # price equals ep (no slippage applied on that path), so the
-                        # gate is consistent even though the values coincide today.
-                        _s_trail_anchor = (
-                            ep if inst_se.margin_mode == _inst.INITIAL_MARGIN
-                            else ep)   # equity fill = ep (no short slippage on CASH_FULL path)
+                        # Anchor: both arms use the RAW pre-slippage `ep`. After
+                        # #312 the equity short fill is slipped below `ep`, so this
+                        # no longer matches the long-side #238 convention (equity
+                        # stops anchor to the slipped fill). Aligning the equity
+                        # short stop anchor to the fill is tracked as #332; kept raw
+                        # here to avoid re-baselining stop-bearing short scenarios in
+                        # this PR. Futures (INITIAL_MARGIN) correctly use raw `ep`.
+                        _s_trail_anchor = ep
                         _s_stop = _s_trail_anchor + _eff
                         _t1 = stop_config.get("t1_mult", 0.0)
                         if _sm > 0 and _t1 > 0:
@@ -982,13 +1003,19 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         continue
                     shares = alloc / _s_entry_fill
 
-                    # Portfolio heat gate (mirror of the long path). No known stop
-                    # distance on this path, so fall back to target_risk_per_trade
-                    # exactly like the long side does.
+                    # Portfolio heat gate (mirror of the long path). Fall back to
+                    # target_risk_per_trade for the stop-distance proxy like the
+                    # long fixed-sizing path. NOTE: like the long side, this uses
+                    # the pre-ADV-cap `shares` — the pre-clamp over-statement is
+                    # tracked for both sites as issue #317.
                     _s_stop_dist = CONFIG.get("target_risk_per_trade", 0.02)
                     _s_new_risk = _inst.notional(inst_se, shares, _s_entry_fill) * _s_stop_dist
                     _s_max_heat = CONFIG.get("max_portfolio_heat", 1.0)
-                    if not check_portfolio_heat(positions, _s_new_risk, total_equity, _s_max_heat):
+                    # Gate against BOTH open longs and open shorts, and register
+                    # this short's own risk below so subsequent entries see it —
+                    # otherwise a shorts-only book never accumulates heat (#312 QA).
+                    if not check_portfolio_heat({**positions, **short_positions},
+                                                _s_new_risk, total_equity, _s_max_heat):
                         continue
 
                     # ADV liquidity cap (mirror of the long path).
@@ -1026,6 +1053,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         'trail_anchor': _s_trail_anchor,
                         'trail_armed': False, 'initial_risk': _s_ir, 'features': _s_features,
                         'entry_impact_bps': _s_entry_impact_bps,
+                        'risk': _s_new_risk,  # registered for the portfolio-heat pot (#312 QA)
                     }
 
                 # --- ENTRY-BAR EVALUATION (opt-in, mirror of the long entry-bar check) ---
