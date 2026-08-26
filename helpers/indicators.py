@@ -1146,6 +1146,13 @@ def rsi_scalping_logic(df, rsi_length=14, oversold_level=20, overbought_level=80
     - Exit (Long): RSI crosses up past the 50 midline.
     - Entry (Short): RSI crosses down from above the overbought level.
     - Exit (Short): RSI crosses down past the 50 midline.
+
+    Emits engine-convention EVENT signals (1 / -1 / -2 / 0), not a held/ffilled
+    state. Consequently, after an *engine* stop-out the strategy does NOT
+    re-enter on the same episode: the internal state machine still considers the
+    position open and only re-arms after its own midline-cross exit fires. This
+    is intentional for a single-shot scalp (unlike the ffilled RSI strategies,
+    which re-enter while their held signal stays 1).
     """
     # 1. Calculate RSI
     df = calculate_rsi(df, length=rsi_length)
@@ -1158,36 +1165,38 @@ def rsi_scalping_logic(df, rsi_length=14, oversold_level=20, overbought_level=80
     sell_entry = (df[rsi_col].shift(1) > overbought_level) & (df[rsi_col] <= overbought_level)
     sell_exit = (df[rsi_col].shift(1) > 50) & (df[rsi_col] <= 50)
 
-    # 3. Generate stateful signal (this requires careful state management)
-    signals = pd.Series(0, index=df.index)
-    in_long = False
-    in_short = False
+    # 3. Emit engine-convention EVENT signals directly from a single-position
+    # state machine (issue #311). A symbol can only be long OR short OR flat at
+    # once, so we track one state and emit an event only on a transition:
+    #   long entry -> 1 ; long exit / short cover -> -1 ; short entry -> -2 ; 0 otherwise
+    #
+    # The previous implementation built a held-state series and then took
+    # .diff()/.replace()/.ffill() to recover events. That round-trip broke on
+    # short round-trips: a cover (state -1 -> 0) has diff +1, which the engine
+    # reads as "enter long", and the ffill made that phantom long persist. Short
+    # entries were also encoded as -1 (engine cover) instead of -2 (engine short
+    # entry), so they were inert. Emitting events directly avoids both faults.
+    signals = pd.Series(0, index=df.index, dtype=int)
+    state = 0  # 0 = flat, 1 = long, -1 = short
 
     for i in range(1, len(df)):
-        # Handle Long Position
-        if not in_long and buy_entry.iloc[i]:
-            in_long = True
-        elif in_long and buy_exit.iloc[i]:
-            in_long = False
-        
-        # Handle Short Position
-        if not in_short and sell_entry.iloc[i]:
-            in_short = True
-        elif in_short and sell_exit.iloc[i]:
-            in_short = False
-            
-        if in_long:
-            signals.iloc[i] = 1
-        elif in_short:
-            signals.iloc[i] = -1 # Note: Your backtester may only support long trades
-        else:
-            signals.iloc[i] = 0
-            
-    # Convert events to state and then back to entry/exit signals for the backtester
-    final_signal = signals.diff().fillna(0)
-    df['Signal'] = final_signal.replace(-2, -1).replace(2, 1) # Handle short signals if needed
-    df['Signal'] = df['Signal'].replace(0, np.nan).ffill().fillna(0)
+        if state == 1:
+            if buy_exit.iloc[i]:
+                state = 0
+                signals.iloc[i] = -1        # exit long
+        elif state == -1:
+            if sell_exit.iloc[i]:
+                state = 0
+                signals.iloc[i] = -1        # cover short
+        else:  # flat
+            if buy_entry.iloc[i]:
+                state = 1
+                signals.iloc[i] = 1         # enter long
+            elif sell_entry.iloc[i]:
+                state = -1
+                signals.iloc[i] = -2        # enter short
 
+    df['Signal'] = signals
     return df
 
 def ema_scalping_logic(df, fast_ema_period=5, slow_ema_period=15, trend_ema_period=50):
