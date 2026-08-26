@@ -499,3 +499,111 @@ class TestScaleInvariance:
         assert list(a.index) == list(b.index)
         ratio = (b / a).dropna()
         assert np.allclose(ratio.values, 10.0, rtol=1e-9)
+
+
+# ---------------------------------------------------------------------------
+# Regression: zombie position when a symbol's data ends mid-backtest (the
+# `_do_sell` carry-forward fallback added on top of the F1/F2 patch)
+# ---------------------------------------------------------------------------
+class TestDelistedSymbolLiquidation:
+    def test_delisted_symbol_liquidates_not_zombies(self):
+        # ENDS's data stops well before the backtest's terminal date; STAY
+        # spans the full window and only outranks ENDS once ENDS's history is
+        # exhausted. Regression for `_do_sell`'s carry-forward fallback: the
+        # unpatched code silently no-op'd (`return`) when `exec_date` had no
+        # bar for the symbol being sold (e.g. a delisting/provider dropout),
+        # which left the position in `positions` forever. With top_n=1 that
+        # permanently occupies the only slot, so the newly top-ranked name
+        # (STAY) could never actually be bought.
+        ends = _make_df(100 + np.arange(40, dtype=float))
+        stay = _make_df(100 + np.arange(120, dtype=float) * 0.1)
+        data = {"ENDS": ends, "STAY": stay}
+        ends_last = ends.index[-1]
+
+        def rank(data_, rebalance_date, **kwargs):
+            if rebalance_date <= ends_last:
+                return {"ENDS": 2.0}
+            return {"STAY": 2.0}
+
+        cfg = _base_config(top_n=1, rebalance_days=10, sell_buffer_rank=0,
+                            drift_trim_pct=99.0)
+        res = rotation.run_rotation(data, rank, cfg)
+        assert res is not None
+
+        ends_exits = [t for t in res["trade_log"] if t["Symbol"] == "ENDS"]
+        assert len(ends_exits) == 1
+        # Actively rank-dropped (via the carry-forward fallback), not left
+        # open until a forced End of Backtest close.
+        assert ends_exits[0]["ExitReason"] == "Rank Drop"
+
+        # The freed top_n=1 slot must actually go to STAY once ENDS is
+        # dropped -- the sharp regression check. Pre-fix, ENDS never leaves
+        # `positions`, so `slots` stays 0 forever and this trade never exists.
+        stay_entries = [t for t in res["trade_log"] if t["Symbol"] == "STAY"]
+        assert len(stay_entries) >= 1
+
+
+# ---------------------------------------------------------------------------
+# Regression: drift-add must not fire on the terminal bar (the `allow_new`
+# gate added to the drift-control loop's add branch on top of F2)
+# ---------------------------------------------------------------------------
+class TestTerminalBarAddIsBlocked:
+    """An under-weight holding must not receive a drift ADD on the terminal
+    rebalance -- that capital would be committed on the very last bar and
+    immediately unwound by the End of Backtest close, hiding a same-day
+    buy+sell inside what looks like a longer-duration trade."""
+
+    @staticmethod
+    def _decline_universe(n_days=41):
+        # Single-symbol universe on fixed_alloc weighting (50% of equity) so
+        # the other 50% sits idle as cash from the very first buy -- the
+        # drift-add is never cash-starved, isolating `allow_new` as the only
+        # thing that can block it.
+        decline = np.linspace(100.0, 50.0, n_days)
+        return {"A": _make_df(decline)}
+
+    @staticmethod
+    def _fixed_rank(data_, rebalance_date, **kwargs):
+        return {"A": 1.0}
+
+    def _config(self, rebalance_days):
+        # allocation_per_trade is a top-level config key (fixed_alloc weighting
+        # reads it from there), not a rotation sub-key -- set it after
+        # construction, same pattern as test_weights_never_exceed_one_with_fixed_alloc.
+        cfg = _base_config(top_n=1, rebalance_days=rebalance_days,
+                            weighting="fixed_alloc", drift_trim_pct=0.0)
+        cfg["allocation_per_trade"] = 0.5
+        return cfg
+
+    def test_add_blocked_when_exec_date_is_terminal(self):
+        data = self._decline_universe()
+        # rebalance_days=39 -> rebalance dates land on [day0, day39, day40]
+        # (41-day universe, terminal = day40). day39's exec_date is day40,
+        # the terminal bar itself, so its drift-add on A (declining,
+        # underweight by then) must be skipped.
+        res_terminal = rotation.run_rotation(data, self._fixed_rank, self._config(39))
+        assert res_terminal is not None
+
+        # rebalance_days=38 -> rebalance dates land on [day0, day38, day40].
+        # day38's exec_date is day39, NOT terminal, so the identical drift
+        # condition (A is underweight by day38 too) is allowed to add.
+        res_control = rotation.run_rotation(data, self._fixed_rank, self._config(38))
+        assert res_control is not None
+
+        def a_shares(res):
+            a_trades = [t for t in res["trade_log"] if t["Symbol"] == "A"]
+            return sum(t["Shares"] for t in a_trades)
+
+        # The control run's add actually fires (more capital committed to A
+        # one day before the terminal bar); the terminal run's identical
+        # drift signal must be blocked by `allow_new`, so it ends up having
+        # closed out strictly fewer A shares in total.
+        assert a_shares(res_terminal) < a_shares(res_control)
+
+        # And directly confirm no zero-duration same-day round trip was
+        # created on the terminal bar itself: no trade both entered and
+        # exited on the terminal date.
+        terminal_date = max(d for df in data.values() for d in df.index)
+        for t in res_terminal["trade_log"]:
+            assert not (pd.Timestamp(t["EntryDate"]) == terminal_date
+                        and pd.Timestamp(t["ExitDate"]) == terminal_date)
