@@ -24,6 +24,10 @@ def permissive_config(monkeypatch):
     monkeypatch.setitem(summary.CONFIG, "min_calmar_to_show_in_summary", -999.0)
     monkeypatch.setitem(summary.CONFIG, "min_trades_for_mc", 1)
     monkeypatch.setitem(summary.CONFIG, "verbose_output", False)
+    # Harden benchmark isolation so adding a benchmark to a test can't couple to
+    # config.py's min_performance_vs_spy/qqq.
+    monkeypatch.setitem(summary.CONFIG, "min_performance_vs_spy", -9999.0)
+    monkeypatch.setitem(summary.CONFIG, "min_performance_vs_qqq", -9999.0)
     monkeypatch.delitem(summary.CONFIG, "max_acceptable_drawdown", raising=False)
 
 
@@ -46,8 +50,45 @@ def test_default_dd_filter_does_not_reject_a_normal_strategy(permissive_config, 
 
 def test_explicit_dd_filter_still_rejects_over_threshold(permissive_config, monkeypatch, capsys):
     # The filter still works when configured: a 50% DD strategy is rejected by a
-    # 30% cap.
+    # 30% cap, and the printed hint names the DD threshold (the "no hint why"
+    # half of #319).
     monkeypatch.setitem(summary.CONFIG, "max_acceptable_drawdown", 0.30)
     summary.generate_final_summary([_result(max_dd=0.5)], benchmark_returns={})
     out = capsys.readouterr().out
     assert "No strategies met the final criteria" in out
+    assert "30%" in out  # the filter hint shows the DD threshold
+
+
+def test_dd_exactly_at_cap_passes(permissive_config, monkeypatch, capsys):
+    # Boundary: max_drawdown == cap must PASS (filter is <=, not <).
+    monkeypatch.setitem(summary.CONFIG, "max_acceptable_drawdown", 0.30)
+    summary.generate_final_summary([_result(max_dd=0.30)], benchmark_returns={})
+    out = capsys.readouterr().out
+    assert "No strategies met the final criteria" not in out
+    assert "MyStrat" in out
+
+
+def test_over_100pct_dd_dropped_under_default(permissive_config, capsys):
+    # Documents the current behavior: a blown (>100% DD, e.g. margined) strategy
+    # is dropped by the 1.0 default. Pins it either way (see PR discussion).
+    summary.generate_final_summary([_result(max_dd=1.2)], benchmark_returns={})
+    out = capsys.readouterr().out
+    assert "No strategies met the final criteria" in out
+
+
+@pytest.mark.parametrize("func_name,args", [
+    ("generate_final_summary", None),
+    ("generate_portfolio_summary_report", None),
+])
+def test_all_summary_functions_share_the_default(permissive_config, capsys, func_name, args):
+    # The key-absent scenario must not drop a normal strategy in any summary
+    # function — locks the shared _DEFAULT_MAX_ACCEPTABLE_DD convention.
+    func = getattr(summary, func_name)
+    func([_result(max_dd=0.2)], benchmark_returns={})
+    out = capsys.readouterr().out
+    assert "No strategies met the final criteria" not in out
+    assert "MyStrat" in out
+
+
+def test_default_constant_is_one():
+    assert summary._DEFAULT_MAX_ACCEPTABLE_DD == 1.0
