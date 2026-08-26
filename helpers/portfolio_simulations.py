@@ -576,6 +576,12 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     }
                     _plog.update(pos.get('features', {}))
                     trade_log.append(_plog)
+                    # Scale the position's registered heat risk down with the
+                    # remaining size (issue #317): a partial scale-out reduced the
+                    # shares, so its contribution to the portfolio-heat pot must
+                    # shrink proportionally or later entries are over-rejected.
+                    if pos['shares'] > 0 and 'risk' in pos:
+                        pos['risk'] *= (pos['shares'] - _pexit_shares) / pos['shares']
                     pos['shares'] -= _pexit_shares
 
             # --- MAINTENANCE MARGIN / MARGIN CALL (futures only) ---
@@ -1044,6 +1050,9 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         continue
                     commission = _inst.commission(inst_se, shares)
                     cash -= commission   # proceeds and collateral cancel; only commission is a real cash cost
+                    # Recompute registered heat risk from the FINAL post-ADV-cap
+                    # share count (#317), mirroring the long path.
+                    _s_new_risk = _inst.notional(inst_se, shares, _s_entry_fill) * _s_stop_dist
                     short_positions[symbol] = {
                         'entry_date': date, 'entry_price': _s_entry_fill, 'raw_entry_price': ep,
                         'shares': shares, 'notional': shares * _s_entry_fill, 'total_borrow_cost': 0.0,
@@ -1499,6 +1508,11 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                             if _stop_mult > 0 and _t1_mult > 0:
                                 _trail_target = _trail_anchor + _eff_stop_dist * (_t1_mult / _stop_mult)
 
+                    # Recompute risk from the FINAL post-clamp share count (#317):
+                    # new_position_risk was computed pre-ADV-cap / pre-round_units /
+                    # pre-affordability-clamp, so storing it overstated open risk and
+                    # made check_portfolio_heat over-reject later entries.
+                    _final_risk = _inst.notional(inst, shares, entry_price) * _stop_dist
                     positions[symbol] = {
                         'shares': shares, 'entry_price': entry_price,
                         'raw_entry_price': raw_entry_price,
@@ -1507,7 +1521,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         'initial_stop_loss_level': stop_loss_level,
                         'entry_impact_bps': entry_impact_bps,
                         'size_mult': _size_mult,
-                        'risk': new_position_risk,
+                        'risk': _final_risk,
                         'trail_armed': False,
                         'trail_target': _trail_target,
                         'atr_locked': _atr_locked,
