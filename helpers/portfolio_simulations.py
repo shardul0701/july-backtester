@@ -401,6 +401,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
             'ExitReason': cover_reason,
             'InitialRisk': _s_ir if (_s_ir and _s_ir > 0) else 0.0,
             'RMultiple': _s_rm,
+            'VolumeImpact_bps': round(spos.get('entry_impact_bps', 0.0), 1),
         })
         trade_log[-1].update(spos.get('features', {}))
 
@@ -791,6 +792,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                 'ExitReason': cover_reason,
                 'InitialRisk': _s_ir if (_s_ir and _s_ir > 0) else 0.0,
                 'RMultiple': _s_rm,
+                'VolumeImpact_bps': round(spos.get('entry_impact_bps', 0.0), 1),
             })
             trade_log[-1].update(spos.get('features', {}))
             short_exited.append(symbol)
@@ -965,20 +967,65 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         'trail_armed': False, 'initial_risk': _s_ir, 'features': _s_features,
                     }
                 else:
+                    # Equity cash_full short. Mirror the long entry's four cost
+                    # mechanics (issue #312), none of which the short path used
+                    # before — so every equity short was overstated by one side
+                    # of slippage, unbounded vs ADV, paid no market impact, and
+                    # ignored the portfolio-heat budget.
+                    #
+                    # `ep` stays the RAW anchor for the stop/target levels already
+                    # computed from it above; the slipped/impacted price is only
+                    # the realized fill used for notional / P&L accounting.
+                    _s_entry_fill = _inst.apply_slippage(inst_se, ep, "sell")
                     alloc = min(total_equity * allocation_pct, cash)
                     if alloc <= 0:
                         continue
-                    shares = alloc / ep
+                    shares = alloc / _s_entry_fill
+
+                    # Portfolio heat gate (mirror of the long path). No known stop
+                    # distance on this path, so fall back to target_risk_per_trade
+                    # exactly like the long side does.
+                    _s_stop_dist = CONFIG.get("target_risk_per_trade", 0.02)
+                    _s_new_risk = _inst.notional(inst_se, shares, _s_entry_fill) * _s_stop_dist
+                    _s_max_heat = CONFIG.get("max_portfolio_heat", 1.0)
+                    if not check_portfolio_heat(positions, _s_new_risk, total_equity, _s_max_heat):
+                        continue
+
+                    # ADV liquidity cap (mirror of the long path).
+                    _s_max_pct_adv = CONFIG.get('max_pct_adv') or 0
+                    if _s_max_pct_adv > 0 and 'Volume' in df.columns:
+                        _s_adv20 = _daily_adv(df['Volume'], date, symbol)
+                        if pd.notna(_s_adv20) and _s_adv20 > 0:
+                            _s_max_shares = _s_adv20 * _s_max_pct_adv
+                            if _s_max_shares <= 0:
+                                continue
+                            shares = min(shares, _s_max_shares)
+
+                    # Market impact: a short SALE fills LOWER as size grows
+                    # (mirror of the long buy, sign-flipped).
+                    _s_entry_impact_bps = 0.0
+                    _s_impact_coeff = CONFIG.get('volume_impact_coeff', 0.0)
+                    if _s_impact_coeff > 0 and 'Volume' in df.columns:
+                        _s_adv_imp = _daily_adv(df['Volume'], date, symbol)
+                        if pd.notna(_s_adv_imp) and _s_adv_imp > 0:
+                            _s_order_pct = shares / _s_adv_imp
+                            _s_impact_add = _s_impact_coeff * np.sqrt(_s_order_pct)
+                            _s_entry_fill = _s_entry_fill * (1 - _s_impact_add)
+                            _s_entry_impact_bps = round(_s_impact_add * 10000, 1)
+
+                    if shares <= 0:
+                        continue
                     commission = _inst.commission(inst_se, shares)
                     cash -= commission   # proceeds and collateral cancel; only commission is a real cash cost
                     short_positions[symbol] = {
-                        'entry_date': date, 'entry_price': ep,
-                        'shares': shares, 'notional': shares * ep, 'total_borrow_cost': 0.0,
+                        'entry_date': date, 'entry_price': _s_entry_fill, 'raw_entry_price': ep,
+                        'shares': shares, 'notional': shares * _s_entry_fill, 'total_borrow_cost': 0.0,
                         'margin': 0.0,
                         'stop_loss_level': _s_stop, 'initial_stop_loss_level': _s_stop,
                         'trail_target': _s_target, 'atr_locked': _s_atr,
                         'trail_anchor': _s_trail_anchor,
                         'trail_armed': False, 'initial_risk': _s_ir, 'features': _s_features,
+                        'entry_impact_bps': _s_entry_impact_bps,
                     }
 
                 # --- ENTRY-BAR EVALUATION (opt-in, mirror of the long entry-bar check) ---
@@ -1616,6 +1663,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                 'HoldDuration': _hold_duration_days(spos['entry_date'], last_date),
                 'MAE_pct': _s_mae, 'MFE_pct': _s_mfe, 'ExitReason': "End of Backtest",
                 'InitialRisk': _s_ir if (_s_ir and _s_ir > 0) else 0.0, 'RMultiple': _s_rm,
+                'VolumeImpact_bps': round(spos.get('entry_impact_bps', 0.0), 1),
             })
             trade_log[-1].update(spos.get('features', {}))
     # --- END: MARK-TO-MARKET LOGIC ---
