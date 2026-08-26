@@ -986,6 +986,10 @@ def chaikin_money_flow_with_stop_loss_logic(df, length=20, buy_threshold=0.05, s
     base_signal = df_base['Signal']
     entry_event = (base_signal == 1) & (base_signal.shift(1) != 1)   # into long
     exit_event = (base_signal == -1) & (base_signal.shift(1) != -1)  # into flat/short
+    # shift(1) is NaN at bar 0 (NaN != x is True), so guard bar 0 explicitly:
+    # correctness must not depend on the loop starting at i=1.
+    entry_event.iloc[0] = False
+    exit_event.iloc[0] = False
     
     # 3. Iteratively process signals to include the stop-loss
     events = pd.Series(0, index=df.index)
