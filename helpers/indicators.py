@@ -807,11 +807,21 @@ def weekday_overnight_logic(df):
     """
     Weekday overnight hold strategy.
 
-    Generates a stateful signal to be long Monday through Thursday nights
-    and flat on Friday nights (avoiding weekend risk). Uses the day-of-week
-    index to determine signal.
+    Long Monday through Thursday nights, flat Friday night (avoiding weekend
+    risk). Uses the day-of-week index to determine the signal.
 
-    Signal convention: 1 on Mon/Tue/Wed/Thu (hold overnight), -1 on Fri.
+    The day mapping is EXECUTION-AWARE (issue #314), because a signal on day N
+    fills at a different bar depending on ``execution_time``:
+
+    - ``close`` (fill same-day close): to hold across Monday's close the signal
+      must be ``1`` on Monday, and to be flat across Friday's close it must be
+      ``-1`` on Friday. Mapping: buy Mon–Thu, sell Fri.
+    - ``open`` (fill next trading day's open — the engine default): a Monday
+      ``1`` fills Tuesday's open and a Thursday ``1`` fills Friday's open (held
+      over the weekend) — the exact inverse of the intent. Shift the buy days one
+      trading day earlier — buy Fri/Mon/Tue/Wed (fills Mon–Thu opens) and sell
+      Thursday (fills Friday open) — so the position spans Monday open → Friday
+      open, i.e. Mon–Thu nights held, flat over the weekend.
 
     Parameters
     ----------
@@ -823,8 +833,13 @@ def weekday_overnight_logic(df):
     pd.DataFrame
         Input DataFrame with 'Signal' column added (1 or -1).
     """
+    from config import CONFIG
     df['weekday'] = df.index.dayofweek
-    buy_days = [0, 1, 2, 3] # Mon, Tue, Wed, Thu
+    if CONFIG.get("execution_time", "open").lower() == "open":
+        # Fri(4), Mon(0), Tue(1), Wed(2) -> fills Mon–Thu opens; Thu(3) sells.
+        buy_days = [4, 0, 1, 2]
+    else:
+        buy_days = [0, 1, 2, 3]  # Mon, Tue, Wed, Thu (close-execution fills same day)
     df['Signal'] = np.where(df['weekday'].isin(buy_days), 1, -1)
     return df
 
