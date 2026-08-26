@@ -105,6 +105,14 @@ CONFIG = {
     # ============================================================
     # {"type": "none"} | {"type": "percentage", "value": 0.05}
     # | {"type": "atr", "multiplier": 2.0}
+    # | {"type": "signal_bar", "buffer": 0.005, "bars_back": 0}
+    #     Structural stop at the SIGNAL bar's extreme rather than a distance from
+    #     entry: long stops under that bar's Low, short stops above its High.
+    #     "buffer" (fraction, default 0.0) pads the level away from the printed
+    #     extreme so noise doesn't graze it. Static — it does not trail.
+    #     "bars_back" (default 0) walks the anchor further back: 1 = the bar
+    #     BEFORE the trigger, for setups that defend the level preceding the
+    #     reversal bar rather than the reversal bar itself.
     "stop_loss_configs": [
         {"type": "none"},
     ],
@@ -322,11 +330,31 @@ CONFIG = {
         # "point_values": {"ES": 50.0, "NQ": 20.0},
         # "tick_sizes":   {"ES": 0.25, "NQ": 0.25},
 
+        # Per-symbol session length (issue #270). `trading_hours_per_day`
+        # (SECTION 26) is one process-wide number, so a book mixing equities
+        # (6.5h RTH) with 24h futures gets the wrong bars-per-day for one side
+        # of it -- which feeds the 20-day ADV window used by max_pct_adv and
+        # volume_impact_coeff. Two ways to fix a mixed book, both opt-in so
+        # existing runs are untouched:
+        #   1. per-symbol, via an override below:
+        #      {"asset_class": "future", "session_hours": 23}
+        #      (spell out asset_class -- see the override note below)
+        #   2. blanket, from each instrument's calendar (NYSE 6.5, CME_ETH 23):
+        # "session_hours_from_calendar": True,
+
         # Explicit per-symbol overrides. Each dict may set "asset_class" and any
-        # Instrument field (point_value, tick_size, initial_margin_pct, ...):
+        # Instrument field (point_value, tick_size, initial_margin_pct, ...).
+        #
+        # An override dict is authoritative for asset class: the contract-month
+        # auto-detection that would otherwise recognise "ESM6" as a future is
+        # only consulted when a symbol has NO override. So always spell out
+        # "asset_class": "future" when overriding a futures symbol -- omitting
+        # it silently resolves the symbol as a cash equity (point_value 1.0,
+        # cash_full margin, fractional units, borrow charged, NYSE calendar).
         # "overrides": {
         #     "NQ":  {"asset_class": "future", "point_value": 20.0, "tick_size": 0.25},
         #     "SI":  {"asset_class": "equity"},  # keep the Silvergate ticker as equity
+        #     "ESM6": {"asset_class": "future", "session_hours": 23},  # 23h CME session
         # },
         "overrides": {},
     },
@@ -359,4 +387,30 @@ CONFIG = {
         "insufficient_history", "review_no_patch", "identity_review", "flagged",
     ],
     "merged_min_avg_dollar_volume": 0.0,  # opt-in liquidity floor (0 = off)
+
+    # ============================================================
+    # SECTION 30: CROSS-SECTIONAL ROTATION (issue #294)
+    # ============================================================
+    # First-class rotation mechanism (helpers/rotation.py). A rotation strategy
+    # is "a ranking function + this config": the framework owns top-N selection,
+    # weighting, rebalance/trim/add mechanics and all cost/accounting (reusing
+    # helpers/instruments.py); the plugin supplies only the ranking (the alpha).
+    # DISABLED by default -> existing runs are completely unaffected.
+    "rotation": {
+        "enabled": False,          # master switch for the rotation capability
+        "rank_strategy": None,     # name of a @register_rotation plugin to run
+        "top_n": 5,                # number of names held at once
+        "rebalance_days": 21,      # forced rebalance interval (trading days)
+        "weighting": "equal",      # "equal" (1/top_n) | "fixed_alloc" (allocation_per_trade)
+        "sell_buffer_rank": 0,     # hysteresis: keep a holding while its rank
+                                   #   <= top_n + sell_buffer_rank (reduces churn)
+        "drift_trim_pct": 0.0,     # trim a position only when its weight drifts
+                                   #   more than this fraction above target (0 = always)
+    },
+
+    # Scale-invariant RELATIVE position cap (issue #293): the largest fraction of
+    # equity any single rotation position may hold. 1.0 = no binding cap. There is
+    # deliberately NO absolute-dollar cap default — a dollar cap is scale-dependent
+    # and silently changes behaviour when initial_capital changes.
+    "max_position_pct": 1.0,
 }

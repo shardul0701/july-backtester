@@ -51,6 +51,22 @@ SLIP_TICKS = "ticks"
 NYSE = "NYSE"
 CME_ETH = "CME_ETH"
 
+# Length of ONE trading session per calendar, in hours (issue #270).
+# NYSE regular hours are 09:30-16:00 ET. CME electronic trading runs
+# Sun 17:00 CT -> Fri 16:00 CT with a 60-minute daily maintenance break, so a
+# session is 23 hours, not 24.
+#
+# NOT applied by default -- see resolve_session_hours(). The engine's global
+# `trading_hours_per_day` stays authoritative unless a run opts in, because
+# silently switching a futures book from 6.5 to 23 would move every ADV and
+# annualised figure in it.
+CALENDAR_SESSION_HOURS: dict[str, float] = {
+    NYSE: 6.5,
+    CME_ETH: 23.0,
+}
+
+DEFAULT_SESSION_HOURS = 6.5
+
 # CME contract-month codes (Jan..Dec) — used to parse a root from e.g. "ESM6".
 _MONTH_CODES = "FGHJKMNQUVXZ"
 # Matches PRODUCT + MONTH_CODE + YEAR_DIGIT(s): "ESM6", "MNQZ26", "CLF7", "M2KZ6".
@@ -103,6 +119,8 @@ class Instrument:
     integer_units: bool = False         # True -> whole contracts
     borrow_applies: bool = True         # False for futures (no stock-loan fee)
     calendar: str = NYSE                # NYSE | CME_ETH
+    session_hours: float | None = None  # hours in one session; None -> resolve
+                                        # from config (see resolve_session_hours)
 
 
 # ---------------------------------------------------------------------------
@@ -168,6 +186,54 @@ def _futures_instrument(symbol: str, config: dict) -> Instrument:
         borrow_applies=False,
         calendar=CME_ETH,
     )
+
+
+def resolve_session_hours(symbol: str, config: dict) -> float:
+    """Hours in one trading session for *symbol* (issue #270).
+
+    ``trading_hours_per_day`` is a single process-wide number, but instruments
+    already resolve per symbol. A book mixing equities (6.5h RTH) with 24h
+    futures therefore gets the wrong session length for one side no matter
+    what the global is set to — which feeds straight into the 20-day ADV
+    window (issues #264/#268) and into annualisation.
+
+    Precedence, chosen so **no existing configuration changes behaviour**:
+
+      1. ``config["instruments"]["overrides"][symbol]["session_hours"]`` —
+         explicit per-symbol value, always wins.
+      2. ``config["instruments"]["session_hours_from_calendar"] is True`` —
+         opt-in: derive from the resolved instrument's calendar
+         (:data:`CALENDAR_SESSION_HOURS`). This is what makes a genuinely
+         mixed book correct.
+      3. ``config["trading_hours_per_day"]`` — the existing global.
+      4. :data:`DEFAULT_SESSION_HOURS` (6.5).
+
+    Steps 3 and 4 are exactly the pre-#270 behaviour, so a run that sets
+    neither an override nor the opt-in flag is unaffected.
+
+    Raises:
+        ValueError: If the resolved session length is not > 0.
+    """
+    inst_cfg = config.get("instruments", {}) or {}
+
+    instrument = resolve_instrument(symbol, config)
+    if instrument.session_hours is not None:
+        hours = float(instrument.session_hours)
+    elif inst_cfg.get("session_hours_from_calendar"):
+        hours = float(
+            CALENDAR_SESSION_HOURS.get(
+                instrument.calendar,
+                config.get("trading_hours_per_day", DEFAULT_SESSION_HOURS),
+            )
+        )
+    else:
+        hours = float(config.get("trading_hours_per_day", DEFAULT_SESSION_HOURS))
+
+    if hours <= 0:
+        raise ValueError(
+            f"session hours for '{symbol}' must be > 0, got {hours}"
+        )
+    return hours
 
 
 def is_futures_data_symbol(symbol: str, config: dict) -> bool:
@@ -334,3 +400,30 @@ def atr_stop_distance_pct(atr: float, multiplier: float, price: float) -> float:
     """ATR stop distance as a fraction of ``price`` — used by risk-parity sizing.
     Returns ``0.0`` when ``price <= 0``."""
     return (atr * multiplier) / price if price > 0 else 0.0
+
+
+def signal_bar_stop_level(bar_high: float, bar_low: float,
+                          buffer: float = 0.0, side: str = "long") -> float | None:
+    """Stop placed at the *signal bar's* extreme, optionally padded by ``buffer``.
+
+    This is a structural stop: rather than measuring a distance from the entry fill
+    (``percentage``/``points``) or from volatility (``atr``), it anchors to a level the
+    market actually printed on the bar that produced the signal.
+
+    - long  -> ``bar_low  * (1 - buffer)``   (stop under the signal bar's low)
+    - short -> ``bar_high * (1 + buffer)``   (stop above the signal bar's high)
+
+    ``buffer`` is a fraction (``0.005`` = 0.5%) and exists because a stop sitting
+    exactly on the printed extreme is grazed by noise; padding it is the difference
+    between testing the idea and testing the tick.
+
+    Returns ``None`` when the required extreme is missing or non-positive, which the
+    engine treats the same as "no stop for this trade".
+    """
+    extreme = bar_low if side == "long" else bar_high
+    # NaN fails `> 0`, so this one guard covers missing, zero, negative and NaN
+    # without pulling pandas into this module.
+    if extreme is None or not (extreme > 0):
+        return None
+    sign = -1.0 if side == "long" else 1.0
+    return float(extreme * (1.0 + sign * buffer))

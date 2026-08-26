@@ -150,6 +150,23 @@ def _prearm_decision(high, low, stop_level, target, window_bars, side="long"):
     return ("hold", None)
 
 
+def _walk_back(prev_dates, date, n):
+    """Step ``n`` trading bars back from ``date`` using a prev-date mapping.
+
+    ``n=0`` returns ``date`` unchanged. Returns ``pd.NaT`` if the chain runs off the
+    start of the series, which callers treat as "no stop for this trade". A negative
+    ``n`` is clamped to ``0`` (there is no "forward" walk — anchoring past the signal
+    bar would be look-ahead), so a stray negative ``bars_back`` anchors to the signal
+    bar rather than silently doing something else.
+    """
+    n = max(0, int(n or 0))
+    for _ in range(n):
+        if pd.isna(date):
+            return pd.NaT
+        date = prev_dates.get(date, pd.NaT)
+    return date
+
+
 def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocation_pct, spy_df, vix_df, tnx_df, stop_config, size_mults=None, delisting_dates=None, intrabar_data=None):
     """
     Runs a portfolio simulation with integrated stop-loss handling and logs
@@ -162,7 +179,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
         {symbol: "YYYY-MM-DD"} mapping of delisting dates from helpers/survivorship.py.
         When provided, open positions are force-closed on delisting.
     """
-    from helpers.timeframe_utils import get_bars_per_year, get_bars_per_day
+    from helpers.timeframe_utils import get_bars_per_year, get_bars_per_day_exact
 
     execution_time = CONFIG.get("execution_time", "open").lower()
     htb_rate_annual = CONFIG.get("htb_rate_annual", 0.0)
@@ -180,19 +197,95 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
     # session (H/MIN timeframes) -- e.g. on 5-minute bars it averages ~100
     # minutes of volume and calls that "daily" volume, silently miscalibrating
     # both the max_pct_adv liquidity cap and the volume-impact market-impact
-    # model. get_bars_per_day() (unlike get_bars_for_period, which ignores
-    # `timeframe_multiplier` in its H-timeframe branch) correctly resolves how
-    # many bars make up one session, so the window spans ~20 real trading
-    # days and the per-bar mean is rescaled back up into a genuine
-    # daily-volume figure. For D/W/M timeframes bars_per_day == 1, so this is
-    # a byte-for-byte no-op (protects the equity golden master).
-    _adv_bars_per_day = get_bars_per_day(CONFIG)
-    _adv_window_bars = 20 * _adv_bars_per_day
+    # model. get_bars_per_day_exact() (unlike get_bars_for_period, which
+    # ignores `timeframe_multiplier` in its H-timeframe branch) correctly
+    # resolves how many bars make up one session, so the window spans ~20 real
+    # trading days and the per-bar mean is rescaled back up into a genuine
+    # daily-volume figure. The correctness identity is
+    #
+    #     mean(20*bpd bars) * bpd == sum(window)/(20*bpd) * bpd == sum(window)/20
+    #
+    # i.e. total volume over the window / 20 days -- but that only holds while
+    # the window actually spans 20 days. Hence the EXACT (float) bars-per-day
+    # here rather than the truncated bar count (issue #268): int() truncation
+    # cost 1H/2H 7.7% and 4H 38.5% of their true ADV, leaving #264 closed only
+    # for D/W/M and MIN 5/15/30. For D/W/M bars_per_day == 1.0 exactly, so the
+    # window is 20 and the rescale is x1.0 -- a byte-for-byte no-op that
+    # protects the equity golden master.
+    # Resolved PER SYMBOL (issue #270): `trading_hours_per_day` is one
+    # process-wide number, but instruments already resolve per symbol, so a
+    # book mixing equities (6.5h RTH) with 24h futures gets the wrong
+    # bars-per-day for one side of it whatever the global says. Defaults are
+    # unchanged -- resolve_session_hours() falls back to the global unless a
+    # run sets a per-symbol override or opts into calendar-derived hours --
+    # so this is a no-op for every existing config.
+    _adv_params_cache: dict = {}
 
-    def _daily_adv(volume_series, at_date):
+    def _adv_params(symbol):
+        """(window_bars, bars_per_day) for *symbol*, computed once."""
+        params = _adv_params_cache.get(symbol)
+        if params is None:
+            # Passed as a CALLABLE so per-symbol resolution happens only on
+            # intraday timeframes. A D/W/M run never reads a session length,
+            # and must not start failing on a bad `trading_hours_per_day` it
+            # would otherwise have ignored.
+            bars_per_day = get_bars_per_day_exact(
+                CONFIG,
+                session_hours=lambda: _inst.resolve_session_hours(symbol, CONFIG),
+            )
+            params = _adv_params_cache[symbol] = (
+                max(1, round(20 * bars_per_day)),
+                bars_per_day,
+            )
+        return params
+
+    # Per-symbol memo for the rolling ADV series (issue #269). Each call used
+    # to recompute .rolling().mean() across the WHOLE series and then keep a
+    # single value; with four call sites (and two of them on the same entry
+    # bar) that is a lot of repeated work. Cost is driven by series length
+    # rather than window width -- measured at ~0.6ms per call on 2 years of
+    # 5-minute bars (39k rows) vs ~0.09ms on daily -- so it is intraday runs
+    # that pay, roughly a minute of pure re-computation on a 100-symbol book.
+    #
+    # Scoped to this closure ON PURPOSE, not module level: workers process
+    # many strategies/portfolios in one process, and a module-level cache
+    # would serve one portfolio's volume series to the next.
+    #
+    # Deliberately unbounded. It trades memory for time at roughly one
+    # float64 series per traded symbol -- on a 500-name book of 5-minute
+    # bars over 2 years that is ~314KB x 500 = ~157MB, against the ~790MB of
+    # OHLCV the same run already holds resident, so ~20% on top of data that
+    # must be in memory anyway. Only symbols that actually reach an ADV
+    # lookup are cached, and the whole dict is released when the simulation
+    # returns. An LRU bound would reintroduce exactly the recomputation this
+    # exists to remove, so size it down only if a real run shows pressure.
+    _adv_cache: dict = {}
+
+    # min_periods stays 1 DELIBERATELY (issue #269). Raising it to one full
+    # session so the early estimate has a day behind it looks like an
+    # improvement but is a regression: both consumers guard with
+    # `if pd.notna(adv) and adv > 0`, so a NaN does not produce a cautious
+    # cap -- it skips the cap block entirely. Raising min_periods would
+    # therefore leave the first session of every intraday backtest with NO
+    # liquidity cap and NO market impact at all, which is strictly worse than
+    # the noisy-but-unbiased estimate min_periods=1 gives (one bar's volume
+    # rescaled by bars-per-day is a fair guess at the day's volume, just a
+    # high-variance one). Revisit only alongside a decision about what a
+    # missing ADV should mean -- see the discussion on #269.
+    def _daily_adv(volume_series, at_date, symbol):
         """Trailing ~20-trading-day average DAILY volume as of `at_date`."""
-        per_bar_avg = volume_series.rolling(window=_adv_window_bars, min_periods=1).mean().get(at_date, np.nan)
-        return per_bar_avg * _adv_bars_per_day if pd.notna(per_bar_avg) else np.nan
+        adv_series = _adv_cache.get(symbol)
+        if adv_series is None:
+            window_bars, bars_per_day = _adv_params(symbol)
+            adv_series = _adv_cache[symbol] = (
+                volume_series.rolling(
+                    window=window_bars, min_periods=1
+                ).mean()
+                * bars_per_day
+            )
+        # NaN propagates through the multiply, so a missing/NaN bar still
+        # yields NaN here exactly as the per-call version did.
+        return adv_series.get(at_date, np.nan)
 
     short_positions: dict = {}
 
@@ -235,7 +328,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
         exit_impact_bps = 0.0
         _coeff = CONFIG.get('volume_impact_coeff', 0.0)
         if _coeff > 0 and 'Volume' in portfolio_data[symbol].columns:
-            _adv = _daily_adv(portfolio_data[symbol]['Volume'], exit_date)
+            _adv = _daily_adv(portfolio_data[symbol]['Volume'], exit_date, symbol)
             if pd.notna(_adv) and _adv > 0:
                 _impact = _coeff * np.sqrt(pos['shares'] / _adv)
                 exit_price = exit_price * (1 - _impact)
@@ -523,7 +616,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
             exit_impact_bps = 0.0
             _exit_impact_coeff = CONFIG.get('volume_impact_coeff', 0.0)
             if _exit_impact_coeff > 0 and 'Volume' in portfolio_data[symbol].columns:
-                _adv_exit = _daily_adv(portfolio_data[symbol]['Volume'], date)
+                _adv_exit = _daily_adv(portfolio_data[symbol]['Volume'], date, symbol)
                 if pd.notna(_adv_exit) and _adv_exit > 0:
                     _order_pct = pos['shares'] / _adv_exit
                     _impact = _exit_impact_coeff * np.sqrt(_order_pct)
@@ -749,6 +842,22 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         if pd.notna(_ab) and pd.notna(_cb):
                             _s_stop = _inst.atr_stop_level(_cb, _ab, stop_config.get("multiplier", 3.0),
                                                            side="short", point_cap=stop_config.get("point_cap"))
+                elif _sc_type == 'signal_bar':
+                    # Mirror of the long-side branch: stop ABOVE the signal bar's high.
+                    # `sig_date` is already the true signal bar for both execution_time modes.
+                    _sb_date = _walk_back(prev_trading_dates[symbol], sig_date,
+                                          stop_config.get("bars_back", 0))
+                    if pd.notna(_sb_date) and _sb_date in df.index:
+                        _sb = df.loc[_sb_date]
+                        _lvl = _inst.signal_bar_stop_level(
+                            _sb.get('High'), _sb.get('Low'),
+                            stop_config.get("buffer", 0.0), side="short")
+                        # Protective-side guard (mirror of the long branch): only arm the
+                        # stop if it sits ABOVE the short fill `ep`. A next-open that gaps
+                        # UP through the signal-bar high leaves the level below entry — not
+                        # a stop; unguarded it covers next bar in the trade's FAVOR.
+                        if _lvl is not None and _lvl > ep:
+                            _s_stop = _lvl
                 elif _sc_type == 'trailing_atr':
                     _dbe = prev_trading_dates[symbol].get(date)
                     _ab = df.loc[_dbe].get('ATR_14') if (pd.notna(_dbe) and _dbe in df.index) else np.nan
@@ -1079,7 +1188,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                 # --- VOLUME-BASED LIQUIDITY FILTER ---
                 max_pct_adv = CONFIG.get('max_pct_adv') or 0
                 if max_pct_adv > 0 and 'Volume' in df.columns:
-                    adv_20 = _daily_adv(df['Volume'], entry_exec_date)
+                    adv_20 = _daily_adv(df['Volume'], entry_exec_date, symbol)
                     if pd.notna(adv_20) and adv_20 > 0:
                         max_shares_allowed = adv_20 * max_pct_adv
                         if max_shares_allowed <= 0:
@@ -1090,7 +1199,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                 entry_impact_bps = 0.0
                 impact_coeff = CONFIG.get('volume_impact_coeff', 0.0)
                 if impact_coeff > 0 and 'Volume' in df.columns:
-                    adv_20_impact = _daily_adv(df['Volume'], entry_exec_date)
+                    adv_20_impact = _daily_adv(df['Volume'], entry_exec_date, symbol)
                     if pd.notna(adv_20_impact) and adv_20_impact > 0:
                         order_pct_of_adv = shares / adv_20_impact
                         impact_additional = impact_coeff * np.sqrt(order_pct_of_adv)
@@ -1215,6 +1324,35 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                                     close_before_entry, atr_before_entry,
                                     stop_config.get("multiplier", 3.0), side="long",
                                     point_cap=stop_config.get("point_cap"))
+
+                    elif _stype == 'signal_bar':
+                        # Structural stop anchored to the SIGNAL bar's low, not to the entry
+                        # price. `signal_date` is the bar that produced the signal — the bar
+                        # before the fill under execution_time="open", the fill bar itself
+                        # under "close". Either way the level is known at entry, so there is
+                        # no look-ahead; unlike the 'atr' branch this reads the signal bar
+                        # directly instead of assuming the open-fill offset.
+                        #
+                        # bars_back>0 walks the anchor further back: "stop beyond the bar
+                        # BEFORE the trigger" is how a lot of setups are actually specified
+                        # (the trigger bar is the reversal; the level to defend is the last
+                        # bar of the move that preceded it).
+                        _sb_date = _walk_back(prev_trading_dates[symbol], signal_date,
+                                              stop_config.get("bars_back", 0))
+                        if pd.notna(_sb_date) and _sb_date in df.index:
+                            _sb = df.loc[_sb_date]
+                            _lvl = _inst.signal_bar_stop_level(
+                                _sb.get('High'), _sb.get('Low'),
+                                stop_config.get("buffer", 0.0), side="long")
+                            # Protective-side guard: only arm the stop if it sits BELOW the
+                            # actual long fill. Under execution_time="open" the fill is the
+                            # next bar's open, which can gap DOWN through the signal-bar low;
+                            # a structural level above entry is not a stop at all — left
+                            # unguarded it fires next bar and fills at the phantom level
+                            # (in the trade's FAVOR), booking a spurious "Stop Loss" profit
+                            # and a 1%-proxy InitialRisk. Fall through to no stop instead.
+                            if _lvl is not None and _lvl < entry_price:
+                                stop_loss_level = _lvl
 
                     elif _stype == 'trailing_atr':
                         # Sleeve A mechanic. Lock ATR at the breakout (signal) bar and keep it
