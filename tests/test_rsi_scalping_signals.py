@@ -82,3 +82,58 @@ class TestRsiScalpingSignals:
         out = ind.rsi_scalping_logic(df)
         assert len(out["Signal"]) == len(df)
         assert "Signal" in out.columns
+
+    def test_signal_value_domain_is_engine_convention(self, patched_rsi):
+        sig = set(ind.rsi_scalping_logic(_price_df())["Signal"].tolist())
+        # Guards against any future refactor reintroducing diff-style artifacts
+        # (±2 longs, fractional values the engine would read as scale-outs).
+        assert sig <= {1, 0, -1, -2}
+
+
+class TestRsiScalpingEdgeCases:
+    def _run(self, rsi, monkeypatch):
+        def _fake(df, length=14):
+            df = df.copy(); df[f"RSI_{length}"] = np.array(rsi, float); return df
+        monkeypatch.setattr(ind, "calculate_rsi", _fake)
+        idx = pd.date_range("2024-01-02 09:30", periods=len(rsi), freq="1min")
+        close = np.linspace(100, 101, len(rsi))
+        df = pd.DataFrame({"Open": close, "High": close, "Low": close,
+                           "Close": close, "Volume": 1000.0}, index=idx)
+        return ind.rsi_scalping_logic(df)["Signal"].tolist()
+
+    def test_long_open_at_series_end_has_no_trailing_exit(self, monkeypatch):
+        # enters long at bar2, RSI stays below 50 -> never exits.
+        sig = self._run([25, 15, 25, 30, 35, 40], monkeypatch)
+        assert sig == [0, 0, 1, 0, 0, 0]
+
+    def test_duplicate_buy_entry_suppressed_while_long(self, monkeypatch):
+        # RSI dips below 20 and re-crosses up twice, but never crosses 50.
+        # Only the first crossing may enter; the second is suppressed.
+        sig = self._run([25, 15, 25, 15, 25, 30], monkeypatch)
+        assert sig.count(1) == 1
+        assert sig[2] == 1
+
+    def test_no_trades_all_zeros(self, monkeypatch):
+        sig = self._run([45, 46, 47, 48, 49, 50], monkeypatch)
+        assert sig == [0, 0, 0, 0, 0, 0]
+
+
+class TestRsiScalpingEngineIntegration:
+    """The emitted signals must actually execute in the engine: a short entry
+    (-2) opens a short and the cover (-1) closes it."""
+
+    def test_short_round_trip_executes_in_engine(self, patched_rsi):
+        from helpers.portfolio_simulations import run_portfolio_simulation
+        df = _price_df()
+        sig = ind.rsi_scalping_logic(df)["Signal"]
+        res = run_portfolio_simulation(
+            portfolio_data={"TEST": df.assign(ATR_14=1.0)},
+            signals={"TEST": sig},
+            initial_capital=100_000.0, allocation_pct=0.5,
+            spy_df=None, vix_df=None, tnx_df=None, stop_config={"type": "none"},
+        )
+        log = pd.DataFrame(res["trade_log"])
+        reasons = set(log["ExitReason"])
+        # The overbought-fade short (bar6 -> cover bar8) must appear as a real
+        # short trade — under the old phantom-long bug it never did.
+        assert "Short Cover" in reasons, f"no short executed: {log.to_dict('records')}"

@@ -1146,6 +1146,13 @@ def rsi_scalping_logic(df, rsi_length=14, oversold_level=20, overbought_level=80
     - Exit (Long): RSI crosses up past the 50 midline.
     - Entry (Short): RSI crosses down from above the overbought level.
     - Exit (Short): RSI crosses down past the 50 midline.
+
+    Emits engine-convention EVENT signals (1 / -1 / -2 / 0), not a held/ffilled
+    state. Consequently, after an *engine* stop-out the strategy does NOT
+    re-enter on the same episode: the internal state machine still considers the
+    position open and only re-arms after its own midline-cross exit fires. This
+    is intentional for a single-shot scalp (unlike the ffilled RSI strategies,
+    which re-enter while their held signal stays 1).
     """
     # 1. Calculate RSI
     df = calculate_rsi(df, length=rsi_length)
