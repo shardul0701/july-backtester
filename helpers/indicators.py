@@ -807,11 +807,28 @@ def weekday_overnight_logic(df):
     """
     Weekday overnight hold strategy.
 
-    Generates a stateful signal to be long Monday through Thursday nights
-    and flat on Friday nights (avoiding weekend risk). Uses the day-of-week
-    index to determine signal.
+    Long Monday through Thursday nights, flat Friday night (avoiding weekend
+    risk). Uses the day-of-week index to determine the signal.
 
-    Signal convention: 1 on Mon/Tue/Wed/Thu (hold overnight), -1 on Fri.
+    The exit is derived from the actual CALENDAR GAPS in the index rather than
+    from a fixed Friday-is-day-4 assumption (issue #314), so it stays flat across
+    weekends AND exchange holidays (Good Friday, Thanksgiving, …). A "gap" is any
+    interval > 2 calendar days between consecutive bars.
+
+    It is also EXECUTION-AWARE, because a signal on session S fills at a different
+    bar depending on ``execution_time``:
+
+    - ``close`` (fill same-day close): to be flat across the gap that follows the
+      last session before it, emit ``-1`` on that last pre-gap session (it exits
+      at its own close). Hold (``1``) otherwise.
+    - ``open`` (fill next session's open — the engine default): a signal fills one
+      session later, so the exit must be emitted one session earlier — ``-1`` on
+      the session whose *fill bar* is the last one before a gap, so the exit fills
+      at that pre-gap session's open and the position is flat across the gap.
+
+    Either way the position holds every weeknight overnight and is flat across
+    every weekend/holiday gap. The final bar(s) with no future bar to hold into
+    are flattened (you cannot manage a position past the end of the data).
 
     Parameters
     ----------
@@ -823,9 +840,19 @@ def weekday_overnight_logic(df):
     pd.DataFrame
         Input DataFrame with 'Signal' column added (1 or -1).
     """
-    df['weekday'] = df.index.dayofweek
-    buy_days = [0, 1, 2, 3] # Mon, Tue, Wed, Thu
-    df['Signal'] = np.where(df['weekday'].isin(buy_days), 1, -1)
+    from config import CONFIG
+    _WEEKEND_GAP = 2  # > 2 calendar days between sessions = a weekend/holiday gap
+    # gap_after[i] = calendar days from bar i to bar i+1 (last bar -> NaN)
+    gap_after = df.index.to_series().diff().shift(-1).dt.days
+    if CONFIG.get("execution_time", "open").lower() == "open":
+        # Exit on bar i when its FILL bar (i+1) is the last before a gap, i.e.
+        # the gap AFTER the fill bar exceeds the threshold (or runs off the end).
+        gap_after_fill = gap_after.shift(-1)
+        is_exit = gap_after_fill.isna() | (gap_after_fill > _WEEKEND_GAP)
+    else:
+        # Close fills same-session: exit on the last session before the gap.
+        is_exit = gap_after.isna() | (gap_after > _WEEKEND_GAP)
+    df['Signal'] = np.where(is_exit.to_numpy(), -1, 1)
     return df
 
 def atr_trailing_stop_logic(df, atr_period=14, atr_multiplier=3.0):
