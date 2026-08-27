@@ -33,6 +33,17 @@ KNOWN_KEYS: set[str] = {
     "data_provider",
     "polygon_api_secret_name",  # PR #187: added — was triggering "unknown key" warning
     "csv_data_dir",
+    # --- Rule-based point-in-time universe (zachisit/july-backtester-private-strategies#70) ---
+    "universe_min_price",
+    "universe_min_dollar_volume",
+    "universe_min_bars",
+    "universe_top_n",
+    "universe_adv_window",
+    "universe_exclude_prefixes",
+    "universe_exclude_symbols",
+    "universe_exclude_etfs",
+    "universe_rebase",        # "annual" (default) | "quarterly" | "monthly" | "none"
+    "universe_span_cache",
     "parquet_data_dir",
     "merged_data_root",
     # SECTION 2: Backtest Period & Capital
@@ -195,6 +206,24 @@ def validate_config(config: dict) -> list[str]:
             options = "', '".join(sorted(valid))
             msg = (f"WARNING: smoothness_profile '{sp}' is not a known profile "
                    f"(expected one of '{options}') -- will fall back to the equity profile")
+            warnings.append(msg)
+            logger.warning(msg)
+
+    # Value-level check for universe_rebase. Registering the key in KNOWN_KEYS
+    # without its DOMAIN left a gap: a plausible typo like "yearly" passes
+    # validation, then raises ValueError inside build_rule_schedule, which
+    # main.py's `except Exception: continue` turns into one ERROR line and a
+    # SILENTLY DROPPED PORTFOLIO. Catching it here fails at startup instead,
+    # where it is attributable. Same precedent as smoothness_profile above.
+    ur = config.get("universe_rebase")
+    if ur is not None:
+        from helpers.rule_based_universe import REBASE_FREQUENCIES
+        valid_ur = {"none", *REBASE_FREQUENCIES.keys()}
+        if str(ur).lower() not in valid_ur:
+            options = "', '".join(sorted(valid_ur))
+            msg = (f"WARNING: universe_rebase '{ur}' is not a known frequency "
+                   f"(expected one of '{options}') -- any rule: portfolio will "
+                   f"be DROPPED at run time with a single ERROR line")
             warnings.append(msg)
             logger.warning(msg)
 
