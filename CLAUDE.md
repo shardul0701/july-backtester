@@ -2,6 +2,8 @@
 
 > **RTK RULE — NON-NEGOTIABLE**: Every terminal command MUST be prefixed with `rtk`. No exceptions. This includes `rtk git`, `rtk grep`, `rtk pytest`, `rtk ls`, `rtk read`, etc. Bare `grep`, `git`, `pytest`, `find` etc. are FORBIDDEN in this project.
 
+> **GH POSTING RULE — NON-NEGOTIABLE**: Never pass comment/issue/review text as a shell argument. Use `python3 scripts/gh_post.py` for every GitHub comment, review, issue creation, and issue-body edit. `gh issue comment --body "..."` and `gh api -f body=@file` are FORBIDDEN — both have silently destroyed real comments in this project. See [Posting to GitHub](#posting-to-github).
+
 ## What This Is
 Python backtesting engine for US equities. Tests 20+ technical strategies across single symbols or large portfolios (Nasdaq, S&P 500, etc.) with Monte Carlo robustness scoring.
 
@@ -50,7 +52,46 @@ tickers_to_scan/                   # JSON ticker lists (nasdaq_100.json, sp-500.
 scripts/                           # One-off diagnostic and utility scripts (NOT part of the pipeline)
 scripts/debug_data.py              # Compares Polygon vs Yahoo SPY data; run with: python scripts/debug_data.py
 scripts/build_research_index.py    # Consolidates all output/runs/ summaries + llm_verdict.json into output/research_index.csv
+scripts/gh_post.py                 # REQUIRED for all GitHub comments/reviews/issues — posts then verifies content landed intact (see "Posting to GitHub")
 ```
+
+## Posting to GitHub
+
+**Always:**
+
+```bash
+python3 scripts/gh_post.py comment   --repo O/R --number 302 --file reply.md
+python3 scripts/gh_post.py review    --repo O/R --number 302 --file r.md [--event APPROVE]
+python3 scripts/gh_post.py create    --repo O/R --title "..." --file body.md [--label backlog]
+python3 scripts/gh_post.py edit-body --repo O/R --number 109 --file body.md
+```
+
+> **Portability:** the script is **stdlib-only** and has **no `rtk` dependency** — it runs under any Python 3 with no venv and no pip install, so remote contributors are not blocked. Its only external requirement is the GitHub CLI (`gh`), and if that is missing or unauthenticated it says so with install/login instructions rather than a traceback. If you work on this machine, prefix `rtk` per the RTK rule above; everyone else runs it as written.
+
+Write the body to a file first (the scratchpad is fine), then pass `--file`.
+
+| Exit | Meaning | What to do |
+|---|---|---|
+| `0` | posted **and** verified byte-for-byte | nothing |
+| `1` | **nothing was posted** (bad usage, `gh` missing/unauthenticated, API rejected it) | fix and re-run |
+| `2` | **posted, but not confirmed intact** — content mismatched, *or* it landed and the read-back failed | open the printed URL and check. **Do not just re-run** — it posted |
+
+The `2` case covers "posted but unverifiable", not only "mangled". Re-running on a `2` is how you get a duplicate comment on top of the one already live.
+
+`--file` is required except for `review --event APPROVE`, where a bodyless approve is allowed (there is nothing to verify).
+
+**Never:**
+
+| Forbidden | Why |
+|---|---|
+| `gh issue comment --body "...\`path\`..."` | The shell runs command substitution **before `gh` sees it**. Backticks and `$(...)` are executed. This stripped file paths out of a real comment on #292 and created a stray file named `cash` |
+| `gh api -f body=@file` | `-f` sends the value **literally** — it posted `@C:/Users/.../gh_comment_106.md` as a comment body and the real reply was never sent |
+
+Both failures are **silent**: `gh` exits 0 and prints a URL. Nothing tells you the content was destroyed. That is why the tool verifies by reading the comment back rather than trusting the exit code.
+
+`--body-file` alone is *not* sufficient as a rule — the second failure above came from someone already trying to pass a file. Use the script; it removes the inline-body option entirely and checks the result.
+
+**Cross-repo refs:** a bare `#123` in a private-repo comment resolves against the *private* repo. When referring to a public issue from the private repo (or vice versa) always write it fully qualified: `zachisit/july-backtester#302`.
 
 ## Scripts Directory
 
