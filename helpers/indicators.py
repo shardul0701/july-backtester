@@ -2,7 +2,10 @@
 
 import pandas as pd
 import numpy as np
-import pandas_ta as ta
+try:
+    import pandas_ta as ta
+except (OSError, ImportError):
+    ta = None  # workers under memory pressure can't load llvmlite — safe because workers use precomputed signals, never call ta.*
 
 # ----
 # Used for Scanner

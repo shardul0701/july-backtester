@@ -50,7 +50,15 @@ pit_member_masks_global = None
 # --------------------------------------------------------------------
 # --- WORKER INITIALIZER FOR MULTIPROCESSING ---
 # --------------------------------------------------------------------
-def init_worker(comparison_dfs_dict, benchmark_returns_dict, dependency_map_dict, portfolio_data_for_worker, delisting_dates_for_worker=None, pit_member_masks_dict=None):
+def init_worker(
+    comparison_dfs_dict,
+    benchmark_returns_dict,
+    dependency_map_dict,
+    portfolio_data_for_worker,
+    delisting_dates_for_worker=None,
+    pit_member_masks_dict=None,
+    config_for_worker=None,
+):
     """
     Initializer for the multiprocessing pool.
     Makes comparison ticker DataFrames, benchmark returns, dependency symbol map,
@@ -64,6 +72,9 @@ def init_worker(comparison_dfs_dict, benchmark_returns_dict, dependency_map_dict
     portfolio_data_global = portfolio_data_for_worker
     delisting_dates_global = delisting_dates_for_worker
     pit_member_masks_global = pit_member_masks_dict
+    if config_for_worker is not None:
+        CONFIG.clear()
+        CONFIG.update(config_for_worker)
 
 # --------------------------------------------------------------------
 
@@ -144,7 +155,7 @@ def run_single_simulation(args):
         # Call the simulation, passing the stop_config and using the global dataframes.
         result = run_portfolio_simulation(
             portfolio_data, final_signals, CONFIG["initial_capital"], CONFIG["allocation_per_trade"],
-            spy_df_local, vix_df_local, tnx_df_local, stop_config, delisting_dates_global
+            spy_df_local, vix_df_local, tnx_df_local, stop_config, delisting_dates=delisting_dates_global
         )
         
         if result is None: return None
@@ -781,13 +792,29 @@ def main():
             continue
 
         # --- Create a NEW Pool initialized with THIS portfolio's data ---
+        # Windows uses spawn (no fork/COW), so every worker gets its own full
+        # deserialized copy of init_args. Never spawn more workers than there
+        # are tasks - idle workers still pay the full memory cost for nothing,
+        # which is what was causing MemoryError/OSError on large PIT universes
+        # (e.g. SP500 PIT: 964 symbols, only 2 tasks, but 8 workers were spawned).
+        num_workers = min(cpu_count(), len(tasks_for_this_portfolio))
         logger.info("=" * 15 + f" RUNNING SIMULATIONS FOR '{portfolio_name}' " + "=" * 15)
-        logger.info(f"Found {len(tasks_for_this_portfolio)} tasks. Using up to {cpu_count()} CPU cores.")
-        
-        # Pass comparison data, portfolio data, delisting dates, and PIT masks during initialization
-        init_args = (comparison_dfs, benchmark_returns, comparison_config["dependencies"], portfolio_data, delisting_dates, _pit_member_masks)
+        logger.info(f"Found {len(tasks_for_this_portfolio)} tasks. Using {num_workers} CPU core(s).")
 
-        with Pool(processes=cpu_count(), initializer=init_worker, initargs=init_args) as p:
+        # Pass comparison data, portfolio data, delisting dates, PIT masks, and
+        # CLI-mutated config into spawned workers. On Windows, child processes
+        # import config.py fresh unless we explicitly hydrate CONFIG here.
+        init_args = (
+            comparison_dfs,
+            benchmark_returns,
+            comparison_config["dependencies"],
+            portfolio_data,
+            delisting_dates,
+            _pit_member_masks,
+            dict(CONFIG),
+        )
+
+        with Pool(processes=num_workers, initializer=init_worker, initargs=init_args) as p:
             import time as _time
             _results = []
             _start_pool = _time.monotonic()
@@ -881,7 +908,7 @@ def _print_report_hint(run_folder_name: str) -> None:
     """Log a copy-paste ready report command at the end of a run."""
     run_path = f"output/runs/{run_folder_name}"
     cmd = f"python report.py --all {run_path}"
-    bar = "━" * len(cmd)
+    bar = "=" * len(cmd)
     logger.info(bar)
     logger.info(f"  Run report:  {cmd}")
     logger.info(bar)

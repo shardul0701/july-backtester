@@ -637,6 +637,8 @@ def generate_per_portfolio_summary(portfolio_results, portfolio_name, benchmark_
         if not result.get('trade_log') or len(result['trade_log']) == 0:
             continue
         strategy_name_safe = result['Strategy'].replace('/', '_').replace(' ', '_').replace('(', '').replace(')', '').replace(':', '')
+        for _bad_char in '<>"|?*':
+            strategy_name_safe = strategy_name_safe.replace(_bad_char, '')
         raw_df = pd.DataFrame(result['trade_log'])
         mapped_df = raw_df.rename(columns=COLUMN_MAP)
         # Convert fractional values to percentages for the analyzer
