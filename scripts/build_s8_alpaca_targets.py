@@ -23,12 +23,14 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
+from _dividend_adjust import adjust_for_dividends
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT_DIR = ROOT / "output" / "live_s8_alpaca"
@@ -51,7 +53,45 @@ MOM_TOP_N = 7
 MOM_QQQ_MA = 200
 MOM_REBAL_DAYS = 5
 
+# Opt-in C7 sector-diversification cap (default 0 = disabled, original
+# unconstrained top-N behavior). Mirrors scripts/rebuild_blended_pit.py's
+# C7_SECTOR_CAP_MAX wiring exactly, so backtest and live pick logic match.
+C7_SECTOR_CAP_MAX = int(os.environ.get("C7_SECTOR_CAP_MAX", "0"))
+_SECTOR_MAP = None
+if C7_SECTOR_CAP_MAX > 0:
+    from sector_map import load_ticker_sector_map
+    _SECTOR_MAP = load_ticker_sector_map()
+
 S8_QQQ_MA = 20
+
+
+def _select_c7_names(
+    returns: pd.Series, sector_map: dict[str, str] | None, cap_max: int, top_n: int
+) -> list[str]:
+    """Rank `returns` descending and pick up to `top_n` symbols.
+
+    cap_max == 0: original unconstrained nlargest(top_n) (bit-identical to the
+    pre-cap behavior). cap_max > 0: greedy walk down the ranked list, skipping a
+    name once its sector bucket already holds cap_max picks. The "Unknown"
+    bucket (unclassified/delisted tickers) is exempt from the cap -- each
+    unknown name counts as its own singleton bucket. Mirrors the C7 selection
+    in scripts/rebuild_blended_pit.py exactly.
+    """
+    if cap_max > 0:
+        ranked = returns.sort_values(ascending=False)
+        picked: list[str] = []
+        sector_ct: dict[str, int] = {}
+        for s in ranked.index:
+            sec = (sector_map or {}).get(s, "Unknown")
+            key = sec if sec != "Unknown" else f"__unk_{s}"
+            if sector_ct.get(key, 0) >= cap_max:
+                continue
+            picked.append(s)
+            sector_ct[key] = sector_ct.get(key, 0) + 1
+            if len(picked) == top_n:
+                break
+        return picked
+    return list(returns.nlargest(top_n).index)
 
 
 @dataclass
@@ -89,25 +129,33 @@ def load_price_csv(path: Path) -> pd.DataFrame:
 
 
 def load_symbol(symbol: str) -> pd.DataFrame | None:
+    # is_polygon_daily flags which candidates are split-adjusted-only Polygon data
+    # (needs a dividend back-adjustment) vs. an already total-return source.
     candidates = [
-        ROOT / "csv_data" / f"{symbol}.csv",
-        ROOT / "data" / "polygon_daily" / f"{symbol.replace(':', '_')}.csv",
-        ROOT / "data" / "polygon_daily" / f"I_{symbol}.csv",
-        ROOT / "data" / "etf_prices" / f"{symbol}.csv",
-        ROOT / "data" / "raw" / f"{symbol}.csv",
+        (ROOT / "csv_data" / f"{symbol}.csv", False),
+        (ROOT / "data" / "polygon_daily" / f"{symbol.replace(':', '_')}.csv", True),
+        (ROOT / "data" / "polygon_daily" / f"I_{symbol}.csv", True),
+        (ROOT / "data" / "etf_prices" / f"{symbol}.csv", False),
+        (ROOT / "data" / "raw" / f"{symbol}.csv", False),
     ]
     loaded: list[pd.DataFrame] = []
-    for path in candidates:
+    loaded_is_pd: list[bool] = []
+    for path, is_pd in candidates:
         if path.exists():
             try:
                 df = load_price_csv(path)
                 if not df.empty:
                     loaded.append(df)
+                    loaded_is_pd.append(is_pd)
             except Exception:
                 continue
     if loaded:
         merged = loaded[0].copy().sort_index()
-        for extra in loaded[1:]:
+        # Anchor for the dividend fix: the last date already trusted as
+        # total-return (base is non-Polygon-daily), or the series' own start
+        # if the base itself is raw polygon_daily (no better source exists).
+        anchor = merged.index.min() if loaded_is_pd[0] else merged.index.max()
+        for extra, extra_is_pd in zip(loaded[1:], loaded_is_pd[1:]):
             extra = extra.copy().sort_index()
             new_rows = extra[extra.index > merged.index.max()].copy()
             if new_rows.empty:
@@ -121,6 +169,7 @@ def load_symbol(symbol: str) -> pd.DataFrame | None:
                     new_rows[price_cols] = new_rows[price_cols] * float(scale)
             merged = pd.concat([merged, new_rows]).sort_index()
             merged = merged[~merged.index.duplicated(keep="first")]
+        merged = adjust_for_dividends(merged, symbol, anchor)
         return merged
     return None
 
@@ -159,6 +208,10 @@ def open_matrix(data: dict[str, pd.DataFrame]) -> pd.DataFrame:
     return pd.DataFrame({sym: df["Open"] for sym, df in data.items()}).sort_index()
 
 
+def high_matrix(data: dict[str, pd.DataFrame]) -> pd.DataFrame:
+    return pd.DataFrame({sym: df["High"] for sym, df in data.items()}).sort_index()
+
+
 def align_dates(*frames: pd.DataFrame) -> pd.DatetimeIndex:
     idx = frames[0].index
     for frame in frames[1:]:
@@ -174,6 +227,7 @@ def simulate_mr_weight_book(
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     opens = open_matrix(data)
     closes = close_matrix(data)
+    highs = high_matrix(data)
     dates = closes.index[closes.index >= pd.Timestamp(start_date)]
 
     rsi_mat = closes.apply(rsi)
@@ -199,6 +253,12 @@ def simulate_mr_weight_book(
 
     cash = INITIAL_CAPITAL
     positions: dict[str, Position] = {}
+    # Ghost cooldown: after a stop-loss exit, blocks re-entry into the same
+    # name until the ghost position itself would have hit target/MA20/max-hold.
+    # Mirrors mr_ghost_ok() in scripts/rebuild_blended_pit.py -- without this,
+    # a name that just stopped out (still oversold, still ranked at the bottom
+    # by 10d return) gets immediately re-selected the same day.
+    ghosts: dict[str, dict] = {}
     rows: list[dict] = []
     state_rows: list[dict] = []
 
@@ -206,6 +266,24 @@ def simulate_mr_weight_book(
 
     for date in dates:
         i = date_to_i[date]
+
+        for sym in list(ghosts):
+            ghost = ghosts[sym]
+            if sym not in closes.columns or date not in closes.index or pd.isna(closes.at[date, sym]):
+                ghost["hold_bars"] += 1
+                if ghost["hold_bars"] >= MR_MAX_HOLD_BARS:
+                    del ghosts[sym]
+                continue
+            ghost["hold_bars"] += 1
+            hold = ghost["hold_bars"]
+            today_close = closes.at[date, sym]
+            today_high = highs.at[date, sym] if sym in highs.columns and date in highs.index else np.nan
+            ma = ma20_mat.at[date, sym] if sym in ma20_mat.columns and date in ma20_mat.index else np.nan
+            hit_target = pd.notna(today_high) and today_high >= ghost["entry_price"] * (1 + MR_PROFIT_TARGET)
+            hit_ma20 = hold >= 2 and pd.notna(ma) and today_close > ma
+            hit_max_hold = hold >= MR_MAX_HOLD_BARS
+            if hit_target or hit_ma20 or hit_max_hold:
+                del ghosts[sym]
 
         for sym in list(positions):
             pos = positions[sym]
@@ -256,6 +334,8 @@ def simulate_mr_weight_book(
                         "price": exit_px,
                     }
                 )
+                if exit_reason in ("stop", "gap_stop"):
+                    ghosts[sym] = {"entry_price": pos.entry_price, "hold_bars": hold_bars}
                 del positions[sym]
 
         mtm = 0.0
@@ -296,6 +376,9 @@ def simulate_mr_weight_book(
             & ret_10d.loc[date].notna()
         )
         for sym in positions:
+            if sym in eligible.index:
+                eligible[sym] = False
+        for sym in ghosts:
             if sym in eligible.index:
                 eligible[sym] = False
 
@@ -384,8 +467,8 @@ def simulate_momentum_weight_book(
                 if date in _bar_count.index:
                     old_enough = _bar_count.loc[date] >= (MOM_LOOKBACK + 252)
                     returns = returns[old_enough.reindex(returns.index, fill_value=False)]
-                top = returns.nlargest(MOM_TOP_N)
-                holdings = {sym: 1.0 / len(top) for sym in top.index} if len(top) else {}
+                top_syms = _select_c7_names(returns, _SECTOR_MAP, C7_SECTOR_CAP_MAX, MOM_TOP_N)
+                holdings = {sym: 1.0 / len(top_syms) for sym in top_syms} if len(top_syms) else {}
                 state = "top_momentum"
             else:
                 holdings = {"GLD": 1.0} if gld is not None else {}

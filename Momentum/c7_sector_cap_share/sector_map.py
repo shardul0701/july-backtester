@@ -15,7 +15,13 @@ no per-ticker overrides.
 import json
 import os
 
-_SIC_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sp500_pit_sic.json")
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_SIC_PATH = os.path.join(_HERE, "sp500_pit_sic.json")
+# Delisted names that the base file records as null purely because
+# fetch_sp500_pit_sic.py queried Polygon without a `date` (see
+# backfill_delisted_sic.py). Overlaid on top of the base file; never overrides
+# a ticker the base file already classified.
+_BACKFILL_PATH = os.path.join(_HERE, "delisted_sic_backfill.json")
 
 
 def _bucket_for_sic(sic_code: str | None) -> str:
@@ -95,13 +101,20 @@ _cache: dict[str, str] | None = None
 
 
 def load_ticker_sector_map() -> dict[str, str]:
-    """ticker -> broad sector bucket, for every ticker in sp500_pit_sic.json."""
+    """ticker -> broad sector bucket, base file plus the delisted backfill."""
     global _cache
     if _cache is not None:
         return _cache
     with open(_SIC_PATH) as fh:
         raw = json.load(fh)
-    _cache = {t: _bucket_for_sic(v.get("sic_code")) for t, v in raw.items()}
+    m = {t: _bucket_for_sic(v.get("sic_code")) for t, v in raw.items()}
+    if os.path.exists(_BACKFILL_PATH):
+        with open(_BACKFILL_PATH) as fh:
+            extra = json.load(fh)
+        for t, v in extra.items():
+            if m.get(t, "Unknown") == "Unknown":
+                m[t] = _bucket_for_sic(v.get("sic_code"))
+    _cache = m
     return _cache
 
 

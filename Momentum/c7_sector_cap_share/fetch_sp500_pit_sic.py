@@ -5,6 +5,16 @@ Read-only reference-data pull (Polygon v3/reference/tickers/{ticker}), not part
 of the main pipeline. Current-classification only (no PIT sector history) --
 used as a coarse sector-diversification filter for the C7 sleeve, not for
 signal generation.
+
+KNOWN DEFECT -- do not trust the nulls in the output. This call passes no `date`
+parameter, so Polygon 404s every delisted ticker, and `fetch_one` maps both that
+404 and any exception to `sic_code: null` -- identical to "no classification
+exists". Result: the nulls are concentrated on exactly the delisted names, so
+sp500_pit_sic.json alone is a survivor-only sector map (50.2% of the nq100 PIT
+union came back Unknown). `backfill_delisted_sic.py` repairs this by re-querying
+with an as-of date the ticker was listed; `sector_map.py` overlays the result.
+Also note `todo` skips any ticker already present in the cache, so re-running
+this script will NOT retry a bad null.
 """
 import json
 import os
@@ -19,7 +29,7 @@ sys.path.insert(0, ROOT)
 
 os.environ.setdefault(
     "SP500_DATA_ROOT",
-    r"c:\Users\shard\Light Water Internship\SP500-Survivorship-bias-data-2004-2026",
+    r"c:\Users\shard\Light Water Internship\market-data\SP500-Survivorship-bias-data-2004-2026",
 )
 
 from helpers.aws_utils import get_secret
