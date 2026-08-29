@@ -100,9 +100,23 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
             # --- STOP-LOSS CHECK ---
             if (pd.isna(raw_exit_price) and stop_config.get("type") != "none"
                     and pd.notna(pos.get('stop_loss_level'))):
-                current_low = portfolio_data[symbol].loc[date].get('Low')
+                bar = portfolio_data[symbol].loc[date]
+                current_low = bar.get('Low')
                 if pd.notna(current_low) and current_low <= pos['stop_loss_level']:
-                    raw_exit_price = pos['stop_loss_level']
+                    # A stop is an instruction to sell at market once the level
+                    # trades, not a limit at the level. When the bar OPENS below
+                    # the stop the fill is the open -- booking the stop level on
+                    # a gap-down is not conservative, it is a price that was
+                    # never available. Mean reversion is hit hardest: it buys the
+                    # most-oversold names in the universe, so an overnight gap
+                    # through the stop is its native failure mode, not a tail
+                    # case. Measured on the MR book: 12-16% of stop exits gapped
+                    # through, worst single gap -92%.
+                    current_open = bar.get('Open')
+                    if pd.notna(current_open) and current_open < pos['stop_loss_level']:
+                        raw_exit_price = current_open
+                    else:
+                        raw_exit_price = pos['stop_loss_level']
                     exit_date = date
                     exit_reason = f"Stop Loss ({stop_config['type']})"
 
