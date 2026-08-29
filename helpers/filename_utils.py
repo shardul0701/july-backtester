@@ -25,6 +25,13 @@ _WINDOWS_RESERVED = {
     "CONIN$", "CONOUT$",
     *[f"COM{i}" for i in range(1, 10)],
     *[f"LPT{i}" for i in range(1, 10)],
+    # Windows treats the ISO/IEC 8859-1 superscript digits as digits, so
+    # COM¹/COM²/COM³ and LPT¹/LPT²/LPT³ are reserved too — `echo test > COM¹`
+    # fails to create a file. Documented in "Naming Files, Paths, and
+    # Namespaces"; missing here until a QA sweep checked the set against the
+    # spec rather than against itself.
+    *[f"COM{d}" for d in ("¹", "²", "³")],
+    *[f"LPT{d}" for d in ("¹", "²", "³")],
 }
 
 # CON and PRN are REAL TICKERS with data in the Norgate corpus
@@ -114,3 +121,57 @@ def filename_candidates(symbol: str) -> list[str]:
     guarded = sanitize_symbol_for_filename(symbol)
     legacy = sanitize_symbol_for_filename(symbol, guard_reserved=False)
     return [guarded] if guarded == legacy else [guarded, legacy]
+
+
+def resolve_existing(directory, symbol: str, template: str = "{name}.parquet",
+                     case_variants: bool = True):
+    """First EXISTING file for *symbol* in *directory*, or ``None``.
+
+    The single read-path entry point. Tries every candidate spelling from
+    :func:`filename_candidates` (guarded first, then the legacy unguarded form),
+    each in exact / upper / lower case, and returns the first that exists.
+
+    *template* has every ``{name}`` occurrence REPLACED with the spelling (not
+    ``str.format`` — any other brace field is left literal), so callers with a richer
+    filename than ``SYMBOL.ext`` can use it too::
+
+        resolve_existing(d, "CON")                                  # CON.parquet
+        resolve_existing(d, "I:VIX", template="{name}.csv")         # I_VIX.csv
+        resolve_existing(d, "CON", template="{name}_2020_D_1.parquet")
+
+    WHY THIS EXISTS RATHER THAN LEAVING CALLERS TO COMPOSE IT
+    ---------------------------------------------------------
+    :func:`filename_candidates` documented the contract - "READ paths must use
+    this" - and three of five read paths did not, because composing the
+    candidate x case x extension loop by hand is tedious and
+    :func:`sanitize_symbol_for_filename` is right there with the shorter name.
+
+    That is the wrong way round for a contract whose violation is **silent**: a
+    reader that checks only the guarded spelling reports "missing" or "not
+    cached" for a file that exists, and the affected tickers - ``CON``, ``PRN``
+    - are delisted names the survivorship work depends on. The failure never
+    raises.
+
+    So the safe call is now the short obvious one, and there is nothing left to
+    compose. Anything under ``services/``, ``helpers/`` or ``scripts/`` that
+    tests a path for existence should call this instead of building the name.
+    """
+    import os
+
+    for name in filename_candidates(symbol):
+        spellings = [name, name.upper(), name.lower()] if case_variants else [name]
+        seen = set()
+        for spelling in spellings:
+            if spelling in seen:
+                continue
+            seen.add(spelling)
+            # .replace rather than .format: a template carrying any second
+            # field -- "{name}_{a}.parquet" -- raised KeyError('a'). Safe today
+            # (caching.py interpolates its dates before passing the template),
+            # but a needless footgun in a helper whose whole point is to be the
+            # obvious safe call. @shardul0701.
+            path = os.path.join(str(directory),
+                                template.replace("{name}", spelling))
+            if os.path.isfile(path):
+                return path
+    return None
