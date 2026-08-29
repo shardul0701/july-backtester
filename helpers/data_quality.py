@@ -27,6 +27,100 @@ logger = logging.getLogger(__name__)
 # Price jump threshold (20% daily move flags as potential unadjusted split)
 _PRICE_JUMP_THRESHOLD = 0.20
 
+# --- issue #360 ---------------------------------------------------------------
+# CHECK 4 counted jumps and never weighed them, and the count saturates at
+# min(15, n*2). So ONE catastrophic bar cost 2 points: a synthetic 1e-06 -> 1.0
+# round-trip (+99,999,900%) scored 96/100 and passed, and so did a real one —
+# ELRNF, 4.37e-07 -> 0.656. A 25% tick-quantisation wobble on a 1990s
+# $0.125-grid name and a 1,000,000x unadjusted split were priced identically.
+#
+# Escalate on the WORST surviving jump, by decade, because the damage is
+# log-scaled: 30% is noise, 300% is a 4:1 split, 30,000% is a units error.
+#   decades = floor(log10(worst));  charge 15/decade, capped at 45.
+# Nothing is charged below one decade (1,000%), which leaves every honest large
+# move — earnings gaps, biotech binaries, ordinary splits — exactly where it
+# was. Calibration is insensitive: +15/cap45, +20/cap50 and +25/cap60 demote
+# the SAME 144 corpus series and none leaves anything above the gate, so the
+# mildest is taken. It is the easiest to defend the day someone asks why a
+# series lost points.
+#
+# --- issue #368 ---
+# `worst` is max(a,b)/min(a,b) - 1, not `pct_change().abs()`. pct_change is
+# unbounded above and bounded at 1.0 below, so a FALL can never reach one
+# decade however far it falls, and the escalation could only ever see upward
+# moves. An unadjusted FORWARD split -- the more common corporate action of
+# the two -- scored 98 and passed while its mirror-image REVERSE split scored
+# 68. A one-way collapse from $2 to $2e-06 that never comes back is
+# untradeable, prints as exactly -100%, and passed at 98 with CHECK 7 blind to
+# it as well: that check keys on exactly 1e-06. Round-trips through the same
+# floor were already caught, because their UP leg carried the magnitude.
+#
+# max/min - 1 is the SAME number as |pct_change| for an upward move -- both
+# are p/prev - 1 -- so every threshold above keeps the value it was calibrated
+# to, by construction rather than by re-measurement, and a fall is weighed as
+# the mirror-image rise it would have been had the series been read the other
+# way round. The bare ratio would NOT do: it shifts every magnitude up by a
+# decade, so a -90% crash and a +900% biotech binary become one decade and get
+# charged, and it needs the floor moved to 2 to leave them alone. Eligibility
+# stays on |pct_change| > 20%, which is very slightly tighter downward (a
+# ratio of 1.25) than upward (1.2); a move that fails it has a ratio of at
+# most 1.25, which is zero decades, so the escalation loses nothing to that.
+_JUMP_MAGNITUDE_PER_DECADE = 15
+_JUMP_MAGNITUDE_CAP = 45
+
+# TWO GUARDS, because `pct_change()` is boundary-blind and would otherwise
+# misattribute 59 of its 144 hits (41%). A demerit is recoverable; an issue
+# string naming the wrong cause is not — it sends every future reader hunting
+# for a split that does not exist, and nothing in the score says it was wrong.
+#
+#   GAP      the "jump" spans a coverage hole and is not a jump at all. CELH
+#            $1.0033 -> $13.3333 is +1,228.9% over 82 CALENDAR days: honest
+#            data with a three-month hole in it. 26 of the 144. CHECK 9 already
+#            reports the hole, and reports it correctly.
+#   SUBPENNY both ends under a cent: tick-grid bounce on a bankrupt shell.
+#            TUPBQ $0.0001 -> $0.0013 is 1,200% of nothing — the denominator is
+#            the grid minimum, so the percentage is enormous while the move is
+#            a handful of ticks. It is not evidence of a split, and calling it
+#            one is the misattribution. 36 of the 144 — 3 of which are
+#            also GAP, which is why 26 + 36 dedupes to 59 and not 62.
+#
+#            Stated plainly rather than papered over: these 36 carry NO
+#            demerit from CHECK 7 either. Measured — 0 of 36 carry a floor bar,
+#            because CHECK 7 keys on EXACTLY 1e-06 and these sit at 1e-04 to
+#            1e-05. So guarding here leaves a genuinely untradeable series
+#            scoring 80-84 and passing. That is a real hole, and it is NOT this
+#            check's to close. "Untradeable" is not "wrong": its honest home is
+#            the dollar-volume screen (filter_universe / the still-unwired
+#            merged_min_avg_dollar_volume), not a data-quality demerit.
+#            Charging a split demerit here to cover for it would put the right
+#            number on the wrong reason.
+#
+#            Do NOT reach for an absolute price-LEVEL check instead. It is
+#            genuinely the one axis validate_ohlcv lacks, and it was measured
+#            and rejected (#367): of the 641 series with a max close over
+#            $10,000, 555 simply decay to a sane modern price, because that is
+#            what cumulative reverse-split back-adjustment looks like. UVXY is
+#            in there with a first bar of $5.1e+11 and no residual
+#            discontinuity that is not a real volatility event, and SPX/DJI/
+#            NDX/RUT/OEX live in the same store carrying index levels rather
+#            than share prices. A level threshold fires mostly on correct
+#            data.
+#
+# 85 of the 144 survive both guards: TOVX, AMDS, HLMMQ — adjacent-bar
+# unadjusted reverse splits, which is what the check's name promises. Both
+# guards restrict the MAGNITUDE escalation ONLY; the count demerit is
+# untouched, so a guarded jump is still reported and still charged as a jump.
+#
+# Both guards are per-JUMP, not per-series, which is why the demerit is taken
+# from the worst ELIGIBLE jump rather than the worst jump. 9 of the 59 guarded
+# series are charged anyway, every one of them on a different bar than the one
+# that got them classified — CLRD's +125,000% spans a 6-day hole and is
+# ignored, and the +8,417% four days later on adjacent bars is not. Taking the
+# series maximum instead would let a guarded jump lend its magnitude to an
+# eligible one, which is the mutant `worst overall, not worst eligible` pins.
+_JUMP_MAX_BAR_GAP_DAYS = 5          # a long weekend; anything more is a hole
+_JUMP_SUBPENNY_PRICE = 0.01
+
 # --- issue #350 ---------------------------------------------------------------
 # The merged corpus carries closes of EXACTLY 1e-06: 25,730 bars across 813
 # series (measured full-corpus over O/H/L/C; an earlier partial scan said
@@ -70,16 +164,23 @@ _SENTINEL_ATOL = 1e-12
 #
 # WHAT IT IS NOT: a general detector. It keys on one value, so the identical
 # round-trip one tick up evades it entirely — verified: a single 2e-06 bar
-# carrying +99,999,900% scores 96/100 and passes, as does 1e-04 at +1,999,900%,
-# because CHECK 4 counts jumps and never weighs magnitude. The durable fix is a
-# magnitude escalation in CHECK 4 plus a dollar-volume screen at selection
-# (both follow-ups). This is a stopgap keyed to today's corpus, and should be
-# retired when they land.
+# carrying +99,999,900% scored 96/100 and passed, as did 1e-04 at +1,999,900%,
+# because CHECK 4 counted jumps and never weighed magnitude. CHECK 4 now weighs
+# magnitude (#360), which closes that specific hole.
 #
-# PRECISION ON "FAIL": main.py warns below `data_quality_threshold` (80) and
-# only RAISES when `strict_data_quality=True`, which is False by default. So
-# under stock config this surfaces the series loudly; it hard-stops a run only
-# in strict mode. Worth stating exactly, because "blocking" overstated it.
+# IT IS STILL NOT REDUNDANT, and the note here used to say it should be
+# "retired when they land". That was wrong, and measuring it is what showed so.
+# The two checks have complementary blind spots, with ZERO overlap at the gate:
+#   * A magnitude escalation keyed above 1,000% cannot see a floor series whose
+#     largest move is smaller than that. 26 floor series have max |ret| <= 1000%
+#     and 10 of them pass the 80 gate with this check disabled — one is FRCB,
+#     First Republic, $3.51 -> $0.3336 across the 2023 receivership.
+#   * Conversely CHECK 7 cannot see ELRNF: 4.37e-07 -> 0.656, +149,999,907%,
+#     the ONE bar in 74.9M sitting strictly BELOW the floor, invisible to a
+#     check that keys on the exact value.
+# Corpus-wide: of the 1,760 series carrying a >1,000% bar, all 787 that also
+# carry floor bars already score < 80 without CHECK 7, and all 144 that still
+# pass carry no floor bar at all. Neither check subsumes the other.
 #
 # PRECISION ON "FAIL": main.py warns below `data_quality_threshold` (80) and
 # only RAISES when `strict_data_quality=True`, which is False by default. So
@@ -200,7 +301,16 @@ def validate_ohlcv(df: pd.DataFrame, symbol: str, timeframe: str = "D",
 
     # --- CHECK 4: Price jumps >20% (potential unadjusted splits) ---
     if "Close" in named.columns:
-        returns = named["Close"].pct_change().abs()
+        # Sorted, because a return is a property of the DATA and not of row
+        # order. On a newest-first frame (services/csv_service.py never sorts,
+        # and supports the newest-first Nasdaq.com export) pct_change reads
+        # every move backwards: a +10,000% jump prints as -99%, which still
+        # trips the 20% threshold but reads as 0 decades and escapes the
+        # magnitude escalation entirely. Same defect CHECK 8 was fixed for.
+        close = named["Close"]
+        if isinstance(close.index, pd.DatetimeIndex):
+            close = close.sort_index()
+        returns = close.pct_change().abs()
         large_jumps = returns[returns > _PRICE_JUMP_THRESHOLD]
         if len(large_jumps) > 0:
             # Report first 3 jumps
@@ -209,6 +319,86 @@ def validate_ohlcv(df: pd.DataFrame, symbol: str, timeframe: str = "D",
             jump_strs = [f"{date} ({pct:.1f}%)" for date, pct in zip(jump_dates, jump_pcts)]
             issues.append(f"Price jumps >{_PRICE_JUMP_THRESHOLD*100:.0f}%: {len(large_jumps)} occurrences, e.g., {', '.join(jump_strs)}")
             demerits += min(15, len(large_jumps) * 2)
+
+            # Magnitude escalation (#360). See _JUMP_MAGNITUDE_PER_DECADE for
+            # why the count alone priced a 25% wobble and a 1,000,000x split
+            # the same, and _JUMP_MAX_BAR_GAP_DAYS for the two guards.
+            # Positional throughout. CHECK 1 reports duplicate timestamps and
+            # keeps going, so this code has to survive them: `.reindex()` on a
+            # duplicated axis raises outright, and `.loc[label]` on one returns
+            # a Series that min()/max() cannot compare. Both would come out of
+            # a function whose contract is to survive bad data and report on it.
+            prices = close.to_numpy(dtype="float64")
+            prev = np.concatenate([[np.nan], prices[:-1]])
+            hi_end = np.maximum(prices, prev)
+            lo_end = np.minimum(prices, prev)
+            rets = returns.to_numpy(dtype="float64")
+
+            # The magnitude weighed below is max/min - 1, not the return
+            # (#368). For an upward move it is algebraically the same as
+            # `rets` -- both are p/prev - 1 -- and the mirror-image magnitude
+            # for a downward one, which `rets` cannot express at all: it is
+            # bounded at 1.0 below. Algebraically, not bit-for-bit: (b-a)/a
+            # and b/a - 1 are different float evaluations and disagree in the
+            # last ulp (measured max 9.1e-13 over 200k random up-moves). That
+            # cannot reach a decade -- 3M samples clustered on the 11x
+            # boundary produced 0 disagreements in floor(log10) -- so the
+            # #360 calibration is preserved, but do not read "identical" as
+            # "the same bits".
+            with np.errstate(divide="ignore", invalid="ignore"):
+                magnitude = np.where(lo_end > 0, hi_end / lo_end - 1.0, np.nan)
+
+            # isfinite on BOTH, because the two catch different bars. A
+            # prev_close of exactly 0 makes pct_change return inf, and
+            # np.log10(inf) is not an int (OverflowError). A CLOSE of exactly
+            # 0 against a positive previous close makes pct_change return
+            # exactly -1.0, which is finite and passes the 20% threshold,
+            # while max/min is infinite -- the same OverflowError from the
+            # other side, and one this check did not have before #368.
+            #
+            # Both are a zero price rather than a split, so neither has a
+            # magnitude worth weighing here. Do NOT read that as "CHECK 2
+            # owns it": CHECK 2 tests `< 0` strictly, so a close of exactly
+            # 0 is caught by no check in this function -- 6.25 -> 0 -> 6.25
+            # scores 96.0 and prints "inf%" in the CHECK 4 count string.
+            # Skipping it is still right for this check; it is simply
+            # unowned, not handled elsewhere (#369).
+            eligible = (rets > _PRICE_JUMP_THRESHOLD) & np.isfinite(rets)
+            eligible &= np.isfinite(magnitude)
+            eligible &= hi_end >= _JUMP_SUBPENNY_PRICE
+            if isinstance(close.index, pd.DatetimeIndex):
+                spacing = close.index.to_series().diff().dt.days.to_numpy(
+                    dtype="float64")
+                eligible &= spacing <= _JUMP_MAX_BAR_GAP_DAYS
+
+            if eligible.any():
+                pos = int(np.argmax(np.where(eligible, magnitude, -np.inf)))
+                worst = float(magnitude[pos])
+                # floor(log10) of a RATIO: 10.0 (an 11x move either way) is
+                # one decade, 100.0 (101x) two. Guarded against worst <= 0,
+                # which the ratio cannot produce here -- the threshold is
+                # 0.20, so max/min is above 1.2 -- but which a future
+                # threshold change could.
+                decades = int(np.floor(np.log10(worst))) if worst > 0 else 0
+                if decades >= 1:
+                    demerits += min(_JUMP_MAGNITUDE_CAP,
+                                    decades * _JUMP_MAGNITUDE_PER_DECADE)
+                    at = close.index[pos]
+                    # CHRONOLOGICAL, not lo -> hi. The magnitude is symmetric;
+                    # the series is not, and printing a fall as "$1 -> $200"
+                    # names the wrong corporate action (#368).
+                    was = float(prev[pos])
+                    now = float(prices[pos])
+                    signed = (now / was - 1.0) * 100.0
+                    when = at.strftime("%Y-%m-%d") if hasattr(at, "strftime") else str(at)
+                    issues.append(
+                        f"Extreme price jump: {signed:+,.0f}% on {when} "
+                        f"(${was:.6g} -> ${now:.6g}) — a {worst + 1.0:,.0f}x "
+                        f"{'rise' if now > was else 'fall'}, {decades} decades "
+                        f"past {_PRICE_JUMP_THRESHOLD * 100:.0f}%, on ADJACENT "
+                        f"bars and above ${_JUMP_SUBPENNY_PRICE:g}, so neither "
+                        f"a coverage gap nor tick-grid bounce; consistent with "
+                        f"an unadjusted split (#360)")
 
     # --- CHECK 5: Zero volume days ---
     if "Volume" in named.columns:
