@@ -22,6 +22,24 @@ from .pipeline import paths
 _CANON = ["open", "high", "low", "close", "volume"]
 _SUFFIX_RE = re.compile(r"-\d{6}$")  # delisted files carry a -YYYYMM suffix
 _RENAME = {"open": "Open", "high": "High", "low": "Low", "close": "Close", "volume": "Volume"}
+_RESAMPLE_FREQ = {"W": "W-FRI", "M": "ME"}
+_OHLCV_AGG = {"Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"}
+
+
+def _resample_ohlcv(df, config):
+    """Downsample daily OHLCV to config['timeframe'] ('W'/'M'). No-op for 'D'
+    (the merged store is daily-only on disk, so unlike polygon/yahoo — which
+    request the target interval from the API — this provider must resample
+    locally or every non-daily backtest silently runs on daily bars)."""
+    config = config or {}
+    tf = str(config.get("timeframe", "D")).upper()
+    if tf == "D" or tf not in _RESAMPLE_FREQ or df is None or df.empty:
+        return df
+    multiplier = int(config.get("timeframe_multiplier", 1) or 1)
+    rule = f"{multiplier}{_RESAMPLE_FREQ[tf]}"
+    out = df.resample(rule).agg(_OHLCV_AGG).dropna(subset=["Open"])
+    out.index.name = df.index.name
+    return out
 
 
 class UnifiedMarketDataProvider:
@@ -128,6 +146,7 @@ class UnifiedMarketDataProvider:
         out = df[_CANON].rename(columns=_RENAME).copy()
         out.index = pd.DatetimeIndex(out.index).normalize()
         out.index.name = "Datetime"
+        out = _resample_ohlcv(out, config)
         return out
 
     def get_price_data_for_intervals(self, symbol, intervals, warmup_days=400,

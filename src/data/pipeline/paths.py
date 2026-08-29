@@ -30,7 +30,7 @@ METADATA = os.path.join(MARKET_DATA, "metadata")
 
 # Norgate per-symbol parquet repo (read-only master). env first, then known path.
 NORGATE_ROOT = os.environ.get("NORGATE_DATA_ROOT") or \
-    r"c:\Users\shard\Light Water Internship\july-backtester-norgate-data\data"
+    r"c:\Users\shard\Light Water Internship\market-data\july-backtester-norgate-data\data"
 
 # Cached reference tables produced by the certification scan (reused, not re-scanned).
 NORGATE_LAST_DATES_CSV = os.path.join(ROOT, "scripts", "norgate_symbol_last_dates.csv")

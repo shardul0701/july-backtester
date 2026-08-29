@@ -240,6 +240,18 @@ def get_price_data(symbol: str, start_date: str, end_date: str, config: dict):
     # Drop any rows with NaN in OHLC
     df = df.dropna(subset=["Open", "High", "Low", "Close"])
 
+    # Resample daily data to a lower-frequency timeframe if requested
+    tf = config.get("timeframe", "D")
+    mult = int(config.get("timeframe_multiplier", 1))
+    _RESAMPLE_RULES = {"W": "W-FRI", "M": "MS"}
+    if tf in _RESAMPLE_RULES and mult == 1:
+        rule = _RESAMPLE_RULES[tf]
+        df = (
+            df.resample(rule)
+            .agg({"Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"})
+            .dropna(subset=["Open", "Close"])
+        )
+
     logger.debug(
         f"  {symbol}: {len(df)} bars, "
         f"{df.index[0].strftime('%Y-%m-%d')} → {df.index[-1].strftime('%Y-%m-%d')}"

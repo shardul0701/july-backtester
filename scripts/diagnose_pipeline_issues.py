@@ -59,7 +59,7 @@ line("=")
 print("PART 1 — PIT coverage (union mode)")
 line("=")
 sp_repo = os.environ.get("SP500_DATA_ROOT") or \
-    r"C:\Users\shard\Light Water Internship\SP500-Survivorship-bias-data-2004-2026"
+    r"C:\Users\shard\Light Water Internship\market-data\SP500-Survivorship-bias-data-2004-2026"
 from helpers.pit_universe import get_sp500_tickers_in_period, get_nq100_tickers_in_period
 
 sp = get_sp500_tickers_in_period("2004-01-01", "2026-06-06", sp_repo)

@@ -14,7 +14,7 @@ CONFIG = {
     # ============================================================
     # SECTION 1: DATA PROVIDER
     # ============================================================
-    # "polygon" | "norgate" | "yahoo" | "csv"
+    # "polygon" | "norgate" | "yahoo" | "csv" | "parquet" | "merged"
     # polygon_api_secret_name: name of the env-var / .env key that holds the key.
     "data_provider": "polygon",
     "polygon_api_secret_name": "POLYGON_API_KEY",
@@ -81,9 +81,7 @@ CONFIG = {
     # PIT universe:           {"NQ100 PIT": "pit:nq100"}  or  "pit:sp500"
     # Norgate watchlist:      {"My WL": "norgate:WatchlistName"}
     "min_bars_required": 200,
-    "portfolios": {
-        "My Symbols": ["AAPL"],
-    },
+    "portfolios": {"My Symbols": ["AAPL"]},
 
     # ============================================================
     # SECTION 8: ALLOCATION & EXECUTION
