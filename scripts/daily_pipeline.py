@@ -1000,6 +1000,10 @@ def main() -> None:
 
     # Per-strategy simulation update + order submission
     print(f"\n[4/5] Updating strategy positions...")
+    if args.dry_run:
+        print("  [dry-run] Simulation is computed in-memory only — no state/report files"
+              " will be written, so today can be safely re-run once live.")
+    strategy_states: dict[str, dict] = {}
     for strategy in STRATEGY_CONFIG:
         print(f"\n  ── {strategy} ──")
         state = load_state(strategy)
@@ -1011,7 +1015,10 @@ def main() -> None:
             state = update_mr(state, today_prices, date_str, signals, strategy)
             state = update_c7(state, today_prices, date_str, strategy)
             state["last_processed_date"] = date_str
-            save_state(state)
+            if not args.dry_run:
+                save_state(state)
+
+        strategy_states[strategy] = state
 
         # Estimate equity
         mr_mkt = sum(
@@ -1022,16 +1029,20 @@ def main() -> None:
         print(f"    Estimated equity: ${equity:,.0f}  cash: ${state['cash']:,.0f}")
 
         target_book = generate_target_book(state, equity, date_str, strategy)
-        if not target_book.empty:
-            save_unified_target_book(strategy, target_book)
-        # Only write stock_level on first run for this date (avoid overwriting correct data)
-        if not already_done:
-            save_stock_level_row(state, today_prices, date_str, equity)
+        if not args.dry_run:
+            if not target_book.empty:
+                save_unified_target_book(strategy, target_book)
+            # Only write stock_level on first run for this date (avoid overwriting correct data)
+            if not already_done:
+                save_stock_level_row(state, today_prices, date_str, equity)
 
     # Submit orders — use live Alpaca equity for correct sizing
     print(f"\n[5/5] Submitting orders...")
     for strategy in STRATEGY_CONFIG:
-        state = load_state(strategy)
+        # Reuse the in-memory state from [4/5] rather than reloading from disk: in
+        # dry-run mode nothing was persisted, so a fresh load_state() here would
+        # silently discard today's simulated MR/C7 update and submit stale orders.
+        state = strategy_states[strategy]
         key, secret = ALPACA_KEYS[strategy]
         if not key or not secret:
             print(f"  [{strategy}] No API keys — skipping.")
