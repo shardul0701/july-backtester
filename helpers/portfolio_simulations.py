@@ -186,6 +186,12 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
     # Sub-bar resolution: opt-in and requires finer-resolution data to be supplied.
     # Off / no data -> stop fills behave exactly as before (no-op).
     _intrabar_on = bool(CONFIG.get("intrabar_resolution", False)) and intrabar_data is not None
+    # Gap-aware stop fills: when a bar OPENS through the stop, fill at the open
+    # rather than optimistically at the stop level. Default OFF so the engine
+    # matches the reference/upstream contract; this project turns it ON in
+    # config.py (booking a level the market never traded inflates results --
+    # measured on the MR book: 12-16% of stop exits gapped through, worst -92%).
+    _gap_aware = bool(CONFIG.get("gap_aware_stop_fills", False))
 
     # Dynamic HTB rate compounding based on timeframe (fixes issue #55)
     bars_per_year = get_bars_per_year(CONFIG)
@@ -488,20 +494,22 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     # calls _update_trailing_atr_stop, which arms + seeds off THIS same
                     # bar's High when the target was reached (idempotent on "hold").
                 elif pd.notna(current_low) and current_low <= pos['stop_loss_level']:
+                    raw_exit_price = pos['stop_loss_level']
                     # A stop is an instruction to sell at market once the level
                     # trades, not a limit at the level. When the bar OPENS below
-                    # the stop the fill is the open -- booking the stop level on
-                    # a gap-down is not conservative, it is a price that was
-                    # never available. Mean reversion is hit hardest: it buys the
-                    # most-oversold names in the universe, so an overnight gap
-                    # through the stop is its native failure mode, not a tail
-                    # case. Measured on the MR book: 12-16% of stop exits gapped
-                    # through, worst single gap -92%.
-                    current_open = portfolio_data[symbol].loc[date].get('Open')
-                    if pd.notna(current_open) and current_open < pos['stop_loss_level']:
-                        raw_exit_price = current_open
-                    else:
-                        raw_exit_price = pos['stop_loss_level']
+                    # the stop, the stop level is a price that was never
+                    # available, so fill at the open instead (opt-in via
+                    # `gap_aware_stop_fills`). Excluded once an ATR trail has
+                    # armed, for the same parity reason as the sub-bar
+                    # refinement below: the reference trailing mechanic always
+                    # fills at the exact trail level, and an armed trail is
+                    # seeded from an intrabar high the price already traversed,
+                    # so today's open is not a gap through it.
+                    if (_gap_aware and not (stop_config.get("type") == "trailing_atr"
+                                            and pos.get('trail_armed', False))):
+                        current_open = portfolio_data[symbol].loc[date].get('Open')
+                        if pd.notna(current_open) and current_open < pos['stop_loss_level']:
+                            raw_exit_price = current_open
                     exit_date = date
                     exit_reason = f"Stop Loss ({stop_config['type']})"
                     # Sub-bar resolution: refine the fill from finer-resolution bars

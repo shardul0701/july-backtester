@@ -87,6 +87,10 @@ def _sig(df, pairs):
 
 
 _BASE_CFG = {
+    # Reference/upstream parity: stops fill at the exact stop level. This
+    # project defaults `gap_aware_stop_fills` ON in config.py, so pin it off
+    # here -- these assertions encode the reference contract, not our policy.
+    "gap_aware_stop_fills": False,
     "slippage_pct": 0.0005,
     "commission_per_share": 0.002,
     "execution_time": "close",

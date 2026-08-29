@@ -114,6 +114,9 @@ class TestEngineIntegration:
             "max_portfolio_heat": 1.0, "entry_priority": "alphabetical",
             "exclude_open_positions": False, "include_delisted": False,
             "intrabar_resolution": intrabar_on,
+            # Parity pin: this file asserts the sub-bar contract, not this
+            # project's gap_aware_stop_fills policy (ON in config.py).
+            "gap_aware_stop_fills": False,
             "instruments": {"default_asset_class": "equity", "overrides": {}},
         }
         with patch.dict("config.CONFIG", cfg, clear=False):

@@ -25,6 +25,10 @@ from helpers import continuous_contract as cc
 from services import futures_service as fs
 
 _CFG = {
+    # Reference/upstream parity: stops fill at the exact stop level. This
+    # project defaults `gap_aware_stop_fills` ON in config.py, so pin it off
+    # here -- these assertions encode the reference contract, not our policy.
+    "gap_aware_stop_fills": False,
     "slippage_pct": 0.0, "commission_per_share": 0.0, "execution_time": "close",
     "risk_free_rate": 0.05, "htb_rate_annual": 0.0, "volume_impact_coeff": 0.0,
     "max_pct_adv": 0.0, "position_sizing_method": "fixed", "target_risk_per_trade": 0.02,

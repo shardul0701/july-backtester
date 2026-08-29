@@ -371,6 +371,16 @@ CONFIG = {
     "intrabar_timeframe": "MIN",     # "MIN" | "H"
     "intrabar_multiplier": 1,        # e.g. 5 for 5-minute sub-bars
 
+    # Daily-resolution fallback for the same problem. When no sub-bar data is
+    # available (the equity books have none), a bar that OPENS through the stop
+    # still tells us the stop level never traded: fill at the open instead.
+    # Engine default is False so the engine matches the reference contract; this
+    # project runs it ON because booking an unavailable price inflates results
+    # -- measured on the MR book, 12-16% of stop exits gapped through the stop,
+    # worst single gap -92%. Does not apply once an ATR trail has armed (the
+    # trail is seeded from an intrabar high the price already traversed).
+    "gap_aware_stop_fills": True,
+
     # ============================================================
     # SECTION 29: FUTURES MAINTENANCE MARGIN
     # ============================================================
