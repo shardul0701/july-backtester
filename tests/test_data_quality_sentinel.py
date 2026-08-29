@@ -727,6 +727,123 @@ class TestJumpMagnitude:
         assert validate_ohlcv(_frame(_clean()), "CLEAN", "D")[0] == 100.0
 
 
+class TestJumpDirectionSymmetry:
+    """CHECK 4 weighed `pct_change().abs()`, which is unbounded above and
+    bounded at 1.0 below (#368). A fall could never reach one decade however
+    far it fell, so the escalation could only ever see upward moves:
+
+        unadjusted REVERSE split  $1 -> $1,000     +99,900%   68, demoted
+        unadjusted FORWARD split  $1,000 -> $1        -100%   98, passed
+
+    Same corporate action, mirrored, and the forward split is the more common
+    of the two. The measure is now max(a,b)/min(a,b) - 1, which is the SAME
+    number as |pct_change| for an upward move -- both are p/prev - 1 -- so
+    every threshold #360 calibrated is unchanged on the up side by
+    construction. Every test here is a mirror pair, and the up-side half of
+    each one is a no-regression pin as much as the down-side half is a fix.
+    """
+
+    @staticmethod
+    def _step(a, b, n=150):
+        return _frame([a] * n + [b] * n)
+
+    def test_a_forward_split_scores_what_its_reverse_mirror_scores(self):
+        up, u_issues = validate_ohlcv(self._step(1.0, 1000.0), "REVERSE", "D")
+        down, d_issues = validate_ohlcv(self._step(1000.0, 1.0), "FORWARD", "D")
+        assert up == down, (up, down, u_issues, d_issues)
+        assert down == 100.0 - 2 - 2 * _JUMP_MAGNITUDE_PER_DECADE, d_issues
+        assert any("Extreme price jump" in i for i in d_issues), d_issues
+        assert down < 80.0
+
+    def test_a_one_way_collapse_is_no_longer_invisible(self):
+        """$2 -> $2e-06 and it stays there. Untradeable, prints as exactly
+        -100%, and CHECK 7 cannot see it either -- that check keys on exactly
+        1e-06, the ELRNF blind spot, in the one-way direction. It scored 98
+        and passed the gate. A round-trip through the same floor was already
+        caught, because its UP leg carried the magnitude."""
+        one_way, ow_issues = validate_ohlcv(self._step(2.0, 2e-06), "ONEWAY", "D")
+        assert any("Extreme price jump" in i for i in ow_issues), ow_issues
+        assert one_way == 100.0 - 2 - _JUMP_MAGNITUDE_CAP, (one_way, ow_issues)
+        assert one_way < 80.0
+
+    def test_the_up_side_keeps_the_numbers_360_calibrated(self):
+        """The no-regression pin for the whole change. max/min - 1 is exactly
+        what pct_change returns for an upward move, so all four thresholds
+        #360 states keep the score they were calibrated to."""
+        assert validate_ohlcv(self._step(10.0, 40.0), "H300", "D")[0] == 98.0
+        assert validate_ohlcv(self._step(1.0, 10.5), "U950", "D")[0] == 98.0
+        assert (validate_ohlcv(self._step(1.0, 11.5), "O1050", "D")[0]
+                == 100.0 - 2 - _JUMP_MAGNITUDE_PER_DECADE)
+        assert (validate_ohlcv(self._step(1.0, 200.0), "SPLIT", "D")[0]
+                == 100.0 - 2 - 2 * _JUMP_MAGNITUDE_PER_DECADE)
+
+    def test_honest_falls_stay_free(self):
+        """The mirror of #360's `test_an_ordinary_split_ratio_is_untouched`.
+        A 4:1 split read the other way round is -75%; a -90% crash is the
+        mirror of a +900% biotech binary. Neither is a decade under a
+        symmetric measure either, so both keep exactly today's 2-point count
+        demerit and gain no issue string. Symmetry must not mean charging
+        more -- it means charging the same thing in both directions."""
+        for a, b, name in ((40.0, 10.0, "SPLIT41"), (10.0, 1.0, "CRASH90")):
+            score, issues = validate_ohlcv(self._step(a, b), name, "D")
+            assert any("Price jumps" in i for i in issues), (name, issues)
+            assert not any("Extreme" in i for i in issues), (name, issues)
+            assert score == 98.0, (name, score, issues)
+
+    def test_the_decade_boundary_sits_in_the_same_place_both_ways(self):
+        """`test_the_one_decade_boundary` straddles it going up at
+        +950%/+1,050%. The same two ratios read as falls have to straddle it
+        in exactly the same place, or the measure is symmetric in name only."""
+        under, u_issues = validate_ohlcv(self._step(10.5, 1.0), "DUNDER", "D")
+        over, o_issues = validate_ohlcv(self._step(11.5, 1.0), "DOVER", "D")
+        assert under == 98.0, (under, u_issues)
+        assert not any("Extreme" in i for i in u_issues), u_issues
+        assert over == 100.0 - 2 - _JUMP_MAGNITUDE_PER_DECADE, (over, o_issues)
+        assert any("Extreme" in i for i in o_issues), o_issues
+
+    def test_a_zero_close_does_not_crash_the_scorer(self):
+        """The mirror of `test_an_infinite_return_does_not_crash_the_scorer`,
+        and a hole this check did not have before #368. A prev_close of 0
+        makes pct_change return inf and isfinite already dropped it. A CLOSE
+        of exactly 0 against a positive previous close returns exactly -1.0 --
+        finite, past the 20% threshold, eligible -- while max/min is infinite,
+        and `int(np.floor(np.log10(inf)))` is an OverflowError out of a
+        function whose contract is to survive bad data and report on it."""
+        score, issues = validate_ohlcv(self._step(5.0, 0.0), "ZEROCLOSE", "D")
+        assert 0.0 <= score <= 100.0
+        assert not any("Extreme price jump" in i for i in issues), issues
+
+    def test_the_issue_names_the_direction_it_measured(self):
+        """The magnitude is symmetric; the series is not. The string is read
+        by someone deciding which corporate action to go looking for, and
+        printing a fall low-end-first as `$1 -> $1000` sends them after a
+        reverse split that never happened."""
+        _, issues = validate_ohlcv(self._step(1000.0, 1.0), "FORWARD", "D")
+        extreme = next(i for i in issues if "Extreme price jump" in i)
+        assert "$1000 -> $1" in extreme, extreme
+        assert "fall" in extreme and "rise" not in extreme, extreme
+        assert "1,000x" in extreme, extreme
+        assert "2 decades" in extreme, extreme
+
+        _, up_issues = validate_ohlcv(self._step(1.0, 1000.0), "REVERSE", "D")
+        up_extreme = next(i for i in up_issues if "Extreme price jump" in i)
+        assert "$1 -> $1000" in up_extreme, up_extreme
+        assert "rise" in up_extreme, up_extreme
+        assert "1,000x" in up_extreme, up_extreme
+
+    def test_row_order_still_does_not_change_the_score(self):
+        """#360 fixed this with a sort, because read backwards a +19,900%
+        jump prints as -99.5% and escaped the escalation. A direction-blind
+        measure makes the sort belt-and-braces for CHECK 4 rather than
+        load-bearing -- but the sort is what CHECKS 6 and 8 need too, so this
+        pins that the two fixes agree instead of one masking the other."""
+        df = self._step(1.0, 200.0)
+        asc, a_issues = validate_ohlcv(df, "ASC", "D")
+        desc, d_issues = validate_ohlcv(df.iloc[::-1], "DESC", "D")
+        assert asc == desc, (asc, desc)
+        assert sorted(a_issues) == sorted(d_issues)
+
+
 class TestDuplicateColumnFold:
     """The #358 canonical fold keeps the FIRST of two labels that collide
     after `capitalize()` (#364). That matches services/csv_service.py, which

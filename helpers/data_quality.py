@@ -43,6 +43,28 @@ _PRICE_JUMP_THRESHOLD = 0.20
 # the SAME 144 corpus series and none leaves anything above the gate, so the
 # mildest is taken. It is the easiest to defend the day someone asks why a
 # series lost points.
+#
+# --- issue #368 ---
+# `worst` is max(a,b)/min(a,b) - 1, not `pct_change().abs()`. pct_change is
+# unbounded above and bounded at 1.0 below, so a FALL can never reach one
+# decade however far it falls, and the escalation could only ever see upward
+# moves. An unadjusted FORWARD split -- the more common corporate action of
+# the two -- scored 98 and passed while its mirror-image REVERSE split scored
+# 68. A one-way collapse from $2 to $2e-06 that never comes back is
+# untradeable, prints as exactly -100%, and passed at 98 with CHECK 7 blind to
+# it as well: that check keys on exactly 1e-06. Round-trips through the same
+# floor were already caught, because their UP leg carried the magnitude.
+#
+# max/min - 1 is the SAME number as |pct_change| for an upward move -- both
+# are p/prev - 1 -- so every threshold above keeps the value it was calibrated
+# to, by construction rather than by re-measurement, and a fall is weighed as
+# the mirror-image rise it would have been had the series been read the other
+# way round. The bare ratio would NOT do: it shifts every magnitude up by a
+# decade, so a -90% crash and a +900% biotech binary become one decade and get
+# charged, and it needs the floor moved to 2 to leave them alone. Eligibility
+# stays on |pct_change| > 20%, which is very slightly tighter downward (a
+# ratio of 1.25) than upward (1.2); a move that fails it has a ratio of at
+# most 1.25, which is zero decades, so the escalation loses nothing to that.
 _JUMP_MAGNITUDE_PER_DECADE = 15
 _JUMP_MAGNITUDE_CAP = 45
 
@@ -312,11 +334,23 @@ def validate_ohlcv(df: pd.DataFrame, symbol: str, timeframe: str = "D",
             lo_end = np.minimum(prices, prev)
             rets = returns.to_numpy(dtype="float64")
 
-            # isfinite, because a prev_close of exactly 0 makes pct_change
-            # return inf and np.log10(inf) is not an int -- OverflowError. An
-            # infinite return also has no magnitude to weigh: it is a zero
-            # price, which is CHECK 2's axis, not a split.
+            # The magnitude weighed below is max/min - 1, not the return
+            # (#368). Identical to `rets` for an upward move -- both are
+            # p/prev - 1 -- and the mirror-image magnitude for a downward one,
+            # which `rets` cannot express at all: it is bounded at 1.0 below.
+            with np.errstate(divide="ignore", invalid="ignore"):
+                magnitude = np.where(lo_end > 0, hi_end / lo_end - 1.0, np.nan)
+
+            # isfinite on BOTH, because the two catch different bars and each
+            # is a zero price rather than a split -- CHECK 2's axis, not this
+            # one. A prev_close of exactly 0 makes pct_change return inf, and
+            # np.log10(inf) is not an int (OverflowError). A CLOSE of exactly
+            # 0 against a positive previous close makes pct_change return
+            # exactly -1.0, which is finite and passes the 20% threshold,
+            # while max/min is infinite -- the same OverflowError from the
+            # other side, and one this check did not have before #368.
             eligible = (rets > _PRICE_JUMP_THRESHOLD) & np.isfinite(rets)
+            eligible &= np.isfinite(magnitude)
             eligible &= hi_end >= _JUMP_SUBPENNY_PRICE
             if isinstance(close.index, pd.DatetimeIndex):
                 spacing = close.index.to_series().diff().dt.days.to_numpy(
@@ -324,26 +358,32 @@ def validate_ohlcv(df: pd.DataFrame, symbol: str, timeframe: str = "D",
                 eligible &= spacing <= _JUMP_MAX_BAR_GAP_DAYS
 
             if eligible.any():
-                pos = int(np.argmax(np.where(eligible, rets, -np.inf)))
-                worst = float(rets[pos])
-                # floor(log10) of a RATIO: 10.0 (+1,000%) is one decade, 100.0
-                # (+10,000%) two. Guarded against worst <= 0, which pct_change
-                # cannot produce here (the threshold is 0.20) but which a
-                # future threshold change could.
+                pos = int(np.argmax(np.where(eligible, magnitude, -np.inf)))
+                worst = float(magnitude[pos])
+                # floor(log10) of a RATIO: 10.0 (an 11x move either way) is
+                # one decade, 100.0 (101x) two. Guarded against worst <= 0,
+                # which the ratio cannot produce here -- the threshold is
+                # 0.20, so max/min is above 1.2 -- but which a future
+                # threshold change could.
                 decades = int(np.floor(np.log10(worst))) if worst > 0 else 0
                 if decades >= 1:
                     demerits += min(_JUMP_MAGNITUDE_CAP,
                                     decades * _JUMP_MAGNITUDE_PER_DECADE)
                     at = close.index[pos]
-                    lo = float(lo_end[pos])
-                    hi = float(hi_end[pos])
+                    # CHRONOLOGICAL, not lo -> hi. The magnitude is symmetric;
+                    # the series is not, and printing a fall as "$1 -> $200"
+                    # names the wrong corporate action (#368).
+                    was = float(prev[pos])
+                    now = float(prices[pos])
+                    signed = (now / was - 1.0) * 100.0
                     when = at.strftime("%Y-%m-%d") if hasattr(at, "strftime") else str(at)
                     issues.append(
-                        f"Extreme price jump: {worst * 100:,.0f}% on {when} "
-                        f"(${lo:.6g} -> ${hi:.6g}) — {decades} decades past "
-                        f"{_PRICE_JUMP_THRESHOLD * 100:.0f}%, on ADJACENT bars "
-                        f"and above ${_JUMP_SUBPENNY_PRICE:g}, so neither a "
-                        f"coverage gap nor tick-grid bounce; consistent with "
+                        f"Extreme price jump: {signed:+,.0f}% on {when} "
+                        f"(${was:.6g} -> ${now:.6g}) — a {worst + 1.0:,.0f}x "
+                        f"{'rise' if now > was else 'fall'}, {decades} decades "
+                        f"past {_PRICE_JUMP_THRESHOLD * 100:.0f}%, on ADJACENT "
+                        f"bars and above ${_JUMP_SUBPENNY_PRICE:g}, so neither "
+                        f"a coverage gap nor tick-grid bounce; consistent with "
                         f"an unadjusted split (#360)")
 
     # --- CHECK 5: Zero volume days ---
