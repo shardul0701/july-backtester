@@ -56,6 +56,30 @@ def _load_equity_file(path: Path) -> "pd.Series | None":
         return None
 
 
+def _load_benchmark_file(path: Path) -> "pd.DataFrame | None":
+    """Load a local benchmark CSV as a Benchmark_Price dataframe."""
+    if not path.is_file():
+        return None
+    try:
+        df = pd.read_csv(path)
+        date_col = "date" if "date" in df.columns else df.columns[0]
+        price_col = "Benchmark_Price" if "Benchmark_Price" in df.columns else None
+        if price_col is None:
+            for candidate in ["adj_close", "close", "price", "Equity"]:
+                if candidate in df.columns:
+                    price_col = candidate
+                    break
+        if price_col is None:
+            return None
+        out = df[[date_col, price_col]].rename(columns={date_col: "date", price_col: "Benchmark_Price"})
+        out["date"] = pd.to_datetime(out["date"]).dt.normalize()
+        out["Benchmark_Price"] = pd.to_numeric(out["Benchmark_Price"], errors="coerce")
+        out = out.dropna().drop_duplicates("date", keep="last").sort_values("date")
+        return out.set_index("date")
+    except Exception:
+        return None
+
+
 def _load_bars_per_year(run_dir: Path) -> int | None:
     """Read timeframe/timeframe_multiplier from config_snapshot.json and return bars_per_year.
 
@@ -137,6 +161,38 @@ def _match_strategy_verdict(verdicts: list[dict], strategy_stem: str,
     return None
 
 
+def _load_mc_block_size(run_dir: Path) -> int | None:
+    """Read mc_block_size from config_snapshot.json in a run directory."""
+    snapshot_path = run_dir / "config_snapshot.json"
+    if not snapshot_path.is_file():
+        return None
+    try:
+        with open(snapshot_path, "r", encoding="utf-8") as fh:
+            snapshot = json.load(fh)
+        val = snapshot.get("mc_block_size")
+        if val is not None and int(val) >= 0:
+            return int(val)
+    except (json.JSONDecodeError, ValueError, TypeError):
+        pass
+    return None
+
+
+def _load_mc_use_pct(run_dir: Path) -> bool | None:
+    """Read mc_use_percentage_returns from config_snapshot.json in a run directory."""
+    snapshot_path = run_dir / "config_snapshot.json"
+    if not snapshot_path.is_file():
+        return None
+    try:
+        with open(snapshot_path, "r", encoding="utf-8") as fh:
+            snapshot = json.load(fh)
+        val = snapshot.get("mc_use_percentage_returns")
+        if val is not None:
+            return bool(val)
+    except (json.JSONDecodeError, ValueError, TypeError):
+        pass
+    return None
+
+
 def _load_wfa_split_ratio(run_dir: Path) -> float | None:
     """Read wfa_split_ratio from config_snapshot.json in a run directory.
 
@@ -192,15 +248,40 @@ def main():
         default=None,
         help="Custom name for the generated PDF/Markdown report and its parent folder. If not provided, the CSV filename will be used.",
     )
+    parser.add_argument(
+        "--benchmark-ticker",
+        type=str,
+        default=BENCHMARK_TICKER,
+        help=f"Benchmark ticker for report charts (default: {BENCHMARK_TICKER}).",
+    )
+    parser.add_argument(
+        "--benchmark-csv",
+        type=str,
+        default=None,
+        help="Optional local benchmark CSV with date and Benchmark_Price/adj_close/close columns.",
+    )
+    parser.add_argument(
+        "--rolling-window",
+        type=int,
+        default=ROLLING_WINDOW,
+        help=f"Rolling metric window in trades/bars (default: {ROLLING_WINDOW}).",
+    )
+    parser.add_argument(
+        "--rolling-sharpe-max-abs",
+        type=float,
+        default=None,
+        help="Optional absolute cap for rolling Sharpe display; values above this are masked.",
+    )
     args = parser.parse_args()
 
     # Base config shared across both modes (BASE_OUTPUT_DIRECTORY set per mode below)
     base_config = {
         'INITIAL_EQUITY': args.equity,
-        'BENCHMARK_TICKER': BENCHMARK_TICKER,
+        'BENCHMARK_TICKER': args.benchmark_ticker,
         'RISK_FREE_RATE': RISK_FREE_RATE,
         'TRADING_DAYS_PER_YEAR': TRADING_DAYS_PER_YEAR,
-        'ROLLING_WINDOW': ROLLING_WINDOW,
+        'ROLLING_WINDOW': args.rolling_window,
+        'ROLLING_SHARPE_MAX_ABS': args.rolling_sharpe_max_abs,
         'TOP_N_LOSING_SYMBOLS': TOP_N_LOSING_SYMBOLS,
         'PROFITABLE_PF_THRESHOLD': PROFITABLE_PF_THRESHOLD,
         'UNPROFITABLE_PF_THRESHOLD': UNPROFITABLE_PF_THRESHOLD,
@@ -247,6 +328,8 @@ def main():
         risk_free_rate = _load_risk_free_rate(run_dir)
         if risk_free_rate is not None:
             print(f"Risk-free rate loaded from config_snapshot.json: {risk_free_rate}")
+        mc_block_size = _load_mc_block_size(run_dir)
+        mc_use_pct = _load_mc_use_pct(run_dir)
 
         output_dir = str(run_dir / "detailed_reports")
         _noise_csv = run_dir / "noise_sample_data.csv"
@@ -260,6 +343,14 @@ def main():
             config_params['TRADING_DAYS_PER_YEAR'] = bars_per_year
         if risk_free_rate is not None:
             config_params['RISK_FREE_RATE'] = risk_free_rate
+        if mc_block_size is not None:
+            config_params['MC_BLOCK_SIZE'] = mc_block_size
+        if mc_use_pct is not None:
+            config_params['MC_USE_PERCENTAGE_RETURNS'] = mc_use_pct
+        if args.benchmark_csv:
+            benchmark_df = _load_benchmark_file(Path(args.benchmark_csv))
+            if benchmark_df is not None:
+                config_params['BENCHMARK_DF'] = benchmark_df
         _strategy_verdicts = _load_strategy_verdicts(run_dir)
         if _strategy_verdicts:
             print(f"Loaded {len(_strategy_verdicts)} strategy verdicts from llm_verdict.json")
@@ -308,6 +399,8 @@ def main():
         wfa_ratio = None
         bars_per_year = None
         risk_free_rate = None
+        mc_block_size_single = None
+        mc_use_pct_single = None
         csv_parts = Path(csv_path).parts
         if "analyzer_csvs" in csv_parts:
             idx = csv_parts.index("analyzer_csvs")
@@ -321,6 +414,8 @@ def main():
             risk_free_rate = _load_risk_free_rate(_run_dir)
             if risk_free_rate is not None:
                 print(f"Risk-free rate loaded from config_snapshot.json: {risk_free_rate}")
+            mc_block_size_single = _load_mc_block_size(_run_dir)
+            mc_use_pct_single = _load_mc_use_pct(_run_dir)
 
         if args.report_name:
             report_name = args.report_name
@@ -351,6 +446,14 @@ def main():
             config_params['TRADING_DAYS_PER_YEAR'] = bars_per_year
         if risk_free_rate is not None:
             config_params['RISK_FREE_RATE'] = risk_free_rate
+        if mc_block_size_single is not None:
+            config_params['MC_BLOCK_SIZE'] = mc_block_size_single
+        if mc_use_pct_single is not None:
+            config_params['MC_USE_PERCENTAGE_RETURNS'] = mc_use_pct_single
+        if args.benchmark_csv:
+            benchmark_df = _load_benchmark_file(Path(args.benchmark_csv))
+            if benchmark_df is not None:
+                config_params['BENCHMARK_DF'] = benchmark_df
         generate_trade_report(trades_df, output_dir, report_name, config_params)
 
 

@@ -13,6 +13,7 @@ MARKDOWN_PLOT_FORMAT = 'png'
 # --- Analysis Parameters ---
 INITIAL_EQUITY = 50000
 ROLLING_WINDOW = 50
+ROLLING_SHARPE_MAX_ABS = None
 TOP_N_LOSING_SYMBOLS = 5
 PROFITABLE_PF_THRESHOLD = 1.5
 UNPROFITABLE_PF_THRESHOLD = 1.0
@@ -81,6 +82,10 @@ MC_SIMULATIONS = 1000  # Number of simulation paths to generate
 MC_USE_PERCENTAGE_RETURNS = os.environ.get("MC_USE_PCT_RETURNS", "") == "1"
 MC_PERCENTILES = [1, 5, 10, 25, 50, 75, 90, 95, 99]
 MC_DRAWDOWN_AS_NEGATIVE = True # For display consistency with Amibroker's table
+# Block bootstrap: 0 = IID (default). Positive int = block size (months/trades per block).
+# Preserves regime clustering so bear-market months stay together rather than being
+# scattered across random paths. Use floor(sqrt(N)) as a rule of thumb.
+MC_BLOCK_SIZE = int(os.environ.get("MC_BLOCK_SIZE", "0"))
 
 # NOTE: The base output directory is NOT created here automatically.
 # It's assumed to exist or be creatable by the main script.

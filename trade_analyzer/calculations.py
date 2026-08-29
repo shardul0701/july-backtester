@@ -364,6 +364,9 @@ def calculate_rolling_metrics(
             annualization_factor = np.sqrt(trades_per_year)
             mar_per_trade = 0.0 # Simplified for rolling per-trade Sharpe
             rolling_sharpe = ((rolling_mean_ret - mar_per_trade) / rolling_std_ret.replace(0, np.nan)) * annualization_factor
+            max_abs = getattr(config, "ROLLING_SHARPE_MAX_ABS", None)
+            if max_abs is not None and max_abs > 0:
+                rolling_sharpe = rolling_sharpe.mask(rolling_sharpe.abs() > float(max_abs))
             trades_df['Rolling_Sharpe'] = rolling_sharpe
     except Exception as e:
         print(f"ERROR calculating rolling metrics: {e}")
@@ -376,7 +379,8 @@ def run_monte_carlo_simulation(
     initial_equity: float,
     duration_years: float,
     use_percentage_returns: bool = False,
-    drawdown_as_negative: bool = False
+    drawdown_as_negative: bool = False,
+    block_size: int = 0,
 ) -> dict:
     results = {}
     if not isinstance(trade_data, pd.Series) or trade_data.empty or num_trades_per_sim < 1 or num_simulations < 1:
@@ -399,8 +403,19 @@ def run_monte_carlo_simulation(
     lowest_equities = np.zeros(num_simulations)
     percentiles_to_calculate = config.MC_PERCENTILES
 
+    _block = max(0, int(block_size))
+
     for i in tqdm(range(num_simulations), desc="MC Simulations"):
-        sampled_trades = np.random.choice(trade_values, size=num_trades_per_sim, replace=True)
+        if _block > 1:
+            n = len(trade_values)
+            n_blocks = int(np.ceil(num_trades_per_sim / _block))
+            starts = np.random.randint(0, n, size=n_blocks)
+            sampled_trades = np.concatenate([
+                np.take(trade_values, np.arange(s, s + _block) % n)
+                for s in starts
+            ])[:num_trades_per_sim]
+        else:
+            sampled_trades = np.random.choice(trade_values, size=num_trades_per_sim, replace=True)
         equity_path = np.zeros(num_trades_per_sim + 1)
         equity_path[0] = initial_equity
         current_equity = initial_equity

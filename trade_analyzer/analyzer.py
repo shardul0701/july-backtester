@@ -66,6 +66,7 @@ def _run_analysis(trades_df_raw: pd.DataFrame, output_dir: str, report_name: str
     mc_use_pct = config_params.get('MC_USE_PERCENTAGE_RETURNS', config.MC_USE_PERCENTAGE_RETURNS)
     mc_simulations = config_params.get('MC_SIMULATIONS', config.MC_SIMULATIONS)
     mc_dd_neg = config_params.get('MC_DRAWDOWN_AS_NEGATIVE', config.MC_DRAWDOWN_AS_NEGATIVE)
+    mc_block_size = config_params.get('MC_BLOCK_SIZE', config.MC_BLOCK_SIZE)
     wfa_split_ratio = config_params.get('WFA_SPLIT_RATIO', getattr(config, 'WFA_SPLIT_RATIO', None))
     unprofitable_pf = config_params.get('UNPROFITABLE_PF_THRESHOLD', config.UNPROFITABLE_PF_THRESHOLD)
     profitable_pf = config_params.get('PROFITABLE_PF_THRESHOLD', config.PROFITABLE_PF_THRESHOLD)
@@ -152,7 +153,13 @@ def _run_analysis(trades_df_raw: pd.DataFrame, output_dir: str, report_name: str
                 print(f"WFA Warning: could not compute WFA metrics: {wfa_err}")
 
         daily_equity, daily_returns = data_handler.calculate_daily_returns(trades_df, initial_equity)
-        benchmark_df = data_handler.download_benchmark_data(benchmark_ticker, start_dt, end_dt)
+        benchmark_override = config_params.get('BENCHMARK_DF')
+        if benchmark_override is not None and not benchmark_override.empty:
+            benchmark_df = benchmark_override.copy()
+            benchmark_df.index = pd.to_datetime(benchmark_df.index)
+            benchmark_df = benchmark_df.loc[(benchmark_df.index >= start_dt) & (benchmark_df.index <= end_dt)]
+        else:
+            benchmark_df = data_handler.download_benchmark_data(benchmark_ticker, start_dt, end_dt)
         if benchmark_df is not None and not benchmark_df.empty:
             benchmark_daily_ret_raw = benchmark_df['Benchmark_Price'].pct_change()
             if not daily_returns.empty:
@@ -368,7 +375,13 @@ def _run_analysis(trades_df_raw: pd.DataFrame, output_dir: str, report_name: str
             data_source_used = "None"
 
             if mc_use_pct:
-                if '% Profit' in trades_df.columns and pd.api.types.is_numeric_dtype(trades_df['% Profit']):
+                if 'MC_Return_Pct' in trades_df.columns and pd.api.types.is_numeric_dtype(trades_df['MC_Return_Pct']):
+                    # Per-trade return already scaled to equity-fraction risked (e.g. allocation_per_trade),
+                    # for compounding/NAV-sized books where '% Profit' is the raw position-notional return
+                    # and would over-compound if applied directly to 100% of equity per trade.
+                    trade_data_for_mc = trades_df['MC_Return_Pct'].copy()
+                    data_source_used = "'MC_Return_Pct'"
+                elif '% Profit' in trades_df.columns and pd.api.types.is_numeric_dtype(trades_df['% Profit']):
                     trade_data_for_mc = trades_df['% Profit'].copy()
                     data_source_used = "'% Profit'"
                 else:
@@ -388,7 +401,8 @@ def _run_analysis(trades_df_raw: pd.DataFrame, output_dir: str, report_name: str
                     initial_equity=initial_equity,
                     duration_years=total_duration_years,
                     use_percentage_returns=mc_use_pct,
-                    drawdown_as_negative=mc_dd_neg
+                    drawdown_as_negative=mc_dd_neg,
+                    block_size=mc_block_size,
                 )
             else:
                 print(f"MC Skipping: No valid trade data found in source: {data_source_used}")

@@ -104,6 +104,7 @@ def draw_dataframe_table(
     header_bg: Optional[str] = None,
     alt_row: bool = True,
     font_size: int = 8,
+    row_scale: float = 1.3,
 ) -> None:
     """Render *df* as a styled matplotlib table inside *ax*."""
     T = _T()
@@ -137,7 +138,7 @@ def draw_dataframe_table(
     )
     tbl.auto_set_font_size(False)
     tbl.set_fontsize(font_size)
-    tbl.scale(1.0, 1.3)
+    tbl.scale(1.0, row_scale)
 
     # Style header
     for col_idx in range(ncols):
@@ -308,7 +309,12 @@ def build_executive_summary_page(
                         wfa_split_date=wfa_split_date)
     _style_ax(ax_eq, title='Equity vs Benchmark', ylabel='Portfolio Value ($)')
     ax_eq.tick_params(axis='x', labelsize=7, rotation=20)
-    _plotting._fmt_dollar(ax_eq)
+    _eq_range = daily_equity.max() / max(daily_equity.min(), 1) if not daily_equity.empty else 1
+    if _eq_range > 10:
+        ax_eq.set_yscale('log')
+        ax_eq.yaxis.set_major_formatter(mtick.FuncFormatter(lambda v, _: f'${v:,.0f}'))
+    else:
+        _plotting._fmt_dollar(ax_eq)
 
     # --- Row 2: Underwater —
     ax_uw = fig.add_subplot(gs[2])
@@ -674,6 +680,9 @@ def build_monte_carlo_page(
         ax_fan.plot(x, p50, color=T['primary'], linewidth=2.0, label='Median')
         ax_fan.axhline(initial_equity, color=T['neutral'], linestyle=':', linewidth=1.0,
                        label=f'Initial (${initial_equity:,.0f})')
+        _mc_range = p95.max() / max(p5[p5 > 0].min() if (p5 > 0).any() else initial_equity, 1)
+        if _mc_range > 10:
+            ax_fan.set_yscale('log')
         ax_fan.yaxis.set_major_formatter(
             mtick.FuncFormatter(lambda v, _: f'${v:,.0f}'))
         ax_fan.legend(fontsize=7, loc='upper left')
@@ -774,6 +783,10 @@ def build_wfa_page(
             if use_dates:
                 ax_eq.axvline(split_dt, color=T['negative'], linestyle='--',
                               linewidth=1.2, label=f'Split: {wfa_split_date}')
+            _eq_col = trades_df['Equity']
+            _wfa_range = _eq_col.max() / max(_eq_col.min(), 1) if len(_eq_col) > 0 else 1
+            if _wfa_range > 10:
+                ax_eq.set_yscale('log')
             ax_eq.yaxis.set_major_formatter(
                 mtick.FuncFormatter(lambda v, _: f'${v:,.0f}'))
             ax_eq.legend(fontsize=8, loc='upper left')
@@ -1133,7 +1146,9 @@ def _draw_mc_percentile_table(ax, mc_results: dict, initial_equity: float, mc_dd
         fmt_df = fmt_df.rename(columns=rename)
 
         col_widths = _auto_col_widths(fmt_df)
-        draw_dataframe_table(ax, fmt_df, col_widths=col_widths, font_size=7)
+        # Nine percentile rows plus a header require a compact table so the
+        # stamped page footer does not overlap P99 on the Monte Carlo page.
+        draw_dataframe_table(ax, fmt_df, col_widths=col_widths, font_size=7, row_scale=0.92)
     except Exception as e:
         ax.text(0.5, 0.5, f'Error rendering MC table: {e}',
                 ha='center', va='center', transform=ax.transAxes, fontsize=8)

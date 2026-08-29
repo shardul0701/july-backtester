@@ -1,6 +1,7 @@
 # data_handler.py
 import traceback
 from datetime import timedelta
+from pathlib import Path
 from typing import Tuple, Optional
 
 import numpy as np
@@ -294,6 +295,27 @@ def download_benchmark_data(ticker: str, start_date: pd.Timestamp, end_date: pd.
         return None
 
     data_clean = None # Initialize
+
+    # --- Prefer LOCAL merged data (Norgate+Polygon) over yfinance ----------------
+    # We already have a unified historical dataset on disk; use it so the benchmark
+    # works offline and matches the data the strategy was backtested on.
+    try:
+        local_path = (Path(__file__).resolve().parent.parent
+                      / "data" / "market_data" / "merged" / f"{ticker}.parquet")
+        if local_path.exists():
+            bench = pd.read_parquet(local_path, columns=["close"])
+            bench.index = pd.to_datetime(bench.index)
+            bench = bench.loc[(bench.index >= start_date - timedelta(days=7)) &
+                              (bench.index <= end_date + timedelta(days=2))]
+            bench = bench.rename(columns={"close": "Benchmark_Price"}).dropna()
+            bench.index.name = "Date"
+            if not bench.empty:
+                print(f"Benchmark {ticker}: loaded {len(bench)} rows from local merged dataset "
+                      f"({bench.index.min().date()} to {bench.index.max().date()}).")
+                return bench[["Benchmark_Price"]]
+            print(f"Benchmark {ticker}: local merged file had no rows in range; trying yfinance.")
+    except Exception as local_err:
+        print(f"Benchmark {ticker}: local merged load failed ({local_err}); trying yfinance.")
 
     try:
         # Extend download slightly for robustness & yfinance end date convention

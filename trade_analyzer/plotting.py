@@ -188,10 +188,20 @@ def plot_equity_and_drawdown(
 
         # — Equity subplot —
         if 'Equity' in trades_df and pd.api.types.is_numeric_dtype(trades_df['Equity']):
-            axes[0].plot(x, trades_df['Equity'], color=T['primary'], linewidth=1.6, label='Equity')
-            axes[0].fill_between(x, trades_df['Equity'].min() * 0.99, trades_df['Equity'],
-                                 color=T['primary'], alpha=0.06)
-            _fmt_dollar(axes[0])
+            eq = trades_df['Equity']
+            # Use log scale when equity range spans more than 10x
+            use_log = eq.max() / max(eq.min(), 1) > 10
+            axes[0].plot(x, eq, color=T['primary'], linewidth=1.6, label='Equity')
+            if use_log:
+                axes[0].set_yscale('log')
+                axes[0].yaxis.set_major_formatter(
+                    mtick.FuncFormatter(lambda v, _: f'${v:,.0f}'))
+                axes[0].fill_between(x, eq.min() * 0.99, eq,
+                                     color=T['primary'], alpha=0.06)
+            else:
+                axes[0].fill_between(x, eq.min() * 0.99, eq,
+                                     color=T['primary'], alpha=0.06)
+                _fmt_dollar(axes[0])
         else:
             axes[0].text(0.5, 0.5, 'Equity data not available',
                          ha='center', va='center', transform=axes[0].transAxes)
@@ -457,6 +467,8 @@ def plot_benchmark_comparison(
         bp_final = bp_final.loc[common2]
         bp_norm = (bp_final / bp_final.iloc[0]) * eq_final.iloc[0]
 
+        use_log = eq_final.max() / max(eq_final.min(), 1) > 10
+
         fig, ax = plt.subplots(figsize=config.FIG_FULL)
         ax.plot(eq_final.index, eq_final, color=T['primary'], linewidth=1.6, label='Strategy')
         ax.plot(bp_norm.index, bp_norm, color=T['accent'], linewidth=1.4,
@@ -465,7 +477,11 @@ def plot_benchmark_comparison(
                         where=(eq_final >= bp_norm), color=T['positive'], alpha=0.08)
         ax.fill_between(eq_final.index, bp_norm, eq_final,
                         where=(eq_final < bp_norm), color=T['negative'], alpha=0.08)
-        _fmt_dollar(ax)
+        if use_log:
+            ax.set_yscale('log')
+            ax.yaxis.set_major_formatter(mtick.FuncFormatter(lambda v, _: f'${v:,.0f}'))
+        else:
+            _fmt_dollar(ax)
         ax.legend()
         _style_ax(ax, title=title, xlabel='Date', ylabel='Portfolio Value ($)')
         fig.autofmt_xdate(rotation=25, ha='right')
@@ -570,6 +586,8 @@ def plot_mc_fan(
         p75 = equity_paths_df.quantile(0.75,  axis=1)
         p95 = equity_paths_df.quantile(0.95,  axis=1)
 
+        use_log = p95.max() / max(p5[p5 > 0].min() if (p5 > 0).any() else initial_equity, 1) > 10
+
         fig, ax = plt.subplots(figsize=config.FIG_FULL)
         # outer fan: 5–95
         ax.fill_between(x, p5, p95, color=T['mc_fill'], alpha=0.45, label='5–95th pct')
@@ -581,7 +599,11 @@ def plot_mc_fan(
         ax.axhline(initial_equity, color=T['neutral'], linestyle=':', linewidth=1.0,
                    label=f'Initial (${initial_equity:,.0f})')
 
-        _fmt_dollar(ax)
+        if use_log:
+            ax.set_yscale('log')
+            ax.yaxis.set_major_formatter(mtick.FuncFormatter(lambda v, _: f'${v:,.0f}'))
+        else:
+            _fmt_dollar(ax)
         ax.legend(loc='upper left')
         _style_ax(ax, title=f"{title} ({n_sims:,} sims)",
                   xlabel='Trade #', ylabel='Simulated Equity ($)')
