@@ -148,13 +148,11 @@ disabled or when membership intervals cannot be loaded:
 - With `data_provider: "merged"`, each membership spell resolves independently and the selected
   parquet eras are combined. Recycled names such as SNDK, CEG, and DELL retain both eras.
 
-For raw per-day membership sets use
-`helpers.pit_enforcement.daily_membership_mask(value, config)` → `{date: frozenset}`.
+### Raw (unadjusted) prices
 
-### Execution-safe RAW prices (broker orders / fill reconciliation)
-
-`merged/` prices are total-return adjusted; after a post-anchor split/dividend they diverge from a
-broker quote. For order submission / reconciliation use the RAW interface, never `get_price_data`:
+`merged/` prices are total-return adjusted; after a post-anchor split/dividend they diverge from the
+unadjusted print. To read the raw unadjusted price (e.g. for display or external comparison), use the
+RAW interface, never `get_price_data`:
 
 ```python
 p.get_raw_price_data("CVNA", "2026-05-01", "2026-06-05")  # = canonical / adjustment_factor
@@ -169,11 +167,10 @@ kept, dropped = p.filter_universe(universe, min_bars=250, min_avg_dollar_volume=
 # short series, and illiquid micro-caps. p.quality_status(sym) returns the per-symbol flag.
 ```
 
-With `data_provider: "merged"`, main.py applies this fail-closed screen automatically.
-For PIT portfolios it screens each membership spell independently: incomplete or quarantined
-spells are excluded while other valid eras of the same ticker remain usable. Every run writes
-`<portfolio>_data_screen.csv` in its run directory with the selected file, coverage dates,
-quality statuses, and the keep/drop reason.
+`filter_universe` is a provider-level utility — it is **not yet wired into the backtest engine**.
+main.py does not apply it automatically and writes no data-screen file yet; a fail-closed auto-screen
+for `data_provider: "merged"` is reserved for a future integration PR (see helpers/pit_enforcement.py
+"Integration status"). Until then, call `filter_universe` explicitly to pre-screen a universe.
 
 ### Authoritative counts — `metadata/dataset_manifest.json`
 

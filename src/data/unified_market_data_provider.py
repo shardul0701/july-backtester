@@ -48,6 +48,30 @@ class UnifiedMarketDataProvider:
         self.metadata_dir = metadata_dir or paths.METADATA
         self._class = None
         self._range_cache = {}
+        self._check_store_exists()
+
+    def _check_store_exists(self):
+        """Fail loudly at init time if the merged store isn't built yet.
+
+        Without this, a missing store silently produces zero symbols fetched
+        and the engine reports a generic "Could not fetch data for any
+        symbols" a run later, with no indication why."""
+        if not os.path.isdir(self.merged_dir):
+            raise FileNotFoundError(
+                f"Merged market-data store not found at: {self.merged_dir}\n"
+                f"Fix: run `python scripts/build_merged_dataset.py` to build it, "
+                f"or set config['merged_data_root'] (env MERGED_DATA_ROOT) to an "
+                f"existing store."
+            )
+        with os.scandir(self.merged_dir) as it:
+            if not any(entry.name.endswith(".parquet") for entry in it):
+                raise FileNotFoundError(
+                    f"Merged market-data store at {self.merged_dir} exists but "
+                    f"contains no .parquet files.\n"
+                    f"Fix: run `python scripts/build_merged_dataset.py` to build it, "
+                    f"or set config['merged_data_root'] (env MERGED_DATA_ROOT) to an "
+                    f"existing store."
+                )
 
     # ------------------------------------------------------------- internals ---
     def _candidate_paths(self, symbol):
@@ -203,14 +227,14 @@ class UnifiedMarketDataProvider:
             return None
         return self._slice(df, start_date, end_date)
 
-    # ----------------------------------------------------- execution-safe API ---
+    # ------------------------------------------------ raw (unadjusted) price API ---
     def get_raw_price_data(self, symbol, start_date=None, end_date=None, config=None):
-        """RAW (broker-quote) OHLC, NOT total-return adjusted.
+        """RAW (unadjusted) OHLC, NOT total-return adjusted.
 
         Canonical prices are forward-adjusted to the 2026-04-22 anchor, so after a
-        post-anchor split/dividend they diverge from what a broker (e.g. Alpaca)
-        quotes. Use THIS for order submission / fill reconciliation, never
-        get_price_data. raw = canonical / adjustment_factor (per row). Volume is
+        post-anchor split/dividend they diverge from the unadjusted print. Use THIS
+        when you need the raw unadjusted price (e.g. display or external comparison),
+        never get_price_data. raw = canonical / adjustment_factor (per row). Volume is
         passed through unchanged (price factor does not reconstruct raw volume).
         Returns Open/High/Low/Close/Volume with a Datetime index, or None.
         """
@@ -233,8 +257,8 @@ class UnifiedMarketDataProvider:
     def get_execution_price(self, symbol, date, field="close"):
         """Scalar RAW price for `symbol` on the last bar on/before `date`.
 
-        Convenience for the Alpaca runner / fill reconciliation. Returns a float
-        (broker-comparable) or None if no bar exists on/before the date.
+        Returns a float (raw unadjusted price) or None if no bar exists
+        on/before the date.
         """
         df = self._read(symbol, date, date)
         if df is None or df.empty:
@@ -301,6 +325,8 @@ class UnifiedMarketDataProvider:
             return None
         return str(df["data_quality_status"].iloc[-1])
 
+    # NOT yet wired into the default backtest path — reserved for a future
+    # data-quality-screen integration (see pit_enforcement 'Integration status').
     def filter_universe(self, symbols,
                         exclude_statuses=("insufficient_history", "review_no_patch",
                                           "identity_review", "flagged"),
@@ -416,16 +442,21 @@ class UnifiedMarketDataProvider:
 _PROVIDER = None
 
 
-def _provider():
+def _provider(config=None):
+    """Lazily build the singleton, honoring config['merged_data_root'] the
+    first time it's supplied. Later calls (including with config=None, e.g.
+    from load_universe/available_symbols which don't thread config through)
+    reuse the already-configured instance."""
     global _PROVIDER
     if _PROVIDER is None:
-        _PROVIDER = UnifiedMarketDataProvider()
+        merged_dir = (config or {}).get("merged_data_root") or None
+        _PROVIDER = UnifiedMarketDataProvider(merged_dir=merged_dir)
     return _PROVIDER
 
 
 def get_price_data(symbol, start_date=None, end_date=None, config=None):
     """Module-level fetcher matching services.* signature."""
-    return _provider().get_price_data(symbol, start_date, end_date, config)
+    return _provider(config).get_price_data(symbol, start_date, end_date, config)
 
 
 def get_price_data_for_intervals(symbol, intervals, warmup_days=400,

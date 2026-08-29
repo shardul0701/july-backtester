@@ -480,7 +480,6 @@ def _run_analysis(trades_df_raw: pd.DataFrame, output_dir: str, report_name: str
                 ''
             )
 
-            from ._pdf_pages import generate_tearsheet_pdf
             _report_data = {
                 'name':                report_name,
                 'run_date':            timestamp_str,
@@ -488,6 +487,7 @@ def _run_analysis(trades_df_raw: pd.DataFrame, output_dir: str, report_name: str
                 'initial_equity':      initial_equity,
                 'daily_equity':        equity_for_dd_calc,
                 'daily_returns':       daily_returns,
+                'trading_days':        trading_days,
                 'benchmark_df':        benchmark_df,
                 'benchmark_returns':   benchmark_returns,
                 'benchmark_ticker':    benchmark_ticker,
@@ -513,7 +513,15 @@ def _run_analysis(trades_df_raw: pd.DataFrame, output_dir: str, report_name: str
                 # tests). build_strategy_verdict_page() skips when None/missing.
                 'strategy_verdict':    config_params.get('STRATEGY_VERDICT'),
             }
-            generate_tearsheet_pdf(_report_data, output_pdf_path)
+            # Layout selection: 'v3' (default, dense 2-page institutional) or
+            # 'classic' (the legacy multi-page navy-banner tearsheet).
+            _layout = config_params.get('LAYOUT', getattr(config, 'LAYOUT', 'v3'))
+            if str(_layout).lower() == 'classic':
+                from ._pdf_pages import generate_tearsheet_pdf
+                generate_tearsheet_pdf(_report_data, output_pdf_path)
+            else:
+                from ._pdf_v3 import generate_tearsheet_v3
+                generate_tearsheet_v3(_report_data, output_pdf_path)
             pdf_save_attempted = True
         except Exception as pdf_gen_err:
             print(f"ERROR during PDF report generation: {pdf_gen_err}")

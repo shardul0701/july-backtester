@@ -114,15 +114,19 @@ def get_bars_per_year(config: dict) -> int:
 
     Notes:
         - Assumes 252 trading days per year (NYSE/NASDAQ standard)
-        - Assumes 6.5 trading hours per day (9:30 AM - 4:00 PM ET)
-        - For minute bars: bars_per_year = 252 * 6.5 * 60 / multiplier
-        - For hourly bars: bars_per_year = 252 * 6.5 / multiplier
+        - Assumes 6.5 trading hours per day (9:30 AM - 4:00 PM ET) unless
+          overridden via config["trading_hours_per_day"] — e.g. round-the-clock
+          futures (CME Globex ~23h/day) trade far more bars/year on an intraday
+          timeframe than an RTH-only equity, so the default understates their
+          true annualization factor.
+        - For minute bars: bars_per_year = 252 * trading_hours_per_day * 60 / multiplier
+        - For hourly bars: bars_per_year = 252 * trading_hours_per_day / multiplier
 
     Raises:
         ValueError: If timeframe is not supported.
     """
     TRADING_DAYS_PER_YEAR = 252
-    HOURS_PER_DAY = 6.5  # NYSE/NASDAQ standard (9:30 AM - 4:00 PM ET)
+    HOURS_PER_DAY = float(config.get("trading_hours_per_day", 6.5))  # override for 24h instruments
     MINUTES_PER_HOUR = 60
 
     timeframe = config.get("timeframe", "D").upper()
@@ -148,3 +152,167 @@ def get_bars_per_year(config: dict) -> int:
             f"Unsupported timeframe '{timeframe}'. "
             f"Must be one of: D, H, MIN, W, M"
         )
+
+
+def get_bars_per_day_exact(config: dict, session_hours: float | None = None) -> float:
+    """
+    Bars in a single trading day as an EXACT (unrounded) float.
+
+    Identical branch logic to get_bars_per_day(), without the int()
+    truncation. Use this wherever the value is a *scaling factor* rather
+    than a bar count -- notably the 20-day average-daily-volume calculation
+    in helpers/portfolio_simulations.py (issues #264, #268).
+
+    Why this exists (issue #268): get_bars_per_day() truncates, so for any
+    multiplier that does not divide the session length evenly the fraction
+    is silently lost. With the default 6.5-hour session:
+
+        H x1 / MIN x60 -> int(6.5)   == 6     (true 6.5,   -7.7%)
+        H x2           -> int(3.25)  == 3     (true 3.25,  -7.7%)
+        H x4           -> int(1.625) == 1     (true 1.625, -38.5%)
+
+    The ADV fix from #265 rests on the identity
+
+        mean(20*bpd bars) * bpd == sum(window)/(20*bpd) * bpd == sum(window)/20
+
+    i.e. "total volume over the window / 20 days" -- true daily ADV, but
+    ONLY while the window genuinely spans 20 days. A truncated bars-per-day
+    corrupts both the window width and the rescale factor, so 20-day ADV on
+    hourly data was understated by 7.7% (1H/2H) to 38.5% (4H).
+
+    Args:
+        config (dict): CONFIG dict with 'timeframe', optional
+                        'timeframe_multiplier', and optional
+                        'trading_hours_per_day' (default 6.5).
+        session_hours (float | callable | None): explicit session length,
+                        overriding config['trading_hours_per_day']. Pass the
+                        value from
+                        helpers.instruments.resolve_session_hours(symbol,
+                        config) for per-symbol correctness on a mixed book
+                        (issue #270), or a zero-arg CALLABLE returning it to
+                        defer that resolution -- it is then invoked only on
+                        intraday timeframes, so a D/W/M run neither pays for
+                        nor can fail on a session length it never reads.
+                        None keeps the process-wide global.
+
+    Returns:
+        float: Bars per trading day, unrounded. May be < 1.0 when a single
+                bar spans more than one session (correct: such a bar carries
+                more than one day's volume, so the rescale must scale down).
+
+    Examples:
+        >>> get_bars_per_day_exact({"timeframe": "D"})
+        1.0
+        >>> get_bars_per_day_exact({"timeframe": "H", "timeframe_multiplier": 2})
+        3.25
+        >>> get_bars_per_day_exact({"timeframe": "MIN", "timeframe_multiplier": 5})
+        78.0
+
+    Raises:
+        ValueError: If timeframe is not supported, timeframe_multiplier <= 0,
+                    or trading_hours_per_day <= 0.
+    """
+    MINUTES_PER_HOUR = 60
+
+    timeframe = config.get("timeframe", "D").upper()
+    multiplier = int(config.get("timeframe_multiplier", 1))
+
+    if multiplier <= 0:
+        raise ValueError(f"timeframe_multiplier must be > 0, got {multiplier}")
+
+    # Validate the timeframe BEFORE the session-length check below, so an
+    # unsupported timeframe always reports itself as such rather than being
+    # masked by an unrelated key that the branch it would have taken happens
+    # to read.
+    if timeframe not in ("D", "W", "M", "H", "MIN"):
+        raise ValueError(
+            f"Unsupported timeframe '{timeframe}'. "
+            f"Must be one of: D, H, MIN, W, M"
+        )
+
+    if timeframe in ("D", "W", "M"):
+        # Already one bar per period -- a daily/weekly/monthly bar's Volume
+        # is a whole period's volume already, not a fraction of a day's.
+        # Returns BEFORE resolving session hours: these timeframes never read
+        # the session length, so they must not fail (or pay) for it. That is
+        # also why `session_hours` may be a callable -- see below.
+        return 1.0
+
+    # Resolved only now, on the branches that actually consult it. Accepting a
+    # zero-arg callable lets a caller defer per-symbol resolution (which can
+    # itself raise) until we know an intraday timeframe needs it.
+    if callable(session_hours):
+        session_hours = session_hours()
+
+    HOURS_PER_DAY = float(
+        config.get("trading_hours_per_day", 6.5)
+        if session_hours is None
+        else session_hours
+    )
+
+    # Only the intraday branches consult the session length, so validate it
+    # here rather than penalising daily runs for a key they never read. A
+    # zero/negative session would otherwise yield a 0.0 rescale factor,
+    # silently driving average daily volume to 0 -- which makes the
+    # max_pct_adv cap reject every trade with no error (the exact class of
+    # silent miscalibration #264 was about).
+    if HOURS_PER_DAY <= 0:
+        raise ValueError(
+            f"trading_hours_per_day must be > 0, got {HOURS_PER_DAY}"
+        )
+
+    if timeframe == "H":
+        return HOURS_PER_DAY / multiplier
+    return (HOURS_PER_DAY * MINUTES_PER_HOUR) / multiplier
+
+
+def get_bars_per_day(config: dict) -> int:
+    """
+    Calculate the number of bars in a single trading day for a given timeframe.
+
+    Used to rescale a rolling *per-bar* volume average into a true average
+    *daily* volume figure (see the max_pct_adv liquidity cap and
+    volume_impact_coeff market-impact model in
+    helpers/portfolio_simulations.py, issue #264): the mean of Volume over a
+    window of N bars is the mean volume of ONE bar, not one day, whenever
+    more than one bar makes up a trading day. Multiplying that per-bar mean
+    by get_bars_per_day() converts it into a daily-equivalent figure.
+
+    Deliberately independent of get_bars_for_period(), which ignores
+    `timeframe_multiplier` in its H-timeframe 'd'-unit branch (a separate,
+    pre-existing bug left untouched to avoid changing behavior for any
+    strategy already depending on it -- tracked in #267). get_bars_per_day()
+    always honours the multiplier.
+
+    NOTE (issue #268): this returns a truncated bar COUNT and is therefore
+    lossy whenever the multiplier does not divide the session evenly (4H ->
+    1 rather than 1.625). For a *scaling factor* -- e.g. rescaling a per-bar
+    volume mean into a daily figure -- use get_bars_per_day_exact() instead.
+
+    Args:
+        config (dict): CONFIG dict with 'timeframe', optional
+                        'timeframe_multiplier', and optional
+                        'trading_hours_per_day' (default 6.5).
+
+    Returns:
+        int: Number of bars per trading day. Always >= 1.
+
+    Examples:
+        >>> get_bars_per_day({"timeframe": "D"})
+        1
+        >>> get_bars_per_day({"timeframe": "H", "timeframe_multiplier": 2})
+        3
+        >>> get_bars_per_day({"timeframe": "MIN", "timeframe_multiplier": 5})
+        78
+
+    Raises:
+        ValueError: If timeframe is not supported, timeframe_multiplier <= 0,
+                    or (intraday timeframes only) trading_hours_per_day <= 0.
+                    The last condition is inherited from
+                    get_bars_per_day_exact() and is new as of #268; it
+                    previously returned 1 for a zero-length session.
+    """
+    # Single source of truth: same branches, same validation, then clamp to
+    # a usable bar count. max(1, ...) keeps a sub-daily-resolution config
+    # (one bar spanning several sessions) from returning a 0-bar count.
+    return max(1, int(get_bars_per_day_exact(config)))

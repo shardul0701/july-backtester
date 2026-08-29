@@ -28,6 +28,7 @@
 > failed; re-running one is wasted work, and proposing it is a regression. Rank only on
 > full-period, costed, PIT numbers — never from a `*_SUBPERIOD.csv`, whose degenerate
 > windows produce Calmars in the thousands.
+> **GH POSTING RULE — NON-NEGOTIABLE**: Never pass comment/issue/review text as a shell argument. Use `python3 scripts/gh_post.py` for every GitHub comment, review, issue creation, and issue-body edit. `gh issue comment --body "..."` and `gh api -f body=@file` are FORBIDDEN — both have silently destroyed real comments in this project. See [Posting to GitHub](#posting-to-github).
 
 ## What This Is
 Python backtesting engine for US equities. Tests 20+ technical strategies across single symbols or large portfolios (Nasdaq, S&P 500, etc.) with Monte Carlo robustness scoring.
@@ -62,6 +63,7 @@ helpers/ml_export.py               # ML trade feature export (export_trade_featu
 helpers/sensitivity.py             # Parameter sensitivity sweep (build_param_grid, label_for_params, is_sweep_enabled)
 helpers/regime.py                  # VIX regime heatmap (build_regime_heatmap, print_regime_heatmap, classify_vix_regime)
 helpers/point_in_time.py           # Point-in-time index universe resolver for portfolios like "pit:nq100" and "pit:sp500"
+helpers/rule_based_universe.py     # Survivorship-free universe from the delisted-inclusive Parquet corpus ("rule:top500") — needs no index membership
 helpers/init_wizard.py             # First-time setup wizard invoked via python main.py --init
 helpers/correlation.py             # Strategy correlation matrix (run_correlation_analysis, compute_avg_correlations)
 helpers/caching.py                 # Local Parquet cache (24h TTL)
@@ -77,7 +79,47 @@ services/csv_service.py            # Local CSV files ({csv_data_dir}/{SYMBOL}.cs
 tickers_to_scan/                   # JSON ticker lists (nasdaq_100.json, sp-500.json, etc.)
 scripts/                           # One-off diagnostic and utility scripts (NOT part of the pipeline)
 scripts/debug_data.py              # Compares Polygon vs Yahoo SPY data; run with: python scripts/debug_data.py
+scripts/build_research_index.py    # Consolidates all output/runs/ summaries + llm_verdict.json into output/research_index.csv
+scripts/gh_post.py                 # REQUIRED for all GitHub comments/reviews/issues — posts then verifies content landed intact (see "Posting to GitHub")
 ```
+
+## Posting to GitHub
+
+**Always:**
+
+```bash
+python3 scripts/gh_post.py comment   --repo O/R --number 302 --file reply.md
+python3 scripts/gh_post.py review    --repo O/R --number 302 --file r.md [--event APPROVE]
+python3 scripts/gh_post.py create    --repo O/R --title "..." --file body.md [--label backlog]
+python3 scripts/gh_post.py edit-body --repo O/R --number 109 --file body.md
+```
+
+> **Portability:** the script is **stdlib-only** and has **no `rtk` dependency** — it runs under any Python 3 with no venv and no pip install, so remote contributors are not blocked. Its only external requirement is the GitHub CLI (`gh`), and if that is missing or unauthenticated it says so with install/login instructions rather than a traceback. If you work on this machine, prefix `rtk` per the RTK rule above; everyone else runs it as written.
+
+Write the body to a file first (the scratchpad is fine), then pass `--file`.
+
+| Exit | Meaning | What to do |
+|---|---|---|
+| `0` | posted **and** verified byte-for-byte | nothing |
+| `1` | **nothing was posted** (bad usage, `gh` missing/unauthenticated, API rejected it) | fix and re-run |
+| `2` | **posted, but not confirmed intact** — content mismatched, *or* it landed and the read-back failed | open the printed URL and check. **Do not just re-run** — it posted |
+
+The `2` case covers "posted but unverifiable", not only "mangled". Re-running on a `2` is how you get a duplicate comment on top of the one already live.
+
+`--file` is required except for `review --event APPROVE`, where a bodyless approve is allowed (there is nothing to verify).
+
+**Never:**
+
+| Forbidden | Why |
+|---|---|
+| `gh issue comment --body "...\`path\`..."` | The shell runs command substitution **before `gh` sees it**. Backticks and `$(...)` are executed. This stripped file paths out of a real comment on #292 and created a stray file named `cash` |
+| `gh api -f body=@file` | `-f` sends the value **literally** — it posted `@C:/Users/.../gh_comment_106.md` as a comment body and the real reply was never sent |
+
+Both failures are **silent**: `gh` exits 0 and prints a URL. Nothing tells you the content was destroyed. That is why the tool verifies by reading the comment back rather than trusting the exit code.
+
+`--body-file` alone is *not* sufficient as a rule — the second failure above came from someone already trying to pass a file. Use the script; it removes the inline-body option entirely and checks the result.
+
+**Cross-repo refs:** a bare `#123` in a private-repo comment resolves against the *private* repo. When referring to a public issue from the private repo (or vice versa) always write it fully qualified: `zachisit/july-backtester#302`.
 
 ## Scripts Directory
 
@@ -97,6 +139,9 @@ scripts/debug_data.py              # Compares Polygon vs Yahoo SPY data; run wit
 "portfolios": {"Nasdaq 100 PIT": "pit:nq100"}    # point-in-time members as of start_date
 "portfolios": {"S&P 500 PIT": "pit:sp500"}       # requires PIT YAML files or SP500_DATA_ROOT
 "allocation_per_trade": 0.10       # 10% equity per position
+"position_sizing_method": "fixed"  # "fixed"|"kelly"|"vol_parity"|"risk_parity"|"risk_pct_capped"|"fixed_contracts"
+"fixed_contracts_per_trade": 1     # contracts/trade when position_sizing_method="fixed_contracts"
+"trading_hours_per_day": 6.5       # session hours for annualization; set 24 for 24h futures
 "stop_loss_configs": [{"type": "none"}]  # or {"type":"percentage","value":0.05}
 "slippage_pct": 0.0005
 "commission_per_share": 0.002
@@ -115,8 +160,9 @@ scripts/debug_data.py              # Compares Polygon vs Yahoo SPY data; run wit
 "sensitivity_sweep_min_val": 2   # floor for generated values (prevents SMA period = 0)
 "rolling_sharpe_window": 126     # rolling Sharpe window in trading days; 0 or None = disable
 "htb_rate_annual": 0.02          # annual hard-to-borrow rate debited daily on short positions
-"mc_sampling": "iid"             # "iid" = independent resampling; "block" = block-bootstrap
+"mc_sampling": "iid"             # "iid" = independent; "block" = block-bootstrap; "auto" = block for concentrated_futures profile else iid
 "mc_block_size": None            # block size for block-bootstrap; None = auto floor(sqrt(N))
+"smoothness_profile": "auto"     # smoothness-verdict thresholds: "auto"|"equity"|"concentrated_futures"
 "volume_impact_coeff": 0.0       # square-root market impact coefficient; 0.0 = disabled
 ```
 
@@ -135,6 +181,69 @@ scripts/debug_data.py              # Compares Polygon vs Yahoo SPY data; run wit
 **Dynamic benchmark columns:** `helpers/summary.py` uses `_build_benchmark_columns(benchmark_returns)` to generate column names, display names, format specs, and short names dynamically from the `benchmark_returns` dict passed to summary functions. This allows summary reports to display arbitrary benchmark tickers (not just hardcoded SPY/QQQ). All 4 summary functions (`generate_per_portfolio_summary`, `generate_single_asset_summary_report`, `generate_final_summary`, `generate_portfolio_summary_report`) accept a `benchmark_returns` dict parameter (e.g., `{"SPY": 0.12, "QQQ": 0.15, "XLF": 0.08}`) and dynamically build result keys like `vs_spy_benchmark`, `vs_qqq_benchmark`, `vs_xlf_benchmark`. The first benchmark appears in Table 1 (Core Performance), remaining benchmarks appear in Table 2 (Extended Metrics). Filtering logic supports backward compatibility: the first two benchmarks respect `min_performance_vs_spy` and `min_performance_vs_qqq` config keys; additional benchmarks default to `-9999.0` threshold (show all).
 
 **Datetime index normalization (Phase 4 of #55):** All data providers return `pd.DatetimeIndex` regardless of timeframe. Daily data (`timeframe="D"`) is normalized to midnight timestamps (00:00:00 UTC) via `.normalize()` to ensure consistent datetime handling across timeframes. Intraday data (`timeframe="H"` or `"MIN"`) preserves hour/minute precision. Trade logs store `EntryDate` and `ExitDate` as ISO 8601 strings (`.isoformat()`) supporting both date-only (`"2024-01-15"`) and datetime (`"2024-01-15T10:30:00"`) formats. WFA functions convert these strings to `pd.Timestamp` for chronological comparisons, ensuring robust datetime handling for mixed daily/intraday backtests.
+
+## Rule-Based Point-in-Time Universe (`"rule:..."`)
+
+A survivorship-free investable set derived from **observable liquidity**, requiring **no index-membership data**. Membership history is the vendor-locked part of PIT (`norgatedata.index_constituent_timeseries()` needs a Windows-only Norgate Data Updater); this sidesteps it.
+
+```python
+"portfolios": {"US Liquid 500": "rule:us_liquid_500"}   # or "rule:top250"
+```
+
+```
+universe(D) = { s : s has bars on D
+                and close(s, D)             >= universe_min_price
+                and dollar_volume_20d(s, D) >= universe_min_dollar_volume
+                and history(s, D)           >= universe_min_bars }
+```
+capped to `universe_top_n` by dollar volume.
+
+**Why it is survivorship-free:** the Parquet corpus carries **36,684 securities, 20,911 of them delisted**, named `TICKER-YYYYMM` — Bear Stearns is `BSC-200805`, Lehman `LEHMQ-201203`, Enron `ENRNQ-200411`. They are present with the dates they failed and drop out on their real last bar. Verified: `BSC-200805` **is** in the 2007-06-29 universe and **is not** in the 2008-12-31 one. The later-delisted share of a top-500 universe decays 45.0% (2004) → 32.8% (2008) → 20.2% (2015) → 1.0% (2024) — the correct signature.
+
+**Why there is no look-ahead:** every screen reads only bars `<= D`.
+
+**The universe is re-based periodically, not resolved once.** `universe(D)` is date-varying, but resolving it a single time at `start_date` and freezing it introduces a **start-date selection bias** of the same shape as the survivorship bug this feature removes, pointing the other way — the set can only shrink as names delist, so nothing can ever enter it. A 2004–2024 run frozen at 2004 never trades NVDA, TSLA, META or GOOGL, because none were top-500-liquidity names in 2004.
+
+`build_rule_schedule(spec, start, end, config)` therefore resolves at evenly-spaced dates and returns `(union, schedule)` — the **same pair shape** the `pit:` branch produces, so it reuses the existing per-bar membership masking (`pit_members_on`) with no engine change. The union is what gets fetched; the schedule is what keeps it causal, gating a name out of the tradeable set before it qualified.
+
+| `universe_rebase` | Resolutions over 20y | Note |
+|---|---|---|
+| `"annual"` **(default)** | 21 | tractable; closes most of the gap |
+| `"quarterly"` | 81 | finer, ~4× the cost |
+| `"monthly"` | 241 | rarely worth it |
+| `"none"` | 1 | **frozen at `start_date` — logs a warning; the biased behaviour, kept reachable for A/B** |
+
+Per-bar resolution is deliberately *not* offered: `resolve_universe` costs ~10s/date because it reopens real Parquet files, so ~5,000 trading days is ~14 hours just to build the schedule. `pit:`'s per-bar mask is cheap only because it reads pre-existing membership YAML rather than price data. The span index is built **once** and reused across re-base dates — rebuilding it per date multiplies the expensive part by `len(dates)`.
+
+**Config keys:** `universe_min_price` (5.0), `universe_min_dollar_volume` (1e6), `universe_min_bars` (252), `universe_top_n` (None), `universe_adv_window` (20), `universe_exclude_prefixes` (`("$", "#")`), `universe_exclude_symbols` (`()`), `universe_rebase` (`"annual"`).
+
+**Three traps this handles, each of which silently corrupts results:**
+1. **`Datetime` is not column 0** (order is `Open, High, Low, Close, Volume, Datetime` — it is the pandas index). Locating it by position reads float OHLC as nanosecond timestamps and yields **1970** dates. It is located by *name*.
+2. **`$` and `#` prefixes are not investable.** 1,160 index series (`$NYA`, `$DJITR`) and 455 breadth series (`#NYSEAD`) carry price and volume columns, so no liquidity screen rejects them — and they out-rank everything on notional dollar volume. Before this filter a top-100 universe came back as *almost entirely indices*. Excluded by default.
+3. **Ticker reuse.** `WB` is Wachovia (`WB-200812`) until 2008 and Weibo (`WB`) from 2014; `V` was Vivendi (`V-200608`) before Visa (`V`). Resolution is by **security ID**, never bare ticker — which also sidesteps `parquet_service`'s ambiguous `_multi_` bare-ticker fallback, since `WB-200812.parquet` matches exactly.
+
+**Performance:** a metadata-only span index over all 36,684 securities builds in **~8.5s**, cached to `parquet_data/.span_index.parquet`; universe resolution is then ~10s per date.
+
+**What it is NOT:** the S&P 500, Russell, or any index. If a thesis depends on index membership *itself* — reconstitution flow, inclusion effects, benchmark-relative mandates — this does not substitute. **Results produced on this universe must say so.**
+
+**ETFs are excluded by default** (`universe_exclude_etfs: True`). An unfiltered liquidity-ranked universe is materially ETFs — measured on the real corpus:
+
+| As of | top-100 | top-500 |
+|---|---|---|
+| 2004 | 4.0% | 2.6% |
+| 2010 | 24.0% | 13.6% |
+| 2020 | 26.0% | 19.0% |
+| 2024 | 21.0% | 16.6% |
+
+A stock-selection strategy holding SPY is partly holding the benchmark it's measured against, and no metric reveals it. Set `universe_exclude_etfs: False` to keep them.
+
+**Why a list and not a classifier.** The corpus carries no `securitytype` field. A statistical classifier was tried and **does not work** — recorded so it isn't re-attempted. R² of daily returns vs SPY, on 89 known ETFs vs 52 known stocks: threshold 0.80 catches 34.8% of ETFs at 0% false positives; threshold 0.50 catches 65.2% at **25%** false positives. It fails because commodity/currency/bond ETFs aren't equity baskets at all (GLD 0.018, SLV 0.0005, UUP 0.003, TLT 0.12). Counting idiosyncratic 5σ jumps separates better (ETF median 0, stock median 2 — no earnings) but still misclassifies ~25% of stocks. Neither is precise enough to silently drop names.
+
+**Why a list is nevertheless sufficient.** The screen is dollar-volume ranked, so the problem is self-limiting: not "how many ETFs exist" (hundreds) but "how many are liquid enough to hold a top-N slot" (~20 in a top-100). `ETF_TICKERS` (~230 names) spans broad/sector/style/bond/commodity/currency/country/leveraged/inverse/volatility/thematic and takes the measured contamination above to **0%**. Matching is on the bare ticker, so a closed ETF (`TVIX-202007`) is excluded too.
+
+It is curated, not exhaustive — a new or obscure ETF can pass. **`etf_report(universe)`** returns `{etfs, n_etfs, n_total, pct}` so that gap is visible rather than assumed away.
+
+**Tests:** `tests/test_rule_based_universe.py` — 31 tests on a synthetic corpus (no submodule dependency): security identity incl. share-class-vs-delisting (`BRK-A` vs `BRK-199001`), the 1970 trap, mixed tz-aware/naive files, each screen, ticker-reuse resolution, and survivorship present-then-absent.
 
 ## Adding a Strategy (Plugin System)
 
@@ -203,14 +312,93 @@ output/
 - `report.py` auto-detects the run's `detailed_reports/` directory when given a path inside `analyzer_csvs/`. Pass `--output-dir` to override.
 - S3 uploads (if configured) use the same `<run_id>/` prefix as the key root.
 
+## PDF Tearsheet Layouts (`report.py --layout`)
+
+`report.py` produces one of two PDF layouts, selected with `--layout` (default `v3`):
+
+- **`v3`** (default, new in v1.12.0) — a dense, institutional **2-page** report in the house navy/gold identity (navy title bar + gold rule, bordered gold-accented KPI tiles, navy section headers with gold underlines). Deliberately **not** a clone of any vendor sheet: our own labels/grouping, no imitation "LIVE" pill or copied disclaimer. Page 1: navy title bar (strategy name + "STRATEGY TEARSHEET" eyebrow + version/date) → HEADLINE row of 5 bordered tiles (Net P&L, Return/DD, Sharpe, Max Drawdown, Win Rate) → two-column FULL METRICS (Performance / Periodic Returns | Risk & Shape / Trade Stats). Page 2: TRAILING RETURNS tiles (1M/3M/6M/YTD/1Y/ITD), a trailing-8-month **$ P&L strip** (TOTAL = sum of shown cells), then six small-multiple charts — Equity Curve (Net), Equity In-Sample vs Live (OOS region shaded from `wfa_split_date`), Drawdown ($), Deepest Drawdowns, 6-Month Rolling Sharpe, 6-Month Rolling Volatility. Serenity carries a `*` footnote pointing at its documented proxy definition.
+- **`classic`** — the full multi-page (14) deep-dive tearsheet (`trade_analyzer/_pdf_pages.py::generate_tearsheet_pdf`): MAE/MFE, per-symbol, MC fan, WFA split, appendices. Rebranded to the same house identity as v3 — every page carries the navy title bar + gold rule (`_house_navy_bar`), and KPI tiles delegate to v3's `_draw_kpi_tile` so both layouts stay visually identical. The footer stamp is name·date·page only (no top-edge header text). **Bug fix (issue #248):** `build_cover_page`/`build_executive_summary_page`/`_add_page_title` previously called `axis("off")` on their navy strips, which hid the fill on modern matplotlib (white banners + invisible titles) — now they keep the patch visible and suppress ticks/spines manually.
+
+**Files:**
+- `trade_analyzer/metrics_v3.py` — pure, stateless institutional metrics computed from the daily equity/return series + trades: Omega, Gain/Pain (Omega = Gain/Pain + 1 at threshold 0), Ulcer Index, % Time in DD, Serenity (documented Ulcer×tail-CVaR-penalized return proxy — reproducible, not vendor-exact), Recovery Factor / Ret-DD (net profit ÷ max DD $), annualized volatility, skewness/excess-kurtosis, payoff ratio, R-expectancy, period returns, monthly $ P&L strip, best/worst day-month-year, positive months/years, and 126-day rolling Sharpe/volatility. Entry point `compute_v3_metrics(...)`.
+- `trade_analyzer/_pdf_v3.py` — the 2-page builders (`build_v3_page1`, `build_v3_page2`) + `generate_tearsheet_v3(report_data, output_path)`. Renders in the existing `default_config.THEME` (navy/gold) with matplotlib only — no new dependencies.
+
+**Wiring:** `report.py` passes `LAYOUT` in `config_params`; `analyzer.py::_run_analysis` branches on it (`generate_tearsheet_v3` vs `generate_tearsheet_pdf`) and adds `trading_days` to `report_data`. Transaction fees are best-effort (summed from any recognised fee column, else `$0` since engine `Profit` is already net). **Tests:** `tests/test_metrics_v3.py` (hand-computed metric values), `tests/test_pdf_v3.py` (2-page smoke, in-range OOS split, empty-trades guard).
+
 ## Do Not Touch
 - `helpers/indicators.py` strategy **logic** (all working correctly) — docstring additions and documentation improvements are permitted provided no signal logic, parameter handling, imports, or formatting is changed
-- `helpers/simulations.py` and `helpers/portfolio_simulations.py` simulation engines
+- `helpers/simulations.py` and `helpers/portfolio_simulations.py` simulation engines — **the execution core was deliberately refactored for futures support (issue #229): every cost/sizing/accounting site now routes through the instrument-metadata layer (`helpers/instruments.py`). The equity path is protected byte-for-byte by the golden-master suite (`tests/test_engine_characterization.py`) — any change here MUST keep that suite green.**
 - `helpers/monte_carlo.py`
 - `tickers_to_scan/` JSON files
 - The multiprocessing architecture (`init_worker`, `run_single_simulation`, `Pool`)
 
 > **`helpers/summary.py`** — can be touched; actively maintained. `save_only_filtered_trades` now correctly filters by the display criteria captured in Step 2 of `generate_per_portfolio_summary` (see Known Issues Fixed below).
+
+## Futures Support / Instrument Metadata (issue #229)
+
+The engine is instrument-aware: **`helpers/instruments.py`** resolves a per-symbol `Instrument` (`resolve_instrument(symbol, config)`) carrying `point_value` ($/point), `tick_size`, `margin_mode`, `commission_model`/value, `slippage_model`/value, `integer_units`, `borrow_applies`, `calendar`. **Equities are the default and reproduce the pre-#229 arithmetic byte-for-byte** (point_value=1, `cash_full` margin, per-share commission, %-slippage). Futures opt in via a contract-month ticker (e.g. `ESM6`) or `config["instruments"]["overrides"]`.
+
+- **Cost/accounting helpers** in `instruments.py` (`commission`, `apply_slippage`, `round_units`, `market_value`, `margin_required`, `unrealized_pnl`, `borrow_cost_per_bar`, `stop_level`, `atr_stop_level`, `atr_stop_distance_pct`) replace the formerly hard-coded sites in `portfolio_simulations.py`.
+- **Futures execution:** margin accounting (entry reserves initial margin, not full notional; equity = cash + unrealized P&L; `reserved_margin` tracks buying power), integer contracts, `$/point` P&L, point-capped stop `{"type":"points","value":N}`, no borrow on futures shorts.
+- **Margin-based futures sizing (#238):** for margined instruments (`margin_mode == INITIAL_MARGIN`) contract count derives from `margin_required()`, not target-notional / `point_value` (which increasingly floored to 0 contracts as price appreciated, silently under-sizing/skipping late trades). The gate is `margin_mode`-first (checked before `point_value != 1.0`), so a futures instrument with `point_value == 1.0` still sizes on margin. Equity sizing (`CASH_FULL`) is unchanged. Applies to both long and short entry paths.
+- **Stop anchoring (#238):** `percentage`/`points` stop levels anchor to the **raw pre-slippage entry price for margined futures only** — `_stop_anchor = raw_entry_price if inst.margin_mode == INITIAL_MARGIN else entry_price`. Equities (`CASH_FULL`) keep the pre-PR slipped-fill anchor **byte-for-byte** (golden master unchanged). *Caveat:* the `trailing_atr` stop path anchors its initial stop/target/breakeven-floor to `raw_entry_price` **unconditionally** (not yet `margin_mode`-gated) — harmless today (trailing_atr is a futures-only mechanic with no equity consumer and no golden-master coverage), tracked as a follow-up. So "equities restore pre-PR behavior" holds for `percentage`/`points` stops, not `trailing_atr`.
+- **Sizing methods (#238):** `config["position_sizing_method"]` selects `fixed` (default) | `kelly` | `vol_parity` | `risk_parity` | `risk_pct_capped` (risk-based sizing with a hard cap) | `fixed_contracts` (a fixed count via `fixed_contracts_per_trade`); wired on both long and short paths. `trading_hours_per_day` (default 6.5) sets the session-hours divisor for annualization of non-RTH / 24h instruments. All three keys are read via `CONFIG.get(...)` with defaults and registered in `config_validator.KNOWN_KEYS`; defaults preserve existing behavior.
+- **Scaled exits:** a fractional exit signal `-1 < s < 0` scales OUT `abs(s)` of the position; full exit remains `s <= -1`.
+- **Sub-bar resolution (opt-in):** `config["intrabar_resolution"]=True` + `intrabar_data` passed to `run_portfolio_simulation` refines stop fills via `helpers/intrabar.py` (gap-through-stop fills at the sub-bar open). Off by default → unchanged. `main.py::_build_intrabar_data` fetches finer bars per symbol via the data provider; an optional `config["intrabar_parquet_source"]` overrides that with one 1-min OHLC parquet. That path is resolved **portably** — `~`/`$ENV` expansion + relative paths resolved against the project root via `_resolve_intrabar_source` — and if the file is absent the run **warns and falls back to the provider fetch** rather than silently disabling sub-bar resolution (no more contributor-local absolute-path dependency).
+- **Data path:** `services/futures_service.py` (Polygon dedicated `/futures/v1/aggs`), plus CSV/Parquet for pre-built continuous series; `services/__init__.py` dispatches futures tickers to the futures endpoint. `helpers/continuous_contract.py` builds back-adjusted continuous series (panama/ratio + volume-roll). `helpers/data_quality.py` missing-bar check is calendar-aware (skipped for `CME_ETH`).
+- **Config:** SECTION 27 `instruments` (asset-class defaults, per-root point-value/tick tables, per-symbol overrides), SECTION 28 `intrabar_resolution`/`intrabar_timeframe`/`intrabar_multiplier`, SECTION 29 `maintenance_margin_pct`.
+- **Exit configs (v1.11.0, issue #234):**
+  - `{"type":"trailing_atr","stop_mult":..,"trail_mult":..,"t1_mult":..,"point_cap":N,"floor":"breakeven"}` — Sleeve A mechanic: ATR **locked at the breakout bar** (the signal bar, `prev_trading_dates[entry_exec_date]` — assumes `execution_time="open"`); initial stop `entry - min(stop_mult*atr, point_cap)`; arms the trail when price reaches `entry + eff_stop_dist*(t1_mult/stop_mult)` (target is R:R off the *capped* stop); post-arm ratchets `running-max High - trail_mult*atr_locked` (trail leg uncapped), floored at literal entry. **Bidirectional** — `side="long"`/`"short"` mirror in `_update_trailing_atr_stop`; the short entry/cover loops wire the full stop/target/trail + margin-call + real InitialRisk/RMultiple, and open shorts are marked-to-market at end-of-backtest.
+    - Known conservative assumptions (issue #234 review): on a bar hitting both init-stop and target, the engine resolves stop-first (pre-arm); maintenance-margin uses entry-price notional (calls marginally early).
+  - `{"type":"atr","multiplier":..,"point_cap":N}` — ATR stop distance clipped at `N` points per trade (`instruments.atr_stop_level(point_cap=)`).
+  - `maintenance_margin_pct` (SECTION 29): per-bar force-liquidation of a futures position when `margin + unrealized_pnl < notional*pct`, logged `ExitReason "Margin Call"`. `0.0` = disabled.
+  - Futures data resolution is dynamic (`services/futures_service._resolution`): `MIN×5→"5min"`, `H×2→"2hour"`, `D→"1session"`.
+  - `continuous_contract.rolls_spanned(entry, exit, roll_dates)` flags a held position crossing a roll (long-horizon guard).
+- **Regression guard:** `tests/test_engine_characterization.py` (golden master) + `test_instruments.py`, `test_futures_engine.py`, `test_futures_service.py`, `test_continuous_contract.py`, `test_scaled_exits.py`, `test_intrabar.py`, `test_intrabar_wiring.py`, `test_data_quality_calendar.py`, `test_futures_234.py`.
+
+## Structural Stop — `signal_bar` (SECTION 9)
+
+`{"type": "signal_bar", "buffer": 0.005}` places the initial stop at the **signal bar's own
+extreme** instead of a distance measured from the entry fill: long stops at `signal_bar.Low *
+(1 - buffer)`, short stops at `signal_bar.High * (1 + buffer)`. `buffer` is a fraction
+(default `0.0`); it pads the level so noise doesn't graze a stop sitting exactly on the
+printed extreme. The level is **static — it does not trail**.
+
+- **Helper**: `helpers/instruments.signal_bar_stop_level(bar_high, bar_low, buffer, side)`.
+  Returns `None` for a missing/zero/negative/NaN extreme, which the engine treats as "no stop".
+- **`bars_back`** (default `0`) walks the anchor further back through
+  `prev_trading_dates` via the module-level `_walk_back()` helper: `1` anchors to the bar
+  *before* the trigger. Many setups are specified that way — the trigger bar is the reversal,
+  and the level worth defending is the last bar of the move that preceded it. Walking off the
+  start of the series yields `NaT` → no stop for that trade.
+- **Wiring**: both entry paths in `helpers/portfolio_simulations.py` resolve the signal bar
+  from the loop's existing `signal_date` / `sig_date` variable — the bar *before* the fill under
+  `execution_time="open"`, the fill bar itself under `"close"`. This differs from the `atr`
+  branch, which hard-codes `prev_trading_dates[entry_exec_date]` and therefore assumes
+  `execution_time="open"`. No look-ahead either way: the level is known at entry.
+- **Next-Day Activation interaction (important for short holds):** a position is not
+  stop-checked until the bar *after* entry. Under `execution_time="open"` a one-session trade
+  (enter next open, exit the open after) is therefore unprotected for its entire holding
+  session — the stop can only alter the exit bar's fill. To express "stop active during the
+  session I hold", pair `signal_bar` with `execution_time="close"`. Multi-session holds are
+  unaffected.
+- **Fill assumption**: like every daily-bar stop in the engine, a stopped trade fills *at* the
+  stop level; a bar that opens through the stop is not refilled at the open unless
+  `intrabar_resolution` is enabled. On strategies where the stop is dormant for a session this
+  flatters results — a gap-aware cross-check (comparing at-level fills against sub-bar open fills)
+  is the way to quantify the overstatement before trusting a `signal_bar` backtest.
+- **Protective-side guard**: unlike `percentage`/`atr` (distance-from-entry, always on the
+  protective side), a structural level is decoupled from the fill, so under `execution_time="open"`
+  a next-open that gaps *through* the extreme leaves the stop on the WRONG side of entry (long: a
+  level above the fill; short: below it). Both entry branches therefore only arm the stop when it is
+  actually protective (`_lvl < entry_price` long / `_lvl > ep` short); otherwise they fall through
+  to no stop. Without this an inverted stop fires the next bar and fills at the phantom level *in the
+  trade's favor* — a spurious profitable "Stop Loss" that flatters P&L/win-rate and poisons
+  `InitialRisk`/`RMultiple`. Pairing with `intrabar_resolution` reduces the phantom-fill magnitude
+  but does not replace the guard.
+- **Tests**: `tests/test_signal_bar_stop.py` — 22 tests: helper arithmetic and guards, long/short
+  fire-and-hold cases, buffer widening, `InitialRisk` measured from the signal-bar extreme, a
+  no-trail regression, and gap-through-entry cases that assert the protective-side guard.
 
 ## Data Providers
 
@@ -262,6 +450,8 @@ The `TestU1SummaryContent::test_period_selected_label_is_exact` test enforces th
 **Plan history caps**: Polygon limits available history based on plan tier. A starter plan capped at ~2021; a paid plan extends that (confirmed: ~2016 on current plan). The `Actual Data Period` line in the run summary shows the true start Polygon returned — if it lags the configured `start_date`, the plan tier is the constraint. There is no pagination bug in `polygon_service.py` — the single page with 50,000-bar limit returns all available bars correctly.
 
 **Cache validation bug (issue #123)**: The local Parquet cache keys data by *requested* date range, not actual returned range. If Polygon returns plan-capped data (e.g. 2016–now) for a 2004 request, the cache stores that truncated result under a key named `SPY_2004-01-01_..._day_1.parquet`. After a plan upgrade, subsequent runs still serve the old capped data from cache — silently — until the cache entry is manually deleted or expires. **Fix**: add start-date validation in the `helpers/caching.py` read path; if `df.index.min()` lags the requested start by >30 days, treat as a cache miss and re-fetch. See issue #123 for the full implementation spec.
+
+**Index history cap is separate and tighter than the equities cap (issue #261)**: `I:VIX` and `I:TNX` (the two comparison-ticker dependencies most strategies rely on for regime gates) only return data from **2023-02-14 onward** on the current plan — confirmed for both symbols directly against the API, independent of the equities ~5yr rolling cap described above. Requesting an earlier `start_date` returns an empty result (HTTP 200, zero bars), not an error. Because `spy_df`/`vix_df` are injected as `None` when the fetch fails, and the None-guards added for issue-empty-comparison-tickers make `None` a *silent no-op* rather than a crash, any strategy whose regime/filter logic ANDs on `vix_df` (e.g. `MA Confluence (Full Stack) w/ Regime Filter`) will fail its gate closed for the whole requested window — **zero trades, no error, no warning** prior to this fix. `main.py`'s comparison-ticker fetch loop now logs an explicit warning when a failed fetch backs an active dependency (see the `dep_keys` check next to the `Failed to fetch data for comparison ticker` warning), but the underlying data-availability gap is a Polygon plan-tier limit, not a bug in this codebase — **use `data_provider = "yahoo"` (`^VIX`/`^TNX`, full history) for any backtest whose window starts before 2023-02-14 and depends on VIX/TNX-gated strategies.**
 
 ### S1/S2 Test Robustness
 
@@ -491,15 +681,35 @@ Controlled by two config keys (SECTION 18):
 
 | Key | Default | Description |
 | --- | --- | --- |
-| `mc_sampling` | `"iid"` | `"iid"` = independent resampling (original behaviour); `"block"` = block-bootstrap |
+| `mc_sampling` | `"iid"` | `"iid"` = independent resampling (original behaviour); `"block"` = block-bootstrap; `"auto"` = block for a `concentrated_futures` smoothness profile, else iid |
 | `mc_block_size` | `None` | Trades per block. `None` = auto: `floor(sqrt(N))` (Politis-Romano rule of thumb) |
 
 - **`"iid"` (default)**: trades are resampled independently, each with equal probability. Fast and statistically clean for strategies with no autocorrelation.
 - **`"block"`**: consecutive blocks of `block_size` trades are sampled as a unit, preserving win/loss streaks and regime clustering. Use when the strategy shows known regime dependency (e.g., consistently loses only during bear markets / high-VIX periods identified by the Regime Heatmap).
+- **`"auto"` (issue #243)**: resolved per strategy in `main.py::run_single_simulation` via `helpers.smoothness_profiles.resolve_mc_sampling` — a `concentrated_futures` profile (single-instrument regime-dependent strategy, e.g. Sleeve A) gets `"block"`, everything else `"iid"`. This calibrates the MC **"DD-Understated"** verdict, which i.i.d. resampling structurally trips for that strategy class. Applied via a **scoped `CONFIG["mc_sampling"]` override** (restored in a `finally`) around the MC call — `helpers/monte_carlo.py` is Do-Not-Touch, so the effective method is chosen at the caller. The effective value is stored on the result as `mc_sampling_effective` and feeds `mc_sampling_caveat` (so the "consider block" note stays silent once block is actually used). Default stays `"iid"` → opt-in, no change to existing runs.
 - **Auto block size**: `max(1, int(N ** 0.5))`. For 100 trades → blocks of 10; for 400 trades → blocks of 20.
 - **Circular wrap**: blocks that extend past the end of the trade list wrap around — no trades are omitted and edge blocks are not under-represented.
 - **No caller changes**: `run_monte_carlo_simulation` signature is unchanged. The refactor extracted a `_equity_and_drawdown` helper used by both branches.
 - **Tests**: `tests/test_mc_block_bootstrap.py` — 9 tests: config defaults, output shapes, auto block size resolution, streak divergence (>1% std difference), small trade guard, i.i.d. seed match, and no-key default.
+
+## Smoothness Verdict Profiles (asset-class-aware)
+
+The curve-smoothness verdict (`compute_smoothness` in `helpers/llm_verdict.py`) grades an equity curve **SMOOTH / ACCEPTABLE / ROUGH** by counting how many of five failure conditions trip. Those five thresholds were originally hard-coded constants chosen for a steadily-compounding, many-name **equity** book. A concentrated, event-driven strategy (e.g. a single-instrument futures breakout sleeve — one instrument, long dead stretches between edges, risk-based sizing producing occasional big months) structurally trips `plateau >= 12` and `upthrust > 2` **when working exactly as intended** — that is what its curve looks like, not instability. Judging it against equity-book thresholds mislabels correct behaviour as ROUGH.
+
+**`helpers/smoothness_profiles.py`** — pure, stateless module making the thresholds a named **profile**:
+
+- `SMOOTHNESS_PROFILES` — `"equity"` (default; the legacy constants **byte-for-byte**) and `"concentrated_futures"` (looser: `r2_min` 0.70, `positive_months_min` 45, `longest_flat_max` 24, `upthrust_max` 6, `worst_month_min` -20).
+- `get_thresholds(profile)` — `None` → equity defaults (no-regression); a name → that profile (unknown → equity + `[WARNING]`); a `dict` → partial/full override merged over equity defaults.
+- `resolve_profile_name(symbols, config)` — precedence: (1) explicit `config["smoothness_profile"]` if not `"auto"`; (2) `"auto"` → derive from the portfolio's instrument **asset class** via `resolve_instrument` (all symbols futures → `concentrated_futures`, else `equity`); (3) `equity` fallback.
+- `mc_sampling_caveat(mc_verdict, profile, mc_sampling)` — reporting-layer note folding in the MC **"DD Understated"** flag: fires only for a non-equity profile with a "DD Understated" verdict under `mc_sampling="iid"`, recommending `mc_sampling="block"` (block-bootstrap preserves the streak clustering these strategies live on). **Never touches `helpers/monte_carlo.py` or the MC score.**
+
+**Config**: `smoothness_profile` (SECTION 18b, default `"auto"`) — `"auto"` | `"equity"` | `"concentrated_futures"`.
+
+**Wiring**: `compute_smoothness(timeline, profile=None)` gains an optional profile (None = byte-identical equity default) and echoes the applied profile back in the `"profile"` result key. The worker (`main.py::run_single_simulation`) resolves the profile from `portfolio_data` symbols + `CONFIG`, stores `result["smoothness_profile"]` and (when applicable) `result["mc_sampling_note"]`, and passes the profile to `compute_smoothness`. The verdict is surfaced with its profile tag in **all** existing surfaces: `llm_verdict.json` (`smoothness_profile` + `curve_smoothness.profile` + `mc_sampling_note`), the terminal STRATEGY VERDICTS block (`helpers/verdict_format.py`), the PDF tearsheet (`trade_analyzer/report_generator.py`), and the verbose summary tables (`helpers/summary.py` — new `Smooth Prof.` column, short name `Prof`).
+
+**No-regression guarantee**: default runs (`smoothness_profile="auto"` with equity portfolios, or `profile=None`) produce the exact legacy grades — `smooth_verdict` stays the raw `SMOOTH/ACCEPTABLE/ROUGH` string.
+
+**Tests**: `tests/test_smoothness_profiles.py` — profile thresholds, dict-override merge, `resolve_profile_name` (explicit/auto/mixed/empty), byte-identical equity default, looser-profile-never-adds-failures invariant, and the MC caveat gating.
 
 ## Recovery Time
 
@@ -584,6 +794,44 @@ The internal `Trade` counter column is always dropped.
 - `execution_time: "open"` means signals are generated on day N and filled at day N+1 open — the simulator handles the 1-day lag via `prev_trading_dates`
 
 ## Known Issues Fixed
+
+### ADV Window Was 20 *Bars*, Not 20 Trading Days (issues #264, #268 — fixed 2026-08-05)
+
+Both ADV-based mechanics — the `max_pct_adv` liquidity cap (on by default at `0.05`) and the `volume_impact_coeff` market-impact model — computed "20-day average daily volume" as `rolling(window=20).mean()` over raw bars. Correct on daily data (20 bars == 20 trading days); wrong by orders of magnitude on intraday data, where 20 bars is ~100 minutes of 5-minute volume. This was the root cause of intraday backtests diverging from daily runs of the same strategy and of returns shifting non-proportionally with `initial_capital` (bigger capital → bigger share counts → hit the mis-scaled cap sooner).
+
+Fixed in two parts:
+
+1. **#264/#265 — window horizon + per-bar-vs-per-day rescale.** All four ADV call sites in `helpers/portfolio_simulations.py` (entry cap, entry impact, normal exit impact, intrabar same-bar close) now route through a single `_daily_adv()` closure, so they cannot drift independently again. The window spans 20 real sessions and the per-bar mean is rescaled into a daily figure. The correctness identity is `mean(20*bpd bars) * bpd == sum(window)/20`.
+2. **#268 — exact, not truncated, bars-per-day.** That identity only holds while the window genuinely spans 20 days, so the rescale must use `get_bars_per_day_exact()` (float) rather than the truncated bar count. `get_bars_per_day()` truncates `6.5 / multiplier`, which cost 1H/2H/MIN60 7.7% and 4H 38.5% of their true ADV — leaving #264 closed only for `D`/`W`/`M` and `MIN` 5/15/30.
+
+**Which helper to use:** `get_bars_per_day_exact(config) -> float` for any *scaling factor*; `get_bars_per_day(config) -> int` (which now delegates to it) only where a genuine bar *count* is needed. Both honour `timeframe_multiplier`, unlike `get_bars_for_period()` — whose H-timeframe multiplier bug is separate and tracked in #267.
+
+**Direction of the old error:** understated ADV made the cap bind *earlier* and impact charge *more*, so affected runs looked worse than reality, never better.
+
+`trading_hours_per_day <= 0` now raises on intraday timeframes instead of silently producing a zero ADV that rejected every trade.
+
+D/W/M resolve to exactly `1.0`, so the window stays 20 and the rescale is `×1.0` — byte-for-byte no-op, golden master unaffected.
+
+### Per-Symbol Session Length (issue #270)
+
+`trading_hours_per_day` is one process-wide number, but instruments already resolve per symbol. A book mixing equities (6.5h RTH) with 24h futures therefore gets the wrong bars-per-day for one side of it whatever the global says — feeding the 20-day ADV window above.
+
+`helpers/instruments.py::resolve_session_hours(symbol, config)` resolves it per symbol, in this precedence:
+
+1. `instruments.overrides[SYMBOL]["session_hours"]` — explicit, always wins. **An override dict is authoritative for asset class**, so a futures symbol must spell out `{"asset_class": "future", "session_hours": 23}` — the contract-month auto-detection that recognises `ESM6` as a future is only consulted when the symbol has *no* override, and omitting `asset_class` silently resolves it as a cash equity (point_value 1.0, `cash_full` margin, fractional units, borrow charged, NYSE calendar). Pre-existing `resolve_instrument` precedence from #229; pinned by `TestOverrideKeepsFuturesClassification`.
+2. `instruments.session_hours_from_calendar: True` — opt-in; derives from the instrument's calendar via `CALENDAR_SESSION_HOURS` (NYSE 6.5, CME_ETH **23.0** — CME electronic trading is Sun 17:00 → Fri 16:00 CT with a 60-minute daily maintenance break, so a session is 23h, not 24)
+3. `trading_hours_per_day` — the existing global
+4. `6.5`
+
+Steps 3–4 are exactly the pre-#270 behaviour, so **a run that sets neither an override nor the opt-in flag is unaffected**. `get_bars_per_day_exact(config, session_hours=...)` takes the resolved value; `run_portfolio_simulation` computes `(window_bars, bars_per_day)` per symbol and caches them alongside the ADV memo.
+
+**Scope decision — annualization stays global.** `get_bars_per_year()` shares the same session assumption but was deliberately left process-wide. Moving it per-symbol changes reported Sharpe/CAGR on existing futures runs, which is a reporting-comparability decision rather than a correctness fix; the ADV path has a concrete correctness impact and #265 had already isolated its call sites. Tracked as an open question on #270.
+
+**Tests**: `tests/test_per_symbol_session_hours.py` — precedence ladder, opt-in defaults off, engine-level mixed-book cap divergence, and the no-regression default path.
+
+### ADV Fix Tests
+
+**Tests**: `tests/test_adv_liquidity_intraday.py` (window/cap/impact end-to-end on 5-min bars), `tests/test_bars_per_day_exact.py` (exact bars-per-day, delegation, 20-day-span invariant, plus `test_engine_end_to_end_uses_exact_bars_per_day` — a 4H simulation that is what actually pins the engine to the exact helper; the span-invariant tests reimplement the window formula and so cannot detect engine drift on their own).
 
 ### ATR Column Name Mismatch (fixed 2026-03-13)
 

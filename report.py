@@ -119,6 +119,30 @@ def _load_risk_free_rate(run_dir: Path) -> float | None:
     return None
 
 
+def _load_initial_capital(run_dir: Path) -> float | None:
+    """Read initial_capital from config_snapshot.json in a run directory.
+
+    Returns the value (float) if present and valid (> 0), or None if the file
+    is missing, the key is absent, or the value is invalid. Without this, the
+    analyzer silently falls back to trade_analyzer.default_config.INITIAL_EQUITY
+    ($50,000), which corrupts every dollar/percentage figure derived from it
+    (cover-page Total Return, CAGR, and the Monte Carlo fan chart / percentile
+    table) whenever the real backtest used a different initial_capital.
+    """
+    snapshot_path = run_dir / "config_snapshot.json"
+    if not snapshot_path.is_file():
+        return None
+    try:
+        with open(snapshot_path, "r", encoding="utf-8") as fh:
+            snapshot = json.load(fh)
+        capital = snapshot.get("initial_capital")
+        if capital is not None and float(capital) > 0:
+            return float(capital)
+    except (json.JSONDecodeError, ValueError, TypeError):
+        pass
+    return None
+
+
 def _load_strategy_verdicts(run_dir: Path) -> list[dict]:
     """Load llm_verdict.json from a run directory if present.
 
@@ -239,8 +263,10 @@ def main():
     parser.add_argument(
         "--equity",
         type=float,
-        default=INITIAL_EQUITY,
-        help=f"Initial equity for the analysis (default: {INITIAL_EQUITY}).",
+        default=None,
+        help=f"Initial equity for the analysis. If omitted, auto-loaded from "
+             f"config_snapshot.json's initial_capital when available, else "
+             f"falls back to {INITIAL_EQUITY}.",
     )
     parser.add_argument(
         "--report-name",
@@ -272,11 +298,18 @@ def main():
         default=None,
         help="Optional absolute cap for rolling Sharpe display; values above this are masked.",
     )
+    parser.add_argument(
+        "--layout",
+        choices=["v3", "classic"],
+        default="v3",
+        help="PDF tearsheet layout. 'v3' (default) = dense 2-page institutional "
+             "report; 'classic' = the legacy multi-page tearsheet.",
+    )
     args = parser.parse_args()
 
     # Base config shared across both modes (BASE_OUTPUT_DIRECTORY set per mode below)
     base_config = {
-        'INITIAL_EQUITY': args.equity,
+        'INITIAL_EQUITY': args.equity if args.equity is not None else INITIAL_EQUITY,
         'BENCHMARK_TICKER': args.benchmark_ticker,
         'RISK_FREE_RATE': RISK_FREE_RATE,
         'TRADING_DAYS_PER_YEAR': TRADING_DAYS_PER_YEAR,
@@ -299,6 +332,7 @@ def main():
         'CRITICAL_COLS': CRITICAL_COLS,
         'NUMERIC_COLS': NUMERIC_COLS,
         'WFA_SPLIT_RATIO': WFA_SPLIT_RATIO,
+        'LAYOUT': args.layout,
     }
 
     if args.all:
@@ -309,7 +343,9 @@ def main():
             print(f"ERROR: analyzer_csvs/ not found under: {args.all}")
             sys.exit(1)
 
-        csv_files = sorted(analyzer_csvs_dir.rglob("*.csv"))
+        csv_files = sorted(
+            f for f in analyzer_csvs_dir.rglob("*.csv") if not f.stem.endswith("_equity")
+        )
         if not csv_files:
             print(f"ERROR: No CSV files found under: {analyzer_csvs_dir}")
             sys.exit(1)
@@ -331,6 +367,14 @@ def main():
         mc_block_size = _load_mc_block_size(run_dir)
         mc_use_pct = _load_mc_use_pct(run_dir)
 
+        # Load initial capital from this run's config_snapshot.json (if present
+        # and the user did not explicitly override it via --equity)
+        initial_capital = None
+        if args.equity is None:
+            initial_capital = _load_initial_capital(run_dir)
+            if initial_capital is not None:
+                print(f"Initial capital loaded from config_snapshot.json: {initial_capital}")
+
         output_dir = str(run_dir / "detailed_reports")
         _noise_csv = run_dir / "noise_sample_data.csv"
         config_params = {
@@ -351,6 +395,8 @@ def main():
             benchmark_df = _load_benchmark_file(Path(args.benchmark_csv))
             if benchmark_df is not None:
                 config_params['BENCHMARK_DF'] = benchmark_df
+        if initial_capital is not None:
+            config_params['INITIAL_EQUITY'] = initial_capital
         _strategy_verdicts = _load_strategy_verdicts(run_dir)
         if _strategy_verdicts:
             print(f"Loaded {len(_strategy_verdicts)} strategy verdicts from llm_verdict.json")
@@ -401,6 +447,7 @@ def main():
         risk_free_rate = None
         mc_block_size_single = None
         mc_use_pct_single = None
+        initial_capital = None
         csv_parts = Path(csv_path).parts
         if "analyzer_csvs" in csv_parts:
             idx = csv_parts.index("analyzer_csvs")
@@ -416,6 +463,10 @@ def main():
                 print(f"Risk-free rate loaded from config_snapshot.json: {risk_free_rate}")
             mc_block_size_single = _load_mc_block_size(_run_dir)
             mc_use_pct_single = _load_mc_use_pct(_run_dir)
+            if args.equity is None:
+                initial_capital = _load_initial_capital(_run_dir)
+                if initial_capital is not None:
+                    print(f"Initial capital loaded from config_snapshot.json: {initial_capital}")
 
         if args.report_name:
             report_name = args.report_name
@@ -454,6 +505,8 @@ def main():
             benchmark_df = _load_benchmark_file(Path(args.benchmark_csv))
             if benchmark_df is not None:
                 config_params['BENCHMARK_DF'] = benchmark_df
+        if initial_capital is not None:
+            config_params['INITIAL_EQUITY'] = initial_capital
         generate_trade_report(trades_df, output_dir, report_name, config_params)
 
 

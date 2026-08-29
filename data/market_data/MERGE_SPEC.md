@@ -90,6 +90,39 @@ Code (created only after sign-off): `scripts/update_market_data.py`, `scripts/bu
 
 ---
 
+## 5b. `parquet_data` submodule pin (rationale + migration note)
+
+`NORGATE_ROOT` (`src/data/pipeline/paths.py`) reads Norgate history from a local
+checkout of the `parquet_data` submodule (private repo `july-backtester-norgate-data`,
+pinned to a specific commit rather than tracking that repo's `master`).
+
+**Why the pin is safe (not load-bearing for correctness):** `_norgate_history()`
+(`src/data/pipeline/merge.py`) always slices Norgate input to `<= paths.ANCHOR`
+(2026-04-22, §5) before it reaches the merge. Any rows added to `parquet_data`
+on `master` after the pinned commit fall after the anchor and are discarded by
+that slice regardless of which commit is checked out — a newer-than-pinned
+checkout is a harmless input, not a correctness risk. The pin exists purely for
+**build reproducibility** (so a re-run of `build_merged_dataset.py` on two
+machines reads byte-identical Norgate source rows), not to freeze data the
+merge actually depends on.
+
+**Migration note for collaborators on an older `parquet_data` checkout**
+(e.g. `5ce3ca03` / tracking `master`): no action is required to reproduce the
+merged store — check out the pinned commit only if you need bit-identical
+`polygon_raw`/`audit` output when re-running the build pipeline yourself. To
+sync to the pin:
+
+```bash
+git -C parquet_data fetch origin
+git -C parquet_data checkout bffb9e06
+```
+
+If `parquet_data/` is missing or stale after a normal `git pull`, run
+`git submodule update --init parquet_data` first (see the "Accessing the
+exported data" section in the top-level README).
+
+---
+
 ## 6. Universe classification (Task 1)
 
 Tag every symbol into exactly one bucket:

@@ -39,8 +39,6 @@ Thumbs.db
 
 # Project outputs
 data_cache/
-data/polygon_daily/_dividends_cache/
-research/fvg/output/
 output/
 # parquet_data/ is now a git submodule (july-backtester-norgate-data)
 
@@ -71,6 +69,21 @@ custom_strategies/private/*.py
 !custom_strategies/private/_TEMPLATE_strategy.py
 custom_strategies/private/**/*.py
 !custom_strategies/private/.gitkeep
+
+# Local 1-min FX cache built by scripts/fetch_fx_minute.py (multi-GB)
+fx_minute_cache/
+
 # Binary data files — belong in private data submodule (july-backtester-norgate-data)
 data/nq100_membership.parquet
 data/*.parquet
+data/polygon_daily/_dividends_cache/
+
+# Live paper-trading runtime state (never commit live cash/positions/signals)
+paper_state/state/*
+!paper_state/state/.gitkeep
+paper_state/signals/*
+!paper_state/signals/.gitkeep
+paper_state/stock_level/*
+!paper_state/stock_level/.gitkeep
+paper_state/target_books/*
+!paper_state/target_books/.gitkeep

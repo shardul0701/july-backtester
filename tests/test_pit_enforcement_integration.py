@@ -217,13 +217,11 @@ class TestNq100YamlIntervals:
         intervals = membership_intervals("pit:nq100", config)
         assert "AAA" in intervals and "CCC" in intervals
 
-    def test_nq100_no_yaml_repo_falls_back_to_legacy_parquet(self, monkeypatch):
-        # No env, no config path -> falls back to the bundled legacy snapshot
-        # (data/nq100_membership.parquet ships in this repo), not an empty dict.
+    def test_nq100_no_repo_returns_empty_not_crash(self, tmp_path, monkeypatch):
+        # No env, no config path, no legacy parquet → empty (unchanged behaviour).
         monkeypatch.delenv("NQ100_DATA_ROOT", raising=False)
         config = {"start_date": "2004-01-01", "end_date": "2004-12-31"}
-        intervals = membership_intervals("pit:nq100", config)
-        assert intervals != {}
+        assert membership_intervals("pit:nq100", config) == {}
 
 
 # ---------------------------------------------------------------------------

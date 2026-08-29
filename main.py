@@ -23,7 +23,34 @@ import orjson
 from helpers.caching import CACHE_DIR
 from helpers.noise import inject_price_noise
 
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except AttributeError:
+    pass
+
 logger = logging.getLogger(__name__)
+
+
+def _dependency_warning_for_failed_fetch(symbol: str, dependencies: dict) -> str | None:
+    """Build a warning explaining a failed comparison-ticker fetch's downstream impact.
+
+    Returns ``None`` when *symbol* isn't a strategy dependency (e.g. a
+    benchmark-only ticker like QQQ) -- a plain fetch-failure warning already
+    covers that case. When it *is* a dependency (e.g. I:VIX backing
+    ``vix_df``), a failed fetch means the strategy receives ``None`` for that
+    kwarg and any regime/filter gate ANDed on it fails closed (zero trades)
+    rather than raising -- easy to misread as "no edge" instead of "no data".
+    """
+    dep_keys = [k for k, v in dependencies.items() if v == symbol]
+    if not dep_keys:
+        return None
+    return (
+        f"  -> '{symbol}' backs the {'/'.join(dep_keys)}_df dependency. Any active "
+        f"strategy declaring dependencies={dep_keys} will receive {dep_keys[0]}_df=None "
+        "and its regime/filter gates fail CLOSED (zero trades) rather than raising — "
+        "check for a silently-empty result before concluding the strategy has no edge."
+    )
 
 
 def _pick_reference_df(comparison_dfs: dict) -> pd.DataFrame:
@@ -45,27 +72,21 @@ comparison_dfs_global = None
 benchmark_returns_global = None
 dependency_map_global = None
 portfolio_data_global = None
+delisting_dates_global = None
 pit_member_masks_global = None
+intrabar_data_global = None
 
 # --------------------------------------------------------------------
 # --- WORKER INITIALIZER FOR MULTIPROCESSING ---
 # --------------------------------------------------------------------
-def init_worker(
-    comparison_dfs_dict,
-    benchmark_returns_dict,
-    dependency_map_dict,
-    portfolio_data_for_worker,
-    delisting_dates_for_worker=None,
-    pit_member_masks_dict=None,
-    config_for_worker=None,
-):
+def init_worker(comparison_dfs_dict, benchmark_returns_dict, dependency_map_dict, portfolio_data_for_worker, delisting_dates_for_worker=None, pit_member_masks_dict=None, intrabar_data_for_worker=None, config_for_worker=None):
     """
     Initializer for the multiprocessing pool.
     Makes comparison ticker DataFrames, benchmark returns, dependency symbol map,
-    the current portfolio's data, delisting dates, and optional PIT membership
-    masks globally available to each worker process.
+    the current portfolio's data, delisting dates, optional PIT membership masks,
+    and optional intraday (sub-bar) data globally available to each worker process.
     """
-    global comparison_dfs_global, benchmark_returns_global, dependency_map_global, portfolio_data_global, delisting_dates_global, pit_member_masks_global
+    global comparison_dfs_global, benchmark_returns_global, dependency_map_global, portfolio_data_global, delisting_dates_global, pit_member_masks_global, intrabar_data_global
     comparison_dfs_global = comparison_dfs_dict
     benchmark_returns_global = benchmark_returns_dict
     dependency_map_global = dependency_map_dict
@@ -75,6 +96,100 @@ def init_worker(
     if config_for_worker is not None:
         CONFIG.clear()
         CONFIG.update(config_for_worker)
+    intrabar_data_global = intrabar_data_for_worker
+
+
+def _resolve_intrabar_source(path):
+    """Resolve ``intrabar_parquet_source`` to a portable absolute path.
+
+    Expands ``~`` and environment variables, and resolves a relative path
+    against the project root — so a config can point at a repo-relative file
+    (e.g. ``"data/nq_1min.parquet"``) or a ``$ENV``/``~`` path that works on any
+    machine, instead of a contributor-local absolute path (e.g. a Windows
+    ``C:\\Users\\...`` path that silently breaks everywhere else).
+    """
+    resolved = os.path.expanduser(os.path.expandvars(str(path)))
+    if not os.path.isabs(resolved):
+        resolved = os.path.join(os.path.dirname(os.path.abspath(__file__)), resolved)
+    return resolved
+
+
+def _build_intrabar_data(portfolio_data, config):
+    """Fetch finer-resolution (intraday) bars per symbol for sub-bar stop resolution.
+
+    Returns ``{symbol: intraday_df}`` for symbols whose provider can serve intraday
+    data; symbols that can't (or error) are omitted and the engine simply no-ops for
+    them. Heavy and provider/plan-limited, so only called when ``intrabar_resolution``
+    is enabled. Uses ``intrabar_timeframe`` / ``intrabar_multiplier`` (default MIN/1).
+
+    If ``intrabar_parquet_source`` is set, bypasses the normal per-symbol data-provider
+    fetch entirely and instead loads one 1-minute OHLC parquet file directly, applying
+    it to every symbol in the portfolio. This is for single-symbol research (e.g. the
+    Sleeve A NQ reconciliation) where the CSV provider has no notion of timeframe (it
+    always re-reads the same daily-bar file regardless of `timeframe`/`timeframe_multiplier`)
+    and the real sub-minute source lives outside `csv_data_dir` as a parquet file.
+
+    The path is resolved portably via :func:`_resolve_intrabar_source` (``~`` /
+    ``$ENV`` expansion, relative paths resolved against the project root). If the
+    resolved file does not exist, the run warns and falls back to the per-symbol
+    provider fetch instead of silently disabling intrabar resolution.
+    """
+    parquet_source = config.get("intrabar_parquet_source")
+    resolved_source = _resolve_intrabar_source(parquet_source) if parquet_source else None
+    if resolved_source and not os.path.exists(resolved_source):
+        # Portability guard: a config pointing at a missing/contributor-local
+        # file (e.g. a Windows absolute path on another machine) no longer
+        # silently disables intrabar resolution -- warn and fall through to the
+        # normal per-symbol data-provider fetch below.
+        logger.warning(
+            f"  -> intrabar_parquet_source '{parquet_source}' (resolved: '{resolved_source}') "
+            f"not found; falling back to the per-symbol data provider for intraday bars. "
+            f"Point it at a repo-relative or $ENV/~ path for a portable config.")
+        resolved_source = None
+    if resolved_source:
+        try:
+            raw = pd.read_parquet(resolved_source).sort_index()
+            idx = raw.index
+            idx_naive = idx.tz_localize(None) if getattr(idx, "tz", None) is not None else idx
+            idf = pd.DataFrame({
+                "Open": raw["open"].to_numpy(), "High": raw["high"].to_numpy(),
+                "Low": raw["low"].to_numpy(), "Close": raw["close"].to_numpy(),
+            }, index=idx_naive)
+            idf.index.name = "Datetime"
+        except Exception as e:
+            # Covers read failures AND a mismatched column schema (e.g. "Open"
+            # instead of "open") -- both are non-fatal here: the caller treats
+            # an empty dict as "no intrabar data available" and no-ops.
+            logger.warning(f"  -> intrabar_parquet_source failed to load '{resolved_source}': {e}")
+            return {}
+        out = {symbol: idf for symbol in portfolio_data}
+        if len(portfolio_data) > 1:
+            logger.warning(
+                f"  -> intrabar_parquet_source applies the SAME single-symbol parquet file "
+                f"to all {len(portfolio_data)} symbols in this portfolio ({len(portfolio_data)} "
+                f"symbols); this path is intended for single-symbol research runs only.")
+        logger.info(f"  -> Sub-bar resolution: loaded 1-min parquet source ({len(idf)} rows) "
+                    f"for {len(out)} symbol(s)")
+        return out
+
+    tf = config.get("intrabar_timeframe", "MIN")
+    mult = config.get("intrabar_multiplier", 1)
+    intra_cfg = {**config, "timeframe": tf, "timeframe_multiplier": mult}
+    fetcher = get_data_service()
+    out = {}
+    for symbol in portfolio_data:
+        try:
+            idf = fetcher(symbol, config["start_date"], config["end_date"], intra_cfg)
+        except Exception as e:
+            logger.warning(f"  -> intrabar fetch failed for '{symbol}': {e}")
+            idf = None
+        if idf is not None and not idf.empty:
+            out[symbol] = idf
+    if out:
+        logger.info(f"  -> Sub-bar resolution: loaded intraday data for {len(out)}/{len(portfolio_data)} symbols")
+    else:
+        logger.warning("  -> intrabar_resolution enabled but no intraday data available; stop fills unchanged")
+    return out
 
 # --------------------------------------------------------------------
 
@@ -84,7 +199,7 @@ def run_single_simulation(args):
     This version now uses globally initialized dataframes AND portfolio_data.
     """
     # Access ALL globally initialized data
-    global comparison_dfs_global, benchmark_returns_global, dependency_map_global, portfolio_data_global, delisting_dates_global, pit_member_masks_global
+    global comparison_dfs_global, benchmark_returns_global, dependency_map_global, portfolio_data_global, delisting_dates_global, pit_member_masks_global, intrabar_data_global
 
     # 1. Unpack the arguments. `portfolio_data` has been REMOVED from the tuple.
     portfolio_name, name, logic_func, dependencies, stop_config, \
@@ -108,6 +223,13 @@ def run_single_simulation(args):
         base_signals_with_dfs = {}
         for symbol, df in portfolio_data.items():
             kwargs = {}
+
+            # Always inject the ticker being processed so per-symbol /
+            # event-driven strategies (e.g. one keyed on a per-ticker
+            # earnings-date table) can identify which symbol's DataFrame
+            # they are evaluating. Backward-compatible: existing strategies
+            # take (df, **kwargs) and ignore unknown keys.
+            kwargs["symbol"] = symbol
 
             # Dynamic dependency injection
             for dep_key in dependencies:
@@ -155,7 +277,9 @@ def run_single_simulation(args):
         # Call the simulation, passing the stop_config and using the global dataframes.
         result = run_portfolio_simulation(
             portfolio_data, final_signals, CONFIG["initial_capital"], CONFIG["allocation_per_trade"],
-            spy_df_local, vix_df_local, tnx_df_local, stop_config, delisting_dates=delisting_dates_global
+            spy_df_local, vix_df_local, tnx_df_local, stop_config,
+            delisting_dates=delisting_dates_global,
+            intrabar_data=intrabar_data_global,
         )
         
         if result is None: return None
@@ -166,10 +290,28 @@ def run_single_simulation(args):
             
             if result.get('Trades', 0) > 0:
                 if result['Trades'] >= CONFIG.get("min_trades_for_mc", 10):
-                    mc_sim_results = run_monte_carlo_simulation(
-                        result['trade_pnl_list'], initial_equity=result['initial_capital'],
-                        num_simulations=CONFIG["num_mc_simulations"]
+                    # MC resampling: "auto" ties the method to the strategy's
+                    # asset-class smoothness profile (concentrated_futures ->
+                    # block-bootstrap, which preserves the streak clustering those
+                    # strategies live on; else i.i.d.). Explicit "iid"/"block" pass
+                    # through unchanged. Applied via a scoped CONFIG override because
+                    # run_monte_carlo_simulation reads CONFIG["mc_sampling"] directly
+                    # (helpers/monte_carlo.py is Do-Not-Touch).
+                    from helpers.smoothness_profiles import (
+                        resolve_profile_name as _rpn, resolve_mc_sampling as _rms,
                     )
+                    _mc_profile = _rpn(list(portfolio_data.keys()), CONFIG)
+                    _eff_sampling = _rms(CONFIG.get("mc_sampling", "iid"), _mc_profile)
+                    result["mc_sampling_effective"] = _eff_sampling
+                    _saved_sampling = CONFIG.get("mc_sampling", "iid")
+                    try:
+                        CONFIG["mc_sampling"] = _eff_sampling
+                        mc_sim_results = run_monte_carlo_simulation(
+                            result['trade_pnl_list'], initial_equity=result['initial_capital'],
+                            num_simulations=CONFIG["num_mc_simulations"]
+                        )
+                    finally:
+                        CONFIG["mc_sampling"] = _saved_sampling
                     mc_analysis = analyze_mc_results(result, mc_sim_results)
                     result.update(mc_analysis)
                 else:
@@ -239,15 +381,30 @@ def run_single_simulation(args):
             )
 
             # --- Smoothness verdict (surfaced in summary tables, terminal verdict block,
-            # PDF tearsheet) — same compute as helpers/llm_verdict.compute_smoothness ---
+            # PDF tearsheet) — same compute as helpers/llm_verdict.compute_smoothness.
+            # The profile is chosen per strategy from the portfolio's instrument asset
+            # class (or an explicit config["smoothness_profile"]) so concentrated /
+            # futures strategies are judged against the right baseline, not equities. ---
             from helpers.llm_verdict import compute_smoothness as _compute_smoothness
-            _smooth = _compute_smoothness(result.get("portfolio_timeline"))
+            from helpers.smoothness_profiles import resolve_profile_name, mc_sampling_caveat
+            _profile = resolve_profile_name(list(portfolio_data.keys()), CONFIG)
+            result["smoothness_profile"] = _profile
+            _smooth = _compute_smoothness(result.get("portfolio_timeline"), _profile)
             if _smooth:
                 result["smooth_verdict"] = _smooth.get("smooth_verdict", "N/A")
                 result["smooth_notes"] = _smooth.get("smooth_notes", []) or []
             else:
                 result["smooth_verdict"] = "N/A"
                 result["smooth_notes"] = []
+
+            # Fold in the MC "DD Understated" caveat (reporting-layer only; no change
+            # to monte_carlo.py or the MC score).
+            _mc_note = mc_sampling_caveat(
+                result.get("mc_verdict"), _profile,
+                result.get("mc_sampling_effective", CONFIG.get("mc_sampling", "iid"))
+            )
+            if _mc_note:
+                result["mc_sampling_note"] = _mc_note
 
             return result
             
@@ -365,7 +522,7 @@ def main():
         format="%(asctime)s [%(levelname)s] %(message)s",
         handlers=[
             logging.StreamHandler(),
-            logging.FileHandler(os.path.join(run_base_dir, "logs", f"run_{timestamp}.log")),
+            logging.FileHandler(os.path.join(run_base_dir, "logs", f"run_{timestamp}.log"), encoding="utf-8"),
         ],
     )
 
@@ -470,6 +627,9 @@ def main():
                 comparison_dfs[symbol] = df
             else:
                 logger.warning(f"Failed to fetch data for comparison ticker '{symbol}' (normalized: '{normalized}')")
+                dep_warning = _dependency_warning_for_failed_fetch(symbol, comparison_config["dependencies"])
+                if dep_warning:
+                    logger.warning(dep_warning)
 
         # Derive actual data period from comparison ticker data if available,
         # otherwise fall back to config dates (valid when comparison_tickers = [])
@@ -540,7 +700,10 @@ def main():
             value = "pit:nq100"
             logger.info(f"  -> '{portfolio_name}': normalised 'nq100_pit' → 'pit:nq100'")
 
-        _current_pit_schedule = None  # reset each portfolio; set only for pit: portfolios
+        # Reset each portfolio. Set for pit: portfolios (index membership) AND
+        # for rule: portfolios (periodic liquidity re-basing) — both emit the
+        # same [(date, frozenset)] shape, so both feed the masking below.
+        _current_membership_schedule = None
 
         # --- Data fetching for the current portfolio (no changes) ---
         # (Your existing code to get symbols and build `portfolio_data` is perfect)
@@ -563,12 +726,54 @@ def main():
              file_path = os.path.join("tickers_to_scan", value)
              with open(file_path, 'rb') as f:
                  symbols = orjson.loads(f.read())
+        elif isinstance(value, str) and value.lower().startswith("rule:"):
+            # Rule-based point-in-time universe (#70). Needs no index-membership
+            # data: the investable set is derived from observable liquidity over
+            # the delisted-inclusive Parquet corpus, so it is survivorship-free
+            # by construction.
+            #
+            # Resolved PERIODICALLY, not once. Resolving only at start_date and
+            # freezing the result reintroduced a selection bias of the same shape
+            # as the survivorship bug this feature removes, pointing the other
+            # way: a 2004-2024 run would never trade NVDA, TSLA, META or GOOGL,
+            # because none were top-500-liquidity names in 2004. Yields the same
+            # (union, schedule) pair as the pit: branch below, so it reuses the
+            # existing per-bar membership masking with no engine change.
+            from helpers.rule_based_universe import build_rule_schedule
+            # .lower() because rebase_dates() lowercases before dispatching, so
+            # "None"/"NONE" already FREEZE the universe. Comparing verbatim here
+            # meant those spellings froze it while skipping the warning AND
+            # leaving the mask built from the frozen snapshot rather than
+            # disabled -- i.e. it failed in exactly the case the warning exists
+            # for: a user who deliberately opted into freezing.
+            _rebase = str(CONFIG.get("universe_rebase", "annual") or "annual").lower()
+            try:
+                symbols, _current_membership_schedule = build_rule_schedule(
+                    value, CONFIG["start_date"], CONFIG["end_date"], CONFIG,
+                    progress=lambda i, n, d, k: logger.info(
+                        f"     re-base {i}/{n} @ {d}: {k} securities"),
+                )
+                if _rebase == "none":
+                    _current_membership_schedule = None   # opt out of masking
+                    logger.warning(
+                        f"  -> universe_rebase='none': '{value}' is frozen at "
+                        f"{CONFIG['start_date']} for the whole run. Securities "
+                        f"that become investable later will NEVER be traded."
+                    )
+                logger.info(
+                    f"  -> Resolved {len(symbols)} securities from '{value}' "
+                    f"across {CONFIG['start_date']}..{CONFIG['end_date']} "
+                    f"(rebase={_rebase}, survivorship-free; NOT an index)"
+                )
+            except Exception as e:
+                logger.error(f"  -> ERROR resolving rule universe '{value}': {e}")
+                continue
         elif isinstance(value, str) and value.startswith("pit:"):
             from helpers.point_in_time import tickers_union_for_period as _pit_union, build_membership_schedule as _pit_schedule_build
             _pit_index_name = value.split(":", 1)[1]
             try:
                 symbols = _pit_union(_pit_index_name, CONFIG["start_date"], CONFIG["end_date"], CONFIG)
-                _current_pit_schedule = _pit_schedule_build(_pit_index_name, CONFIG["start_date"], CONFIG["end_date"], CONFIG)
+                _current_membership_schedule = _pit_schedule_build(_pit_index_name, CONFIG["start_date"], CONFIG["end_date"], CONFIG)
             except Exception as e:
                 logger.error(f"  -> ERROR resolving PIT portfolio '{value}' for '{portfolio_name}': {e}")
                 continue
@@ -673,7 +878,10 @@ def main():
         if CONFIG.get("data_quality_checks", True):
             from helpers.data_quality import quality_report
             logger.info(f"  -> Running data quality checks on {len(symbols)} symbols...")
-            quality_df = quality_report(symbols, portfolio_data, CONFIG.get("timeframe", "D"))
+            # config is passed so futures symbols resolve their calendar (CME_ETH)
+            # and skip the NYSE missing-bar estimate (see helpers/data_quality.py).
+            quality_df = quality_report(symbols, portfolio_data, CONFIG.get("timeframe", "D"),
+                                        config=CONFIG)
 
             # Display quality report
             threshold = CONFIG.get("data_quality_threshold", 80)
@@ -706,12 +914,18 @@ def main():
             else:
                 logger.info(f"  -> No delisted symbols found (or provider doesn't support delisting data).")
 
-        # --- PIT MEMBERSHIP MASKS (precomputed once per portfolio) ---
-        # For pit: portfolios, build a boolean Series per symbol marking which
-        # trading dates the symbol was an index member.  Workers apply this mask
-        # to gate entry signals and inject exit signals — zero per-simulation
-        # overhead beyond a vectorised lookup.
-        if _current_pit_schedule is not None:
+        # --- MEMBERSHIP MASKS (precomputed once per portfolio) ---
+        # Build a boolean Series per symbol marking which trading dates the
+        # symbol was a member of the tradeable universe.  Workers apply this
+        # mask to gate entry signals and inject exit signals — zero
+        # per-simulation overhead beyond a vectorised lookup.
+        #
+        # Two producers, one shape:
+        #   pit:  -> index membership from the PIT YAML
+        #   rule: -> periodic liquidity re-basing (annual by default)
+        # The rule: case is what stops a liquidity universe being frozen at
+        # start_date, which would bar every name that qualified later.
+        if _current_membership_schedule is not None:
             from helpers.point_in_time import pit_members_on as _pit_members_on
             from helpers.pit_enforcement import (
                 build_member_mask as _pit_build_member_mask,
@@ -723,7 +937,7 @@ def main():
                 _dates = _df.index
                 _date_strs = [str(d)[:10] for d in _dates]
                 _pit_member_masks[_sym] = pd.Series(
-                    [_sym in _pit_members_on(_current_pit_schedule, d) for d in _date_strs],
+                    [_sym in _pit_members_on(_current_membership_schedule, d) for d in _date_strs],
                     index=_dates,
                     dtype=bool,
                 )
@@ -799,22 +1013,27 @@ def main():
         # (e.g. SP500 PIT: 964 symbols, only 2 tasks, but 8 workers were spawned).
         num_workers = min(cpu_count(), len(tasks_for_this_portfolio))
         logger.info("=" * 15 + f" RUNNING SIMULATIONS FOR '{portfolio_name}' " + "=" * 15)
-        logger.info(f"Found {len(tasks_for_this_portfolio)} tasks. Using {num_workers} CPU core(s).")
+        _n_workers = min(cpu_count(), len(tasks_for_this_portfolio))
+        logger.info(f"Found {len(tasks_for_this_portfolio)} tasks. Using up to {_n_workers} CPU cores.")
+
+        # Sub-bar resolution: fetch intraday data per symbol only when enabled.
+        _intrabar_data = (_build_intrabar_data(portfolio_data, CONFIG)
+                          if CONFIG.get("intrabar_resolution", False) else None)
 
         # Pass comparison data, portfolio data, delisting dates, PIT masks, and
-        # CLI-mutated config into spawned workers. On Windows, child processes
-        # import config.py fresh unless we explicitly hydrate CONFIG here.
-        init_args = (
-            comparison_dfs,
-            benchmark_returns,
-            comparison_config["dependencies"],
-            portfolio_data,
-            delisting_dates,
-            _pit_member_masks,
-            dict(CONFIG),
-        )
+        # optional intraday data during initialization
+        # dict(CONFIG) hydrates CLI-mutated config into spawned workers:
+        # on Windows children re-import config.py fresh otherwise.
+        init_args = (comparison_dfs, benchmark_returns, comparison_config["dependencies"], portfolio_data, delisting_dates, _pit_member_masks, _intrabar_data, dict(CONFIG))
 
-        with Pool(processes=num_workers, initializer=init_worker, initargs=init_args) as p:
+        # _n_workers caps at the actual task count (not always cpu_count()): with
+        # intrabar_resolution on, each worker gets its own pickled copy of the full
+        # 1-minute intrabar dataframe (5M+ rows) at spawn time via initargs. On a
+        # memory-constrained Windows box, spawning idle extra workers that only
+        # duplicate that payload without doing any work has been observed to trigger
+        # an intermittent `OSError: [Errno 22] Invalid argument` from
+        # multiprocessing's spawn pickling (a low-memory condition, not a task bug).
+        with Pool(processes=_n_workers, initializer=init_worker, initargs=init_args) as p:
             import time as _time
             _results = []
             _start_pool = _time.monotonic()
