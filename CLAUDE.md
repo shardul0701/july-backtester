@@ -2,6 +2,33 @@
 
 > **RTK RULE — NON-NEGOTIABLE**: Every terminal command MUST be prefixed with `rtk`. No exceptions. This includes `rtk git`, `rtk grep`, `rtk pytest`, `rtk ls`, `rtk read`, etc. Bare `grep`, `git`, `pytest`, `find` etc. are FORBIDDEN in this project.
 
+> **DATA RULE — NON-NEGOTIABLE**: All market data is read through **`data_gate.py`** at the repo root, and through nothing else. Read [DATA.md](DATA.md) before fetching a single price.
+>
+> ```python
+> from data_gate import verify, get_universe, get_prices
+> verify()                                                  # fingerprint what you're using
+> syms = get_universe("sp500", "2010-01-01", "2020-12-31")  # point-in-time members
+> px   = get_prices(syms, "2010-01-01", "2020-12-31")       # {symbol: OHLCV DataFrame}
+> ```
+>
+> Do **not** `pd.read_parquet` a data folder, do **not** use yfinance, do **not** read `data/polygon_daily/`, `data/universes/`, `data_cache/`, or `data/cache/`. They return different numbers for the same symbol and date. Do **not** build a universe from `tickers_to_scan/*.json` — those are *today's* members and are survivorship-biased over history.
+>
+> `data_gate` **fails closed**: a missing root, a missing seed-year roster, an empty universe, or a price seam it cannot vouch for raises `DataGateError` naming the fix. Never catch it to fall back to another source.
+
+> **STRATEGY RULE — NON-NEGOTIABLE**: There is **one** current variant per strategy
+> family, and it is named in **[STRATEGIES.md](STRATEGIES.md)**. Read it before you answer
+> "which momentum strategy", before you propose a variant, and before you re-run a sweep.
+>
+> - "the momentum strategy" → §3 `Momentum Rotation v3 — C3` (paused) — *not* C7, which is a component
+> - "the mean reversion strategy" → §1 `MR_VG12_PIT`
+> - "the AQR strategy" → §2 `AQR_A_F1 v1.0.0` (frozen, certified)
+> - "the best thing we have" → §4 the blended PIT books
+>
+> Every family has a **Killed — do not re-test** list. Those experiments were run and
+> failed; re-running one is wasted work, and proposing it is a regression. Rank only on
+> full-period, costed, PIT numbers — never from a `*_SUBPERIOD.csv`, whose degenerate
+> windows produce Calmars in the thousands.
+
 ## What This Is
 Python backtesting engine for US equities. Tests 20+ technical strategies across single symbols or large portfolios (Nasdaq, S&P 500, etc.) with Monte Carlo robustness scoring.
 
@@ -18,6 +45,8 @@ The app version lives in **`version.py`** at the project root (`__version__ = "x
 
 ## Key Files
 ```
+data_gate.py                       # THE ONLY DOOR to market data: verify(), get_universe(), get_prices(); fails closed
+DATA.md                            # Where the data lives, how corpus+overlay are joined, what must never be read
 version.py                         # Single source of truth for the app version — bump on every release
 config.py                          # All settings — edit this before running
 main.py                            # Single entry point (--name, --verbose, --dry-run, --init)
