@@ -32,6 +32,10 @@ from helpers.data_quality import (
     _DENSITY_MIN_BARS_PER_YEAR,
     _GAP_DEMERITS,
     _GAP_MAX_DAYS,
+    _JUMP_MAGNITUDE_CAP,
+    _JUMP_MAGNITUDE_PER_DECADE,
+    _JUMP_MAX_BAR_GAP_DAYS,
+    _JUMP_SUBPENNY_PRICE,
     _SENTINEL_CLOSE,
     _SENTINEL_DEMERITS,
     validate_ohlcv,
@@ -545,3 +549,235 @@ class TestColumnNameCaseInsensitivity:
             index=_IDX[:n])
         _, issues = validate_ohlcv(df, "SHOUT", "D")
         assert any("High < Low" in i for i in issues), issues
+
+
+class TestJumpMagnitude:
+    """CHECK 4 counted jumps and never weighed magnitude (#360), so a 25%
+    wobble and a 1,000,000x unadjusted split were priced the same 2 points.
+    A single 2e-06 bar carrying +99,999,900% scored 96/100 and passed.
+
+    The escalation is deliberately narrow. Two guards keep it off the two
+    populations that produce huge percentages without a split behind them —
+    a jump measured across a coverage hole, and tick-grid bounce on a
+    sub-penny shell. Both are pinned here with a paired control that differs
+    only in the guarded dimension, so neither guard can be disabled quietly.
+    """
+
+    @staticmethod
+    def _step(lo, hi, n=150, index=None):
+        return _frame([lo] * n + [hi] * n, index=index)
+
+    def test_a_two_decade_jump_no_longer_passes_the_gate(self):
+        score, issues = validate_ohlcv(self._step(1.0, 200.0), "SPLIT", "D")
+        assert any("Extreme price jump" in i for i in issues), issues
+        # 2 for the one jump CHECK 4 already counted, plus 2 decades of
+        # escalation. 98 before this change: it passed a strict `< 80` gate.
+        assert score == 100.0 - 2 - 2 * _JUMP_MAGNITUDE_PER_DECADE, (score, issues)
+        assert score < 80.0
+
+    def test_the_demerit_escalates_with_magnitude(self):
+        one = validate_ohlcv(self._step(1.0, 11.5), "D1", "D")[0]
+        two = validate_ohlcv(self._step(1.0, 200.0), "D2", "D")[0]
+        three = validate_ohlcv(self._step(1.0, 2000.0), "D3", "D")[0]
+        assert one > two > three, (one, two, three)
+        assert one == 100.0 - 2 - 1 * _JUMP_MAGNITUDE_PER_DECADE
+        assert two == 100.0 - 2 - 2 * _JUMP_MAGNITUDE_PER_DECADE
+        assert three == 100.0 - 2 - _JUMP_MAGNITUDE_CAP
+
+    def test_the_escalation_is_capped(self):
+        """Four decades and three decades score the same. Without the cap a
+        six-decade series (ELRNF is one) would take 90 and swamp every other
+        signal in the report."""
+        three = validate_ohlcv(self._step(1.0, 2000.0), "D3", "D")[0]
+        four = validate_ohlcv(self._step(1.0, 20_000.0), "D4", "D")[0]
+        assert four == three == 100.0 - 2 - _JUMP_MAGNITUDE_CAP
+
+    def test_an_ordinary_split_ratio_is_untouched(self):
+        """A 4:1 split prints +300%. It is below one decade, so it keeps
+        exactly today's 2-point count demerit and gains no issue string. The
+        no-regression pin: the escalation must not reprice ordinary corporate
+        actions."""
+        score, issues = validate_ohlcv(self._step(10.0, 40.0), "HONEST", "D")
+        assert any("Price jumps" in i for i in issues), issues
+        assert not any("Extreme price jump" in i for i in issues), issues
+        assert score == 98.0, (score, issues)
+
+    def test_the_one_decade_boundary(self):
+        """+950% is not a decade past the 20% threshold; +1,050% is. A pair
+        that differs only across the boundary, so an off-by-one in the
+        `decades >= 1` gate cannot pass both."""
+        under, u_issues = validate_ohlcv(self._step(1.0, 10.5), "UNDER", "D")
+        over, o_issues = validate_ohlcv(self._step(1.0, 11.5), "OVER", "D")
+        assert under == 98.0, (under, u_issues)
+        assert not any("Extreme" in i for i in u_issues), u_issues
+        assert over == 100.0 - 2 - _JUMP_MAGNITUDE_PER_DECADE, (over, o_issues)
+        assert any("Extreme" in i for i in o_issues), o_issues
+
+    def test_a_jump_across_a_coverage_hole_is_not_called_a_split(self):
+        """CELH: $4.66 -> $61.90 is +1,228%, and it is the real price move
+        either side of an 82-day hole in coverage, not a split. pct_change is
+        boundary-blind — it happily differences across a gap of any width."""
+        holed = _IDX[:150].append(_IDX[210:360])
+        assert (holed[150] - holed[149]).days > _JUMP_MAX_BAR_GAP_DAYS
+        _, issues = validate_ohlcv(self._step(1.0, 200.0, index=holed), "HOLE", "D")
+        assert not any("Extreme price jump" in i for i in issues), issues
+
+    def test_the_same_jump_on_adjacent_bars_is_called_a_split(self):
+        """Control for the gap guard: identical prices, contiguous index."""
+        _, issues = validate_ohlcv(self._step(1.0, 200.0), "ADJACENT", "D")
+        assert any("Extreme price jump" in i for i in issues), issues
+
+    def test_a_long_weekend_still_counts_as_adjacent(self):
+        """The guard must not fire on ordinary calendar spacing. A Friday to
+        Tuesday step is 3 days, and a bdate_range crossing a holiday is more,
+        so the threshold has to sit above a weekend rather than at one bar."""
+        spaced = _IDX[:150].append(_IDX[151:301])
+        assert 1 < (spaced[150] - spaced[149]).days <= _JUMP_MAX_BAR_GAP_DAYS
+        _, issues = validate_ohlcv(self._step(1.0, 200.0, index=spaced), "WKND", "D")
+        assert any("Extreme price jump" in i for i in issues), issues
+
+    def test_sub_penny_tick_bounce_is_not_called_a_split(self):
+        """TUPBQ $0.0001 -> $0.0013 is +1,200% of nothing: the denominator is
+        the grid minimum, so the percentage is enormous while the move is a
+        handful of ticks. Not evidence of a split."""
+        score, issues = validate_ohlcv(self._step(0.0001, 0.0013), "TUPBQ", "D")
+        assert not any("Extreme price jump" in i for i in issues), issues
+        assert score == 98.0, (score, issues)
+
+    def test_the_same_ratio_above_a_cent_is_called_a_split(self):
+        """Control for the sub-penny guard: the SAME 12x ratio, four decades
+        of price level higher. Differs from the test above in nothing but the
+        guarded dimension."""
+        assert abs((0.0013 / 0.0001) - (13.0 / 1.0)) < 1e-9
+        score, issues = validate_ohlcv(self._step(1.0, 13.0), "ABOVE", "D")
+        assert any("Extreme price jump" in i for i in issues), issues
+        assert score == 100.0 - 2 - _JUMP_MAGNITUDE_PER_DECADE, (score, issues)
+
+    def test_only_the_higher_end_has_to_clear_a_cent(self):
+        """ELRNF is 4.37e-07 -> $0.656. The low end is far below a cent, and
+        the move is still real. Guarding on the LOW end would drop it."""
+        assert _JUMP_SUBPENNY_PRICE == 0.01
+        _, issues = validate_ohlcv(self._step(0.0000005, 0.656), "ELRNF", "D")
+        assert any("Extreme price jump" in i for i in issues), issues
+
+    def test_the_worst_eligible_jump_sets_the_demerit_not_the_worst_overall(self):
+        """A guarded jump must not be able to lend its magnitude to an
+        eligible one. Here the biggest move by far (+449,900%) is sub-penny at
+        both ends; the demerit has to come from the +1,200% that follows it."""
+        closes = [0.000002] * 100 + [0.009] * 100 + [0.117] * 100
+        score, issues = validate_ohlcv(_frame(closes), "MIXED", "D")
+        extreme = [i for i in issues if "Extreme price jump" in i]
+        assert len(extreme) == 1, issues
+        assert "1,200%" in extreme[0], extreme[0]
+        assert "449,900%" not in extreme[0], extreme[0]
+        assert score == 100.0 - 4 - _JUMP_MAGNITUDE_PER_DECADE, (score, issues)
+
+    def test_row_order_does_not_change_the_score(self):
+        """A return is a property of the data, not of row order.
+        services/csv_service.py never sorts its index and supports the
+        newest-first Nasdaq.com export; read backwards, a +19,900% jump prints
+        as -99.5%, which still trips the 20% threshold but reads as ZERO
+        decades and escapes the escalation entirely. Same defect CHECK 8 was
+        fixed for."""
+        df = self._step(1.0, 200.0)
+        asc, asc_issues = validate_ohlcv(df, "ASC", "D")
+        desc, desc_issues = validate_ohlcv(df.iloc[::-1], "DESC", "D")
+        assert asc == desc, (asc, desc, asc_issues, desc_issues)
+        assert sorted(asc_issues) == sorted(desc_issues)
+        assert any("Extreme price jump" in i for i in desc_issues), desc_issues
+
+    def test_the_issue_states_what_was_measured(self):
+        """It names the two prices, the date, how far past the threshold it
+        is, and BOTH guards it cleared — so a reader can tell an unadjusted
+        split from the two things that look like one."""
+        _, issues = validate_ohlcv(self._step(1.0, 200.0), "SPLIT", "D")
+        extreme = next(i for i in issues if "Extreme price jump" in i)
+        assert "19,900%" in extreme, extreme
+        assert "$1 -> $200" in extreme, extreme
+        assert "2 decades" in extreme, extreme
+        assert "ADJACENT" in extreme and "$0.01" in extreme, extreme
+        assert "#360" in extreme, extreme
+
+    def test_duplicate_timestamps_do_not_crash_the_scorer(self):
+        """CHECK 1 reports duplicate timestamps and keeps going, so everything
+        downstream has to survive them. `.reindex()` on a duplicated axis
+        raises outright and `.loc[label]` returns a Series that min()/max()
+        cannot compare — so the escalation is computed positionally. The jump
+        is still found and still charged."""
+        idx = _IDX[:150].append(_IDX[149:299])          # one label twice
+        assert not idx.is_unique
+        score, issues = validate_ohlcv(
+            _frame([1.0] * 150 + [200.0] * 150, index=idx), "DUPTS", "D")
+        assert any("Duplicate timestamps" in i for i in issues), issues
+        assert any("Extreme price jump" in i for i in issues), issues
+        assert 0.0 <= score <= 100.0
+
+    def test_an_infinite_return_does_not_crash_the_scorer(self):
+        """A prev_close of exactly 0 makes pct_change return inf, and
+        `int(np.floor(np.log10(inf)))` raises OverflowError out of a function
+        whose entire contract is to survive bad data and report on it. Caught
+        by the pre-existing NaN/inf test above; pinned here on its own so the
+        reason is written down next to the guard."""
+        score, issues = validate_ohlcv(_frame([0.0] * 150 + [200.0] * 150),
+                                       "ZERO", "D")
+        assert 0.0 <= score <= 100.0
+        assert not any("Extreme price jump" in i for i in issues), issues
+
+    def test_a_clean_series_is_still_untouched(self):
+        assert validate_ohlcv(_frame(_clean()), "CLEAN", "D")[0] == 100.0
+
+
+class TestDuplicateColumnFold:
+    """The #358 canonical fold keeps the FIRST of two labels that collide
+    after `capitalize()` (#364). That matches services/csv_service.py, which
+    dedupes `Close` against `Adj Close` with `keep="first"`. Pinned because
+    which duplicate survives decides what CHECKS 2-5 read, and nothing else
+    in the suite forces the choice.
+    """
+
+    @staticmethod
+    def _both(defect_first=True):
+        n = 300
+        bad = [10.0] * n
+        bad[20] = 50.0                        # a 400% round trip
+        good = [10.0] * n
+        first, second = (bad, good) if defect_first else (good, bad)
+        return pd.DataFrame(
+            {"open": [10.0] * n,
+             "high": [c * 1.01 for c in first],
+             "low": [c * 0.99 for c in first],
+             "close": first,
+             "volume": [1_000_000.0] * n,
+             "Close": second},
+            index=_IDX[:n])
+
+    def test_the_first_duplicate_is_the_one_that_is_read(self):
+        _, issues = validate_ohlcv(self._both(defect_first=True), "DUP", "D")
+        assert any("Price jumps" in i for i in issues), issues
+
+    def test_the_second_duplicate_is_not_read(self):
+        """Paired control. Same two columns, defect moved to the survivor's
+        twin — so a fold that kept the LAST would flag this one and miss the
+        one above. Neither test alone forces `keep="first"`; the pair does."""
+        _, issues = validate_ohlcv(self._both(defect_first=False), "DUP", "D")
+        assert not any("Price jumps" in i for i in issues), issues
+
+    def test_check_7_still_sees_the_column_the_fold_drops(self):
+        """Deliberate asymmetry, and the reason the fold is safe: CHECK 7
+        reads the ORIGINAL frame positionally over EVERY column matching the
+        name, so a sentinel hiding in the dropped duplicate is still caught.
+        A mixed-case merge produces exactly this artifact."""
+        n = 300
+        clean = [10.0] * n
+        hidden = [10.0] * n
+        hidden[7] = _SENTINEL_CLOSE
+        df = pd.DataFrame(
+            {"open": clean, "high": [10.1] * n, "low": [9.9] * n,
+             "close": clean, "volume": [1_000_000.0] * n,
+             "Close": hidden},
+            index=_IDX[:n])
+        score, issues = validate_ohlcv(df, "HIDDEN", "D")
+        floor = next((i for i in issues if "Tick-floor prices" in i), None)
+        assert floor is not None, issues
+        assert "Close" in floor, floor
+        assert score == 100.0 - _SENTINEL_DEMERITS, (score, issues)
