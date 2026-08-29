@@ -40,7 +40,14 @@ INDEX_ALIASES = {
     "s&p500": "sp500",
     "s&p-500": "sp500",
     "s&p_500": "sp500",
+    "combined": "combined",
+    "nq100+sp500": "combined",
+    "sp500+nq100": "combined",
+    "union": "combined",
 }
+
+# The two indices merged (union of membership) to build the "combined" index.
+COMBINED_COMPONENTS = ("nq100", "sp500")
 
 INDEX_DIR_NAMES = {
     "nq100": ["nq100", "nasdaq100", "nasdaq_100"],
@@ -79,7 +86,7 @@ PIT_TICKER_NORMALISATION = {
 def _canonical_index(index: str) -> str:
     key = str(index).strip().lower()
     if key not in INDEX_ALIASES:
-        raise ValueError(f"Unknown PIT index '{index}'. Expected one of: nq100, sp500")
+        raise ValueError(f"Unknown PIT index '{index}'. Expected one of: nq100, sp500, combined")
     return INDEX_ALIASES[key]
 
 
@@ -181,6 +188,12 @@ def tickers_as_of(index: str, date: str, config: dict | None = None) -> list[str
         ``sp500_pit_path`` and ``nq100_pit_path``.
     """
     idx = _canonical_index(index)
+    if idx == "combined":
+        members: set[str] = set()
+        for component in COMBINED_COMPONENTS:
+            members.update(tickers_as_of(component, date, config))
+        return sorted(members)
+
     qdate = str(date)[:10]
     year = int(qdate[:4])
     path = _find_year_yaml(idx, year, config)
@@ -237,6 +250,12 @@ def tickers_union_for_period(
         Sorted list of unique tickers.
     """
     idx = _canonical_index(index)
+    if idx == "combined":
+        union: set[str] = set()
+        for component in COMBINED_COMPONENTS:
+            union.update(tickers_union_for_period(component, start_date, end_date, config))
+        return sorted(union)
+
     sy = int(start_date[:4])
     ey = int(end_date[:4])
     union: set[str] = set()
@@ -280,6 +299,20 @@ def build_membership_schedule(
         Sorted ``[(date_str, frozenset_of_tickers), ...]``.
     """
     idx = _canonical_index(index)
+    if idx == "combined":
+        component_schedules = [
+            build_membership_schedule(component, start_date, end_date, config)
+            for component in COMBINED_COMPONENTS
+        ]
+        event_dates = sorted({d for sched in component_schedules for d, _ in sched})
+        schedule: list[tuple[str, frozenset]] = []
+        for date in event_dates:
+            merged: set[str] = set()
+            for sched in component_schedules:
+                merged |= set(pit_members_on(sched, date))
+            schedule.append((date, frozenset(merged)))
+        return schedule
+
     sy = int(start_date[:4])
     ey = int(end_date[:4])
 
