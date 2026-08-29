@@ -1198,22 +1198,15 @@ class TestProviderEntryPointsReturnLegacyNamedData:
             f"reserved-name pin in this class — add it, or add the new branch "
             f"to `network` with a one-line reason if it fetches remotely.")
 
-    @pytest.mark.xfail(reason=(
-        "the `merged` provider (src/data/unified_market_data_provider.py) "
-        "builds its own filenames and imports no filename helper, so it "
-        "resolves NEITHER the guarded reserved spelling nor any illegal-char "
-        "scrub. Verified: CON/PRN/NUL/I:VIX/$I:TNX/BRK\\B/ADX>20 all resolve "
-        "through parquet_service and are all lost here, same directory, same "
-        "files. It is self-consistent — list_symbols() returns on-disk stems, "
-        "so anything round-tripping through it works — and only breaks when a "
-        "symbol arrives from OUTSIDE in its source spelling (a PIT roster, a "
-        "config list, a scanner), which is exactly what filename_candidates "
-        "exists for. RECORDED AS A KNOWN GAP, NOT FIXED: repointing the "
-        "canonical merged reader at resolve_existing is a behaviour change to "
-        "production data access and does not belong in a test-pinning PR"),
-        strict=True)
     def test_merged_provider_returns_a_legacy_unguarded_reserved_name(
             self, tmp_path):
+        """Was a strict xfail; closed by #355.
+
+        The merged provider built its own candidate list and imported no
+        filename helper, so a symbol arriving in its SOURCE spelling could not
+        reach the file the corpus stores. It now also tries
+        `filename_candidates`, and the xfail flipping to XPASS is what said so.
+        """
         from src.data.unified_market_data_provider import UnifiedMarketDataProvider
 
         self._frame().rename(columns=str.lower).to_parquet(
@@ -1222,15 +1215,11 @@ class TestProviderEntryPointsReturnLegacyNamedData:
         got = prov.get_price_data("CON", "2024-01-01", "2024-06-01")
         assert got is not None and not got.empty
 
-    @pytest.mark.xfail(reason=(
-        "same gap, illegal-char spelling: a symbol arriving as `BRK/B` cannot "
-        "reach `BRK_B.parquet` through the merged provider. This is the shape "
-        "with live exposure — @shardul0701 measured six sanitized stems "
-        "(BBAI_W, BIII_W, MPTI_R, OPFI_W, PAII_W, VACI_W — warrants and class "
-        "shares) in the shipped merged corpus that resolve_existing finds and "
-        "this provider does not"),
-        strict=True)
     def test_merged_provider_returns_an_illegal_char_symbol(self, tmp_path):
+        """Was a strict xfail; closed by #355. This is the shape with live
+        exposure — @shardul0701 measured six sanitized stems in the shipped
+        merged corpus (BBAI_W, BIII_W, MPTI_R, OPFI_W, PAII_W, VACI_W —
+        warrants and class shares) that this provider could not reach."""
         from src.data.unified_market_data_provider import UnifiedMarketDataProvider
 
         self._frame().rename(columns=str.lower).to_parquet(
@@ -1238,6 +1227,56 @@ class TestProviderEntryPointsReturnLegacyNamedData:
         prov = UnifiedMarketDataProvider(merged_dir=str(tmp_path))
         got = prov.get_price_data("BRK/B", "2024-01-01", "2024-06-01")
         assert got is not None and not got.empty
+
+    def test_merged_provider_composes_the_uppercase_sanitized_variant(
+            self, tmp_path, monkeypatch):
+        """The `.upper()` branch, tested WITHOUT the filesystem.
+
+        On macOS/APFS a case-insensitive lookup matches regardless, so a
+        behavioural test here passes through the filesystem rather than through
+        the code — and deleting `.upper()` survived mutation. On case-sensitive
+        CI/Linux that branch is the only thing letting a lowercase source
+        spelling reach an uppercase stem. Record the composed candidates
+        instead.
+        """
+        from src.data.unified_market_data_provider import UnifiedMarketDataProvider
+
+        self._frame().rename(columns=str.lower).to_parquet(
+            tmp_path / "BRK_B.parquet")
+        prov = UnifiedMarketDataProvider(merged_dir=str(tmp_path))
+
+        probed = []
+        real_exists = os.path.exists
+
+        def spy(p):
+            probed.append(os.path.basename(p))
+            return real_exists(p)
+
+        monkeypatch.setattr(os.path, "exists", spy)
+        prov._candidate_paths("brk/b")
+        monkeypatch.setattr(os.path, "exists", real_exists)
+
+        assert "BRK_B.parquet" in probed, (
+            f"the uppercase sanitized variant was never composed, so a "
+            f"lowercase symbol cannot reach an uppercase stem on a "
+            f"case-sensitive filesystem: {probed}")
+
+    def test_merged_provider_prefers_the_exact_file_over_the_sanitized_one(
+            self, tmp_path):
+        """Candidate ORDER. Nothing pinned it, so a refactor that put the
+        sanitized spellings first passed the whole suite while flipping which
+        file wins when both exist."""
+        from src.data.unified_market_data_provider import UnifiedMarketDataProvider
+
+        f = self._frame().rename(columns=str.lower)
+        f.to_parquet(tmp_path / "CON.parquet")
+        f.to_parquet(tmp_path / "_CON.parquet")
+        prov = UnifiedMarketDataProvider(merged_dir=str(tmp_path))
+        got = prov._resolve("CON")
+        assert os.path.basename(got) == "CON.parquet", (
+            f"resolved {os.path.basename(got)} — a bare exact file must still "
+            f"beat a sanitized one; the new candidates are appended, not "
+            f"prepended")
 
     def test_merged_provider_is_self_consistent_on_disk_spellings(self, tmp_path):
         """Why the gap is hard to notice, pinned so the xfails above are not
@@ -1331,7 +1370,11 @@ class TestReadPathListIsDerived:
         for expected in ["helpers/caching.py", "services/parquet_service.py",
                          "services/csv_service.py",
                          "scripts/norgate_to_parquet.py",
-                         "scripts/validate_norgate_export.py"]:
+                         "scripts/validate_norgate_export.py",
+                         # joined the set in #355: the merged provider now
+                         # imports filename_candidates, so the derivation sees
+                         # it. Its arrival here IS the fix being real.
+                         "src/data/unified_market_data_provider.py"]:
             assert expected.replace("/", os.sep) in derived, \
                 f"{expected} vanished from the derived read-path set"
 
@@ -1374,8 +1417,12 @@ class TestReadPathListIsDerived:
             "import os\ndef f():\n    return os.getcwd()\n", encoding="utf-8")
         assert _derive_read_paths(root=str(tmp_path)) == []
 
-    def test_coverage_is_the_five_known_read_paths(self):
+    def test_coverage_is_the_six_known_read_paths(self):
         """A deliberate TRIPWIRE on the number, not a spec.
+
+        Raised 5 -> 6 in #355, deliberately: the merged provider now imports
+        filename_candidates, so the derivation sees it. That is the fix being
+        real, not the number being bumped to get green.
 
         I published "234 modules" on this PR; the real coverage is 5, and 234
         came from a walk over a polluted working tree. This exists so a change
@@ -1388,9 +1435,9 @@ class TestReadPathListIsDerived:
         below rather than a bare assert.
         """
         found = _derive_read_paths()
-        assert len(found) == 5, (
+        assert len(found) == 6, (
             f"read-path coverage changed: {len(found)} modules now import a "
-            f"filename helper, not 5.\n{found}\n\n"
+            f"filename helper, not 6.\n{found}\n\n"
             f"THIS IS A TRIPWIRE, NOT A FAILURE. If you legitimately added a "
             f"read path, raise this number DELIBERATELY and add the module to "
             f"the floor list in TestReadPathListIsDerived — do not bump it "
