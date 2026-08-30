@@ -1188,9 +1188,14 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     _rp_stop_dist_pts = None
                     _stype_sz = stop_config.get("type", "none")
                     if _stype_sz == "trailing_atr":
-                        _dbe_sz = prev_trading_dates[symbol].get(entry_exec_date)
-                        if pd.notna(_dbe_sz) and _dbe_sz in df.index:
-                            _atr_sz = df.loc[_dbe_sz].get('ATR_14')
+                        # Anchor to the SIGNAL bar, not the bar before the
+                        # FILL bar (#324 review). entry_exec_date is always the
+                        # fill bar, so prev_trading_dates[entry_exec_date] is
+                        # the signal bar only under execution_time="open".
+                        # Under "close" the fill IS the signal bar, making the
+                        # previous bar one too early. Same defect class as #310.
+                        if pd.notna(signal_date) and signal_date in df.index:
+                            _atr_sz = df.loc[signal_date].get('ATR_14')
                             if pd.notna(_atr_sz):
                                 _eff_sz = float(_atr_sz) * stop_config.get("stop_mult", 1.0)
                                 _pc_sz = stop_config.get("point_cap")
@@ -1205,9 +1210,14 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         # distance than the one the position is actually stopped at.
                         _rp_stop_dist_pts = stop_config.get("value", 0.05) * raw_entry_price
                     elif _stype_sz == "atr":
-                        _dbe_sz = prev_trading_dates[symbol].get(entry_exec_date)
-                        if pd.notna(_dbe_sz) and _dbe_sz in df.index:
-                            _atr_sz = df.loc[_dbe_sz].get('ATR_14')
+                        # Anchor to the SIGNAL bar, not the bar before the
+                        # FILL bar (#324 review). entry_exec_date is always the
+                        # fill bar, so prev_trading_dates[entry_exec_date] is
+                        # the signal bar only under execution_time="open".
+                        # Under "close" the fill IS the signal bar, making the
+                        # previous bar one too early. Same defect class as #310.
+                        if pd.notna(signal_date) and signal_date in df.index:
+                            _atr_sz = df.loc[signal_date].get('ATR_14')
                             if pd.notna(_atr_sz):
                                 _eff_sz = float(_atr_sz) * stop_config.get("multiplier", 3.0)
                                 _pc_sz = stop_config.get("point_cap")
@@ -1440,8 +1450,11 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                             instruments[symbol], _stop_anchor, stop_config, side="long")
 
                     elif _stype == 'atr':
-                        # Get the data from the day BEFORE entry (the signal day)
-                        day_before_entry = prev_trading_dates[symbol].get(entry_exec_date)
+                        # The SIGNAL bar. Was prev_trading_dates[entry_exec_date],
+                        # which is the signal bar only under execution_time="open";
+                        # under "close" the fill IS the signal bar, so that read
+                        # was one bar too early (#324 review, same class as #310).
+                        day_before_entry = signal_date
 
                         if pd.notna(day_before_entry) and day_before_entry in df.index:
                             day_before_data = df.loc[day_before_entry]

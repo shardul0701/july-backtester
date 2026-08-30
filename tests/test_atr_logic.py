@@ -421,3 +421,98 @@ class TestSimulationAtrColumnName:
             f"Expected a 'Stop Loss' exit but got: {exit_reasons}. "
             "This indicates the ATR column was not found (ATR vs ATR_14 mismatch)."
         )
+
+
+class TestAtrAnchorsToTheSignalBar:
+    """The ATR stop and ATR risk-sizing must read the SIGNAL bar's ATR.
+
+    #310 fixed entry-*feature* capture to read `signal_date`. Three branches in
+    the same loop kept hard-coding `prev_trading_dates[entry_exec_date]`:
+
+        :1444  the `atr` initial stop level
+        :1208  `atr` risk-based sizing
+        :1191  `trailing_atr` risk-based sizing
+
+    `entry_exec_date` is always the fill bar. Under `execution_time="open"` the
+    fill is the bar after the signal, so the bar before the fill IS the signal
+    bar and the two agree. Under `execution_time="close"` the fill IS the
+    signal bar, so the bar before it is one bar too EARLY — the stop gets
+    anchored to an ATR the signal never saw.
+
+    Found by @shardul0701 reviewing #324; the in-code comment ("the day BEFORE
+    entry (the signal day)") is only true for one of the two execution modes.
+    """
+
+    ATR_SIGNAL = 10.0     # ATR on the signal bar
+    ATR_EARLIER = 1.0     # ATR on every bar before it — 10x apart, unmissable
+    ENTRY_BAR = 6
+    MULT = 3.0
+    # rel=0.01 throughout: InitialRisk is entry_price - stop_level and the
+    # entry carries slippage (0.05 on a 100.0 price), so the exact figure is
+    # 30.05 rather than 30.0. 1% admits that and still excludes the 3.0 the
+    # wrong anchor produces by an order of magnitude.
+
+    def _data(self, n_dates=30):
+        dates = pd.bdate_range("2015-01-05", periods=n_dates)
+        closes = np.full(n_dates, 100.0)
+        atr = np.full(n_dates, self.ATR_EARLIER)
+        atr[self.ENTRY_BAR] = self.ATR_SIGNAL
+        df = pd.DataFrame({
+            "Open": closes, "High": closes + 0.5, "Low": closes - 0.5,
+            "Close": closes, "Volume": np.full(n_dates, 1_000_000.0),
+            "ATR_14": atr,
+            "RSI_14": np.full(n_dates, 50.0),
+            "ATR_14_pct": atr / 100.0,
+            "SMA200_dist_pct": np.full(n_dates, 0.05),
+            "Volume_Spike": np.full(n_dates, 1.0),
+        }, index=dates)
+        return {"SYM": df}
+
+    @staticmethod
+    def _signals(portfolio_data, entry_bar):
+        sig = pd.Series(0, index=portfolio_data["SYM"].index)
+        sig.iloc[entry_bar] = 1
+        return {"SYM": sig}
+
+    def _initial_risk(self, execution_time):
+        from unittest.mock import patch
+        import helpers.portfolio_simulations as ps
+        data = self._data()
+        # execution_time is read off the module-level CONFIG at call time.
+        with patch.dict(ps.CONFIG, {"execution_time": execution_time}):
+            result = ps.run_portfolio_simulation(
+                portfolio_data=data,
+                signals=self._signals(data, self.ENTRY_BAR),
+                initial_capital=100_000.0,
+                allocation_pct=0.10,
+                spy_df=None, vix_df=None, tnx_df=None,
+                stop_config={"type": "atr", "period": 14,
+                             "multiplier": self.MULT},
+            )
+        assert result is not None, f"no result for execution_time={execution_time}"
+        trades = result.get("trade_log", [])
+        assert trades, f"no trades for execution_time={execution_time}"
+        return float(trades[0]["InitialRisk"])
+
+    def test_close_execution_anchors_the_stop_to_the_signal_bar(self):
+        """Under close execution the fill bar IS the signal bar, so the stop
+        distance must be multiplier x the signal bar's ATR."""
+        risk = self._initial_risk("close")
+        assert risk == pytest.approx(self.MULT * self.ATR_SIGNAL, rel=0.01), (
+            f"InitialRisk {risk} — expected {self.MULT * self.ATR_SIGNAL} "
+            f"(3 x the signal bar's ATR of {self.ATR_SIGNAL}). Getting "
+            f"{self.MULT * self.ATR_EARLIER} means the stop was anchored to "
+            f"the bar BEFORE the signal bar.")
+
+    def test_open_execution_is_unchanged(self):
+        """The no-regression half. Under open execution the bar before the
+        fill already IS the signal bar, so this path must not move."""
+        risk = self._initial_risk("open")
+        assert risk == pytest.approx(self.MULT * self.ATR_SIGNAL, rel=0.01), risk
+
+    def test_both_execution_modes_agree_on_the_anchor(self):
+        """States the invariant rather than the two numbers: the anchor is the
+        signal bar, so the same signal must produce the same stop distance
+        under either execution mode."""
+        assert self._initial_risk("close") == pytest.approx(
+            self._initial_risk("open"), rel=0.01)
