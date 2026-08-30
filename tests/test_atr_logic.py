@@ -570,7 +570,13 @@ class TestEveryAtrAnchorAgreesAcrossExecutionModes:
         sig = pd.Series(0, index=data["SYM"].index)
         sig.iloc[self.ENTRY_BAR] = -2 if side == "short" else 1
         overrides = {"execution_time": execution_time,
-                     "position_sizing_method": sizing_method}
+                     "position_sizing_method": sizing_method,
+                     # max_contracts_cap defaults to 20, which CLAMPS both modes
+                     # to 20 and hides the very divergence this test looks for:
+                     # floor(1000/30)=33 and floor(1000/3)=333 both become 20.
+                     # Raised so risk_pct_capped is actually pinned rather than
+                     # merely present in the grid.
+                     "max_contracts_cap": 10_000_000}
         with patch.dict(ps.CONFIG, overrides):
             result = ps.run_portfolio_simulation(
                 portfolio_data=data, signals={"SYM": sig},
@@ -584,7 +590,14 @@ class TestEveryAtrAnchorAgreesAcrossExecutionModes:
         return {"risk": t.get("InitialRisk"), "shares": t.get("Shares")}
 
     @pytest.mark.parametrize("stop_type", ["atr", "trailing_atr"])
-    @pytest.mark.parametrize("sizing_method", ["fixed", "risk_parity"])
+    # risk_pct_capped and vol_parity are here because they were NOT: an
+    # adversarial pass showed reverting either risk_pct_capped anchor survived
+    # the entire 2630-test suite, and vol_parity carried a live 5x divergence
+    # nothing was looking at. The grid is the pin; a site outside it is unpinned
+    # no matter what the docstring claims.
+    @pytest.mark.parametrize("sizing_method",
+                             ["fixed", "risk_parity", "risk_pct_capped",
+                              "vol_parity"])
     @pytest.mark.parametrize("side", ["long", "short"])
     def test_anchor_is_execution_mode_independent(self, stop_type,
                                                   sizing_method, side):
@@ -595,12 +608,16 @@ class TestEveryAtrAnchorAgreesAcrossExecutionModes:
         close = self._run("close", cfg, sizing_method, side)
         opn = self._run("open", cfg, sizing_method, side)
         if close is None or opn is None:
-            pytest.skip(f"no trade for {side}/{stop_type}/{sizing_method}")
+            # fail, not skip: this test IS the audit trail for a fix that has
+            # regressed twice, and a silent skip is how it stops being one.
+            pytest.fail(f"no trade produced for {side}/{stop_type}/"
+                        f"{sizing_method} — the case asserts nothing")
 
         for field in ("risk", "shares"):
             c, o = close[field], opn[field]
             if c is None or o is None or pd.isna(c) or pd.isna(o):
-                continue
+                pytest.fail(f"{field} is None/NaN for {side}/{stop_type}/"
+                            f"{sizing_method} — the case asserts nothing")
             assert float(c) == pytest.approx(float(o), rel=0.02), (
                 f"{field} differs by execution mode for {side}/{stop_type}/"
                 f"{sizing_method}: close={c} open={o}. The ATR anchor is the "
@@ -625,3 +642,26 @@ class TestEveryAtrAnchorAgreesAcrossExecutionModes:
             f"risk_parity put ${dollars_at_risk:,.2f} of a $100,000 book at "
             f"risk ({dollars_at_risk / 1000:.1f}%). Sizing and the stop level "
             f"must anchor to the same bar.")
+
+    def test_risk_parity_respects_point_cap_like_the_stop_does(self):
+        """A capped ATR stop must size off the CAPPED distance.
+
+        The execution-mode invariant cannot see this one: both modes were
+        wrong identically, so they agreed. `atr_stop_level` takes `point_cap`
+        and `atr_stop_distance_pct` has no cap parameter, so sizing used the
+        uncapped 3 x 10 = 30 while the real risk was 5 — a 6x UNDER-size,
+        0.34% of book against a 2% target. Wrong in the safe direction, which
+        is why it could sit there unnoticed.
+        """
+        cfg = {"type": "atr", "period": 14, "multiplier": 3.0, "point_cap": 5.0}
+        r = self._run("close", cfg, "risk_parity", "long")
+        if r is None or r["shares"] is None or r["risk"] is None:
+            pytest.fail("no capped risk_parity trade produced")
+        risk_per_share = float(r["risk"])
+        assert risk_per_share == pytest.approx(5.0, rel=0.02), (
+            f"InitialRisk {risk_per_share} — the cap should bind at 5.0")
+        dollars_at_risk = risk_per_share * float(r["shares"])
+        target = 0.02 * 100_000.0
+        assert dollars_at_risk == pytest.approx(target, rel=0.25), (
+            f"${dollars_at_risk:,.2f} at risk against a ${target:,.0f} target. "
+            f"Sizing ignored the point_cap the stop applied.")
