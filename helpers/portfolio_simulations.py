@@ -176,6 +176,11 @@ def _build_entry_edge_masks(signals):
     it holds the entry value and the PRECEDING BAR IN THAT SERIES does not, so
     the first bar of a series counts as an edge (a transition from nothing).
 
+    A NaN BREAKS THE HOLD RUN, deliberately: ``NaN != entry_value``, so the bar
+    after a gap re-counts as an edge. That is the right reading for a signal
+    series with holes in it -- a hold whose evidence is missing is not a hold
+    that continued -- and it is why an all-NaN series yields no edges at all.
+
     Built once up front rather than resolved inside the date loop: that loop runs
     bars x symbols, and a positional lookup there would be both O(n) per hit and
     easy to get wrong at series boundaries.
@@ -206,7 +211,15 @@ def _is_entry_bar(signals, edge_masks, symbol, sig_date, entry_value):
         return False
     if edge_masks is None:
         return True
-    return bool(edge_masks[symbol][entry_value].loc[sig_date])
+    # Guard `edge_masks` exactly as `signals` is guarded above. In-tree the two
+    # are always built from the same dict so a miss cannot happen -- but the
+    # asymmetry becomes reachable the moment masks are built for a subset, and
+    # it would surface as a KeyError deep in the date loop rather than as a
+    # skipped entry. Caught by @zachisit on review.
+    _sym_masks = edge_masks.get(symbol)
+    if _sym_masks is None or entry_value not in _sym_masks:
+        return False
+    return bool(_sym_masks[entry_value].loc[sig_date])
 
 
 def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocation_pct, spy_df, vix_df, tnx_df, stop_config, size_mults=None, delisting_dates=None, intrabar_data=None):

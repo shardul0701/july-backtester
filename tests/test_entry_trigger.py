@@ -102,6 +102,16 @@ class TestIsEntryBar:
         assert _is_entry_bar(self.signals, self.masks, "NOPE", DATES[1], 1) is False
         assert _is_entry_bar(self.signals, None, "NOPE", DATES[1], 1) is False
 
+    def test_symbol_absent_from_the_MASKS_is_rejected_not_raised(self):
+        """@zachisit on review: `signals` was guarded and `edge_masks` was not.
+
+        In-tree both are built from the same dict so this cannot fire, but a
+        subset of masks would have surfaced as a KeyError deep inside the date
+        loop instead of as a skipped entry. Both guards now agree.
+        """
+        partial = _build_entry_edge_masks({"OTHER": _sig([1] * 7)})
+        assert _is_entry_bar(self.signals, partial, "X", DATES[1], 1) is False
+
 
 # --------------------------------------------------------------------------
 # Engine wiring
@@ -140,8 +150,11 @@ class TestLevelModeIsUnchanged:
     def test_uncontested_entry_is_identical_in_both_modes(self):
         """With cash free on the breakout bar the two modes must agree exactly.
 
-        This is the no-regression invariant: edge mode may only ever remove
-        entries the strategy never signalled a fresh breakout for.
+        This is the no-regression invariant, and it is stated PER SYMBOL: for a
+        symbol whose breakout bar had capital available, edge mode changes
+        nothing. It does NOT generalise to the book -- see
+        ``test_edge_mode_can_admit_a_breakout_level_mode_starved``, which is the
+        other half of what this option does.
         """
         data = {"BBB": _frame()}
         sigs = {"BBB": _sig([1, 1, 1, 1, 1, -1, 0])}
@@ -181,6 +194,105 @@ class TestEdgeModePreventsLateEntry:
             edg = _run(_STARVED_DATA, _STARVED_SIGS, "edge")
         assert sorted(lvl["Symbol"]) == ["AAA", "BBB"]
         assert sorted(edg["Symbol"]) == ["AAA"]
+
+
+class TestEdgeModeReallocatesCapitalRatherThanOnlySkippingEntries:
+    """Freeing capital is not a side effect -- it is the same resource the
+    starvation defect is about. Skipping a hold-bar entry hands its allocation
+    to whatever else is competing on that bar, so edge mode changes the SIZE of
+    a surviving trade, not only the membership of the book.
+
+    Measured over 80 randomised contested books (5 symbols x 120 bars): 20 of
+    the 80 produced at least one symbol with MORE trades under edge than under
+    level -- 25 of 400 (book, symbol) cells -- while book totals fell 1564 ->
+    1434. So the net effect subtracts, but it is a re-plan, not a filter.
+    """
+
+    # AAA holds all the cash for one bar. BBB's only real breakout is bar 0;
+    # everything after is a forward-filled hold. CCC's breakout is genuine and
+    # lands on the bar the cash frees up -- so the two compete, and under level
+    # mode BBB's HOLD bar wins the tie-break and takes the allocation.
+    DATA = {"AAA": _frame(), "BBB": _frame(), "CCC": _frame()}
+    SIGS = {
+        "AAA": _sig([1, -1, 0, 0, 0, 0, 0]),
+        "BBB": _sig([1, 1, 1, 1, 1, -1, 0]),
+        "CCC": _sig([0, 1, 1, -1, 0, 0, 0]),
+    }
+
+    def _ccc_shares(self, mode):
+        log = _run(self.DATA, self.SIGS, mode)
+        row = log[log["Symbol"] == "CCC"]
+        assert len(row) == 1, "CCC should trade exactly once in %s mode" % mode
+        return float(row.iloc[0]["Shares"])
+
+    def test_level_mode_lets_a_hold_bar_take_a_breakouts_allocation(self):
+        """CCC still enters -- there is no position-count cap and equities are
+        fractional, so the residual cash always funds *something*. What it
+        cannot fund is a real position: BBB's hold bar took the allocation and
+        CCC is left with the rounding."""
+        log = _run(self.DATA, self.SIGS, "level")
+        assert sorted(log["Symbol"]) == ["AAA", "BBB", "CCC"]
+        assert self._ccc_shares("level") < 10.0
+
+    def test_edge_mode_gives_that_allocation_back_to_the_breakout(self):
+        """Same bar, same signal, ~105x the position. `test_uncontested_entry_
+        is_identical_in_both_modes` says edge only ever subtracts -- that holds
+        per symbol in isolation, not per book."""
+        log = _run(self.DATA, self.SIGS, "edge")
+        assert sorted(log["Symbol"]) == ["AAA", "CCC"]
+        assert self._ccc_shares("edge") > 900.0
+
+    def test_the_reallocation_is_two_orders_of_magnitude(self):
+        assert self._ccc_shares("edge") / self._ccc_shares("level") > 50.0
+
+
+def _frame_px(closes):
+    n = len(closes)
+    idx = pd.bdate_range("2024-01-02", periods=n)
+    return pd.DataFrame(
+        {"Open": closes, "High": [c * 1.005 for c in closes],
+         "Low": [c * 0.995 for c in closes], "Close": closes,
+         "Volume": [50_000_000] * n, "ATR_14": [1.0] * n,
+         "RSI_14": [50.0] * n, "SMA_200": closes},
+        index=idx,
+    ), idx
+
+
+class TestEdgeModeDisablesStopReEntry:
+    """The second consequence of edge mode, and the larger one on a stopped
+    strategy: a stop-out under a still-held state signal never re-enters.
+
+    Level mode re-enters on the very next bar because the forward-filled series
+    still reads 1. Edge mode cannot -- the transition already happened. A live
+    scanner triggering on `last == 1 and prev != 1` behaves the same way, so
+    this is edge mode being faithful rather than lossy, but it is an
+    independent semantic change and belongs under test rather than only in a
+    config comment.
+    """
+
+    CLOSES = [100.0, 100.0, 90.0, 100.0, 100.0, 100.0, 100.0, 100.0]
+    STOP = {"type": "percentage", "value": 0.05}
+
+    def _run_stop(self, mode):
+        frame, idx = _frame_px(self.CLOSES)
+        sigs = {"X": pd.Series([1.0] * (len(self.CLOSES) - 1) + [-1.0],
+                               index=idx, dtype=float)}
+        with patch.dict(CONFIG, {"entry_trigger": mode}):
+            res = run_portfolio_simulation(
+                {"X": frame}, sigs, 100_000.0, 0.95,
+                None, None, None, self.STOP,
+            )
+        return pd.DataFrame(res["trade_log"])
+
+    def test_level_mode_stops_out_and_gets_straight_back_in(self):
+        log = self._run_stop("level")
+        assert len(log) == 2
+        assert "Stop Loss" in str(log.iloc[0]["ExitReason"])
+
+    def test_edge_mode_stops_out_and_stays_out(self):
+        log = self._run_stop("edge")
+        assert len(log) == 1
+        assert "Stop Loss" in str(log.iloc[0]["ExitReason"])
 
 
 class TestShortSide:
