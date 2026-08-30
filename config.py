@@ -212,6 +212,15 @@ CONFIG = {
     "entry_priority": "alphabetical",
     "entry_random_seed": 42,
 
+    # Whether a bar qualifies as an ENTRY at all.
+    # "level" (default) — enter on any bar whose signal reads the entry value.
+    #                     Strategies emitting a forward-filled state series make
+    #                     every hold bar entry-eligible under this mode.
+    # "edge"            — enter only on the transition INTO the entry state,
+    #                     matching how the live scanner triggers. Opt-in: the
+    #                     default is unchanged so existing results are stable.
+    "entry_trigger": "level",
+
     # ============================================================
     # SECTION 21: VERBOSE SUMMARY TABLE
     # ============================================================
