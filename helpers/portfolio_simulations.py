@@ -872,7 +872,9 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                 if _sc_type in ('percentage', 'points'):
                     _s_stop = _inst.stop_level(inst_se, ep, stop_config, side="short")
                 elif _sc_type == 'atr':
-                    _dbe = prev_trading_dates[symbol].get(date)
+                    # sig_date, not prev(date): under execution_time="close" the
+                    # fill IS the signal bar, so prev(date) is one bar too early.
+                    _dbe = sig_date
                     if pd.notna(_dbe) and _dbe in df.index:
                         _ab, _cb = df.loc[_dbe].get('ATR_14'), df.loc[_dbe].get('Close')
                         if pd.notna(_ab) and pd.notna(_cb):
@@ -895,7 +897,9 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         if _lvl is not None and _lvl > ep:
                             _s_stop = _lvl
                 elif _sc_type == 'trailing_atr':
-                    _dbe = prev_trading_dates[symbol].get(date)
+                    # sig_date — see the atr branch above. The comment at the top
+                    # of this block already claims "ATR locked at the signal bar".
+                    _dbe = sig_date
                     _ab = df.loc[_dbe].get('ATR_14') if (pd.notna(_dbe) and _dbe in df.index) else np.nan
                     if pd.notna(_ab):
                         _s_atr = float(_ab)
@@ -1156,8 +1160,30 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     stop_type = stop_config.get("type", "none")
                     if stop_type == "percentage":
                         sizing_kwargs["stop_distance_pct"] = stop_config.get("value", 0.05)
+                    elif stop_type == "trailing_atr":
+                        # trailing_atr had NO branch here, so stop_distance_pct was
+                        # never set and risk_parity fell through to the fallback in
+                        # position_sizing.py:205 -- symbol_data["ATR_14"].iloc[-1],
+                        # the last row of whatever slice the caller passed, which is
+                        # execution-mode dependent. Found by the parametrised
+                        # invariant test, not by inspection: 10x share divergence on
+                        # long/trailing_atr/risk_parity. Setting it explicitly here
+                        # means the ATR-family paths never reach that fallback.
+                        if pd.notna(signal_date) and signal_date in df.index and "ATR_14" in df.columns:
+                            _atr_tp = df.loc[signal_date, 'ATR_14']
+                            _close_tp = df.loc[signal_date, 'Close']
+                            if pd.notna(_atr_tp) and pd.notna(_close_tp) and _close_tp > 0:
+                                _eff_tp = float(_atr_tp) * stop_config.get("stop_mult", 1.0)
+                                _pc_tp = stop_config.get("point_cap")
+                                if _pc_tp is not None and _pc_tp > 0:
+                                    _eff_tp = min(_eff_tp, _pc_tp)
+                                sizing_kwargs["stop_distance_pct"] = _eff_tp / float(_close_tp)
                     elif stop_type == "atr":
-                        _day_before = prev_trading_dates[symbol].get(entry_exec_date)
+                        # MUST match the bar the stop level itself is anchored to,
+                        # or sizing and the stop disagree about the same trade. When
+                        # only the stop was fixed, risk_parity sized off a 10x-too-small
+                        # stop distance and put 20% of the book at risk on a 2% target.
+                        _day_before = signal_date
                         if _day_before is not None and _day_before in df.index and "ATR_14" in df.columns:
                             _atr = df.loc[_day_before, 'ATR_14']
                             _close = df.loc[_day_before, 'Close']
@@ -1507,7 +1533,10 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         # propagates into the target:
                         #   eff_stop_dist = min(stop_mult*atr, point_cap)
                         #   target_dist   = eff_stop_dist * (t1_mult / stop_mult)
-                        _dbe = prev_trading_dates[symbol].get(entry_exec_date)
+                        # signal_date, not prev(entry_exec_date): the comment above
+                        # says "lock ATR at the breakout (signal) bar" and this is what
+                        # makes that true under execution_time="close" too.
+                        _dbe = signal_date
                         _atr_b = df.loc[_dbe].get('ATR_14') if (pd.notna(_dbe) and _dbe in df.index) else np.nan
                         if pd.notna(_atr_b):
                             _atr_locked = float(_atr_b)
