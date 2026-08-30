@@ -811,9 +811,33 @@ def weekday_overnight_logic(df):
     risk). Uses the day-of-week index to determine the signal.
 
     The exit is derived from the actual CALENDAR GAPS in the index rather than
-    from a fixed Friday-is-day-4 assumption (issue #314), so it stays flat across
-    weekends AND exchange holidays (Good Friday, Thanksgiving, …). A "gap" is any
-    interval > 2 calendar days between consecutive bars.
+    from a fixed Friday-is-day-4 assumption (issue #314). A "gap" is any interval
+    **> 2 calendar days** between consecutive bars.
+
+    That threshold means the strategy is flat across every WEEKEND, and across a
+    holiday only when the holiday *lengthens a weekend*. A lone midweek holiday
+    produces a gap of exactly 2 calendar days and is therefore HELD:
+
+    =========================  ==========  ====  ========
+    Case                       gap (days)  > 2   behaviour
+    =========================  ==========  ====  ========
+    normal weeknight Tue->Wed      1        no   HELD
+    normal weekend   Fri->Mon      3        yes  flat
+    Good Friday      Thu->Mon      4        yes  flat  (abuts the weekend)
+    Memorial/Labor   Fri->Tue      4        yes  flat  (Monday closure)
+    Thanksgiving     Wed->Fri      2        no   HELD
+    July 4th on Thu  Wed->Fri      2        no   HELD
+    =========================  ==========  ====  ========
+
+    This is a deliberate choice, not an oversight: a 2-day gap carries roughly a
+    weeknight's worth of extra exposure, and `tests/test_weekday_overnight.py`
+    pins the midweek-holiday hold explicitly.
+
+    Changing the threshold to ``>= 2`` would flip **only** the 2-day midweek
+    rows to flat — normal weeknights are a 1-day gap and ``1 >= 2`` is False, so
+    they stay held. That is a strategy decision about whether single-day holiday
+    closures are worth sitting out, and it has no side effect on ordinary
+    weeknights.
 
     It is also EXECUTION-AWARE, because a signal on session S fills at a different
     bar depending on ``execution_time``:
@@ -827,8 +851,9 @@ def weekday_overnight_logic(df):
       at that pre-gap session's open and the position is flat across the gap.
 
     Either way the position holds every weeknight overnight and is flat across
-    every weekend/holiday gap. The final bar(s) with no future bar to hold into
-    are flattened (you cannot manage a position past the end of the data).
+    every gap longer than 2 calendar days (see the table above). The final bar(s)
+    with no future bar to hold into are flattened (you cannot manage a position
+    past the end of the data).
 
     Parameters
     ----------

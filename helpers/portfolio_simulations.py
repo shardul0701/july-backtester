@@ -872,8 +872,12 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                 if _sc_type in ('percentage', 'points'):
                     _s_stop = _inst.stop_level(inst_se, ep, stop_config, side="short")
                 elif _sc_type == 'atr':
-                    # sig_date, not prev(date): under execution_time="close" the
-                    # fill IS the signal bar, so prev(date) is one bar too early.
+                    # Signal bar, not prev(fill bar). `sig_date` (L861) already
+                    # carries the execution_time ternary -- the `signal_bar`
+                    # branch below uses it and says so. Sites 6 and 7 of the
+                    # #310 class; the long-path fix missed them because the
+                    # short block names the fill bar `date`, not
+                    # `entry_exec_date`.
                     _dbe = sig_date
                     if pd.notna(_dbe) and _dbe in df.index:
                         _ab, _cb = df.loc[_dbe].get('ATR_14'), df.loc[_dbe].get('Close')
@@ -897,8 +901,9 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         if _lvl is not None and _lvl > ep:
                             _s_stop = _lvl
                 elif _sc_type == 'trailing_atr':
-                    # sig_date — see the atr branch above. The comment at the top
-                    # of this block already claims "ATR locked at the signal bar".
+                    # Signal bar -- as above. This is the LOCKED ATR, fixed for
+                    # the whole trade, so stop/target/trail all inherited the
+                    # wrong bar under execution_time="close".
                     _dbe = sig_date
                     _ab = df.loc[_dbe].get('ATR_14') if (pd.notna(_dbe) and _dbe in df.index) else np.nan
                     if pd.notna(_ab):
@@ -989,6 +994,23 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         shares = _inst.round_units(inst_se, alloc / _s_per_contract_margin) if _s_per_contract_margin > 0 else 0.0
                     if shares < 1:
                         continue
+                    # Portfolio-heat gate (#324 QA / issue #331). The equity short
+                    # branch below gained this in #312; the futures branch did not,
+                    # so a futures short was admitted regardless of book heat AND
+                    # registered no 'risk', contributing 0 to every later entry's
+                    # gate. Prefer the real per-contract risk (_s_ir is the stop
+                    # distance in points) over the target_risk_per_trade proxy the
+                    # equity path must use, since futures set their stop before sizing.
+                    _fs_stop_dist_pts = _s_ir if (_s_ir and _s_ir > 0) else None
+                    if _fs_stop_dist_pts is not None:
+                        _fs_new_risk = _fs_stop_dist_pts * inst_se.point_value * shares
+                    else:
+                        _fs_new_risk = (_inst.notional(inst_se, shares, _s_entry_fill)
+                                        * CONFIG.get("target_risk_per_trade", 0.02))
+                    _fs_max_heat = CONFIG.get("max_portfolio_heat", 1.0)
+                    if not check_portfolio_heat({**positions, **short_positions},
+                                                _fs_new_risk, total_equity, _fs_max_heat):
+                        continue
                     _s_margin = _inst.margin_required(inst_se, shares, _s_entry_fill)
                     commission = _inst.commission(inst_se, shares)
                     if _s_margin + commission > cash - reserved_margin:
@@ -1003,6 +1025,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         'trail_target': _s_target, 'atr_locked': _s_atr,
                         'trail_anchor': _s_trail_anchor,
                         'trail_armed': False, 'initial_risk': _s_ir, 'features': _s_features,
+                        'risk': _fs_new_risk,  # registered for the portfolio-heat pot (#324 QA)
                     }
                 else:
                     # Equity cash_full short. Mirror the long entry's four cost
@@ -1179,10 +1202,12 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                                     _eff_tp = min(_eff_tp, _pc_tp)
                                 sizing_kwargs["stop_distance_pct"] = _eff_tp / float(_close_tp)
                     elif stop_type == "atr":
-                        # MUST match the bar the stop level itself is anchored to,
-                        # or sizing and the stop disagree about the same trade. When
-                        # only the stop was fixed, risk_parity sized off a 10x-too-small
-                        # stop distance and put 20% of the book at risk on a 2% target.
+                        # Signal bar, not prev(fill bar) -- see the `atr` stop
+                        # anchor below. A FOURTH instance of the same defect,
+                        # in risk_parity sizing; caught by the AST regression
+                        # guard in tests/test_heat_gate_symmetry.py rather than
+                        # by inspection, which is why that guard scans for the
+                        # pattern instead of listing known sites.
                         _day_before = signal_date
                         if _day_before is not None and _day_before in df.index and "ATR_14" in df.columns:
                             _atr = df.loc[_day_before, 'ATR_14']
@@ -1231,14 +1256,12 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     _rp_stop_dist_pts = None
                     _stype_sz = stop_config.get("type", "none")
                     if _stype_sz == "trailing_atr":
-                        # Anchor to the SIGNAL bar, not the bar before the
-                        # FILL bar (#324 review). entry_exec_date is always the
-                        # fill bar, so prev_trading_dates[entry_exec_date] is
-                        # the signal bar only under execution_time="open".
-                        # Under "close" the fill IS the signal bar, making the
-                        # previous bar one too early. Same defect class as #310.
-                        if pd.notna(signal_date) and signal_date in df.index:
-                            _atr_sz = df.loc[signal_date].get('ATR_14')
+                        # Signal bar, not prev(fill bar) -- see the `atr` stop
+                        # anchor below. Wrong under execution_time="close", and
+                        # here it sets the SHARE COUNT.
+                        _dbe_sz = signal_date
+                        if pd.notna(_dbe_sz) and _dbe_sz in df.index:
+                            _atr_sz = df.loc[_dbe_sz].get('ATR_14')
                             if pd.notna(_atr_sz):
                                 _eff_sz = float(_atr_sz) * stop_config.get("stop_mult", 1.0)
                                 _pc_sz = stop_config.get("point_cap")
@@ -1253,14 +1276,10 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         # distance than the one the position is actually stopped at.
                         _rp_stop_dist_pts = stop_config.get("value", 0.05) * raw_entry_price
                     elif _stype_sz == "atr":
-                        # Anchor to the SIGNAL bar, not the bar before the
-                        # FILL bar (#324 review). entry_exec_date is always the
-                        # fill bar, so prev_trading_dates[entry_exec_date] is
-                        # the signal bar only under execution_time="open".
-                        # Under "close" the fill IS the signal bar, making the
-                        # previous bar one too early. Same defect class as #310.
-                        if pd.notna(signal_date) and signal_date in df.index:
-                            _atr_sz = df.loc[signal_date].get('ATR_14')
+                        # Signal bar, not prev(fill bar) -- as above.
+                        _dbe_sz = signal_date
+                        if pd.notna(_dbe_sz) and _dbe_sz in df.index:
+                            _atr_sz = df.loc[_dbe_sz].get('ATR_14')
                             if pd.notna(_atr_sz):
                                 _eff_sz = float(_atr_sz) * stop_config.get("multiplier", 3.0)
                                 _pc_sz = stop_config.get("point_cap")
@@ -1350,7 +1369,16 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                 _stop_dist = sizing_kwargs.get("stop_distance_pct") or CONFIG.get("target_risk_per_trade", 0.02)
                 new_position_risk = _inst.notional(inst, shares, entry_price) * _stop_dist
                 max_heat = CONFIG.get("max_portfolio_heat", 1.0)
-                if not check_portfolio_heat(positions, new_position_risk, total_equity, max_heat):
+                # Gate against BOTH open longs and open shorts. Before #312 an
+                # equity short carried no 'risk' key, so passing `positions`
+                # alone here was inert. #312 registers short risk -- and only
+                # the short-entry gate (see the {**positions, **short_positions}
+                # call above) was updated to read it. That left the cap
+                # breachable through the long side, with admit/reject depending
+                # on entry ORDER and DIRECTION: 2.0% of risk against a 1.5% cap
+                # was rejected entering short and admitted entering long.
+                if not check_portfolio_heat({**positions, **short_positions},
+                                            new_position_risk, total_equity, max_heat):
                     continue
 
                 # Cash constraint (equity full-notional pre-clamp; futures clamp on margin below)
@@ -1502,10 +1530,19 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                             instruments[symbol], _stop_anchor, stop_config, side="long")
 
                     elif _stype == 'atr':
-                        # The SIGNAL bar. Was prev_trading_dates[entry_exec_date],
-                        # which is the signal bar only under execution_time="open";
-                        # under "close" the fill IS the signal bar, so that read
-                        # was one bar too early (#324 review, same class as #310).
+                        # Anchor to the SIGNAL bar. `signal_date` is already
+                        # execution-aware (:1147): the bar before the fill under
+                        # execution_time="open", the fill bar itself under "close".
+                        #
+                        # This previously read prev_trading_dates[entry_exec_date],
+                        # which is only the signal bar under "open" -- under
+                        # "close" entry_exec_date == signal_date, so it read one
+                        # bar too EARLY. Same defect class as #310, but this one
+                        # moves P&L rather than exported features: it sets the
+                        # exit level and InitialRisk, hence every R-multiple,
+                        # expectancy and SQN downstream. Measured 10x difference
+                        # in stop distance (97.00 vs 70.00) on identical inputs,
+                        # from the execution mode alone.
                         day_before_entry = signal_date
 
                         if pd.notna(day_before_entry) and day_before_entry in df.index:
@@ -1559,9 +1596,14 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         # propagates into the target:
                         #   eff_stop_dist = min(stop_mult*atr, point_cap)
                         #   target_dist   = eff_stop_dist * (t1_mult / stop_mult)
-                        # signal_date, not prev(entry_exec_date): the comment above
-                        # says "lock ATR at the breakout (signal) bar" and this is what
-                        # makes that true under execution_time="close" too.
+                        # Signal bar ("the breakout bar"), not prev(fill bar).
+                        # A FIFTH instance of the #310 defect class -- this one
+                        # was documented in CLAUDE.md as "assumes
+                        # execution_time='open'", which is exactly what made it
+                        # invisible: a known limitation nobody had ticketed.
+                        # Under "close" it locked the ATR of the bar BEFORE the
+                        # breakout, and that value is fixed for the whole trade
+                        # (stop, target and trail all derive from it).
                         _dbe = signal_date
                         _atr_b = df.loc[_dbe].get('ATR_14') if (pd.notna(_dbe) and _dbe in df.index) else np.nan
                         if pd.notna(_atr_b):
