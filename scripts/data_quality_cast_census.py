@@ -49,6 +49,21 @@ For the same reason the frames are passed through untouched: no `source`
 filtering, no de-duplication, no sorting. validate_ohlcv does not do those
 things either, and the census measures the function as written.
 
+OUTPUT
+------
+--json-out writes {"cap", "threshold", "corpus", "rows"}, where each row is a
+*keyed* dict: symbol, bars, score_int, score_float -- or symbol plus `error`
+for a frame that would not load. There is no per-row error field on a scored
+row and no positional row format; the earlier hand-run artifact quoted on #389
+used positional rows whose fourth field is zero_volume_pct (null when zero),
+which reads convincingly as an error column and silently drops 2,798 of 35,309
+series if joined as one. Join on `symbol`.
+
+Floats are rounded to 6 dp on the way into the JSON only. Nothing upstream of
+summarise() is rounded: it classifies on `score_float < threshold` and on
+`score_int != score_float`, so a rounded value could move a series across the
+gate or hide a mover.
+
 USAGE
 -----
     python scripts/data_quality_cast_census.py                       # cap as committed
@@ -65,6 +80,7 @@ import importlib.util
 import json
 import multiprocessing as mp
 import os
+import re
 import sys
 import time
 import warnings
@@ -76,16 +92,25 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CORPUS = PROJECT_ROOT / "data" / "market_data" / "merged"
 DEFAULT_MODULE = PROJECT_ROOT / "helpers" / "data_quality.py"
 
-# The committed cap on CHECK 6. Used to locate the expression, and as the
-# default when --cap is not given.
-COMMITTED_CHECK6_CAP = 20
-
 # The two truncations under test. {cap} is filled in so a --cap run rewrites
 # and then un-casts the same expression.
 CAST_CHECK5 = ("demerits += min(10, int(pct))",
                "demerits += min(10, pct)")
 CAST_CHECK6 = ("demerits += min({cap}, int(pct / 2))",
                "demerits += min({cap}, pct / 2)")
+
+# CHECK 6's cap is *read out of the module under test*, not hardcoded here.
+# A literal would be a second copy of a value another branch exists to change
+# -- issue #382 raises it 20 -> 30 -- and on a tree where that has landed the
+# literal no longer matches anything, so every substitution misses and the
+# script refuses to run at all. It fails in the right direction, but it fails:
+# the census would be unrunnable on the branch it most needs to be stated
+# against. Detecting the cap keeps it runnable, and keeps --cap N meaning "score
+# against N" rather than "score against N only if 20 is still committed".
+# Derived from CAST_CHECK6[0] so the pattern and the substitution target are
+# one spelling and cannot drift apart.
+_CHECK6_CAP_RE = re.compile(
+    re.escape(CAST_CHECK6[0]).replace(re.escape("{cap}"), r"(\d+)"))
 
 # Bar-count strata. A one-year series missing 40% of its bars and a five-year
 # series missing 40% of its bars are not the same finding, and the multi-year
@@ -115,29 +140,43 @@ def _sub_once(src: str, old: str, new: str, what: str) -> str:
     return src.replace(old, new)
 
 
-def build_variant_sources(module_path: Path, cap: int | None) -> tuple[str, str]:
-    """Return (as_committed_src, un_cast_src).
+def committed_check6_cap(src: str) -> int:
+    """The CHECK 6 cap in force in the module under test."""
+    found = _CHECK6_CAP_RE.findall(src)
+    if len(found) != 1:
+        raise SystemExit(
+            "[census] cannot locate the CHECK 6 charge: expected exactly one\n"
+            "         `demerits += min(<cap>, int(pct / 2))`, found {}.\n"
+            "         data_quality.py has changed; update the substitution\n"
+            "         table in this script before trusting any count."
+            .format(len(found)))
+    return int(found[0])
 
-    Both are the same file. If `cap` is given, the CHECK 6 clamp is rewritten
-    in both, so the pair differs only by the two casts at whatever cap is in
-    force.
+
+def build_variant_sources(module_path: Path,
+                          cap: int | None) -> tuple[str, str, int]:
+    """Return (as_committed_src, un_cast_src, effective_cap).
+
+    Both sources are the same file. If `cap` is given, the CHECK 6 clamp is
+    rewritten in both, so the pair differs only by the two casts at whatever
+    cap is in force. The third element is the cap the pair was actually built
+    at -- returned rather than re-derived by the caller so there is exactly one
+    answer to "which cap was this run scored under".
     """
     src = module_path.read_text(encoding="utf-8")
 
-    committed6 = CAST_CHECK6[0].format(cap=COMMITTED_CHECK6_CAP)
-    if cap is not None and cap != COMMITTED_CHECK6_CAP:
-        src = _sub_once(src, committed6,
+    eff_cap = committed_check6_cap(src)
+    if cap is not None and cap != eff_cap:
+        src = _sub_once(src, CAST_CHECK6[0].format(cap=eff_cap),
                         CAST_CHECK6[0].format(cap=cap), "the CHECK 6 charge")
         eff_cap = cap
-    else:
-        eff_cap = COMMITTED_CHECK6_CAP
 
     un_cast = _sub_once(src, CAST_CHECK5[0], CAST_CHECK5[1], "the CHECK 5 cast")
     un_cast = _sub_once(un_cast,
                         CAST_CHECK6[0].format(cap=eff_cap),
                         CAST_CHECK6[1].format(cap=eff_cap),
                         "the CHECK 6 cast")
-    return src, un_cast
+    return src, un_cast, eff_cap
 
 
 def _exec_module(src: str, module_path: Path, name: str):
@@ -163,7 +202,7 @@ def _init_worker(module_path: str, cap: int | None) -> None:
     # is not the place to surface it.
     warnings.filterwarnings("ignore", category=FutureWarning)
     path = Path(module_path)
-    as_committed, un_cast = build_variant_sources(path, cap)
+    as_committed, un_cast, _ = build_variant_sources(path, cap)
     _MODS["committed"] = _exec_module(as_committed, path, "as_committed")
     _MODS["uncast"] = _exec_module(un_cast, path, "un_cast")
 
@@ -205,6 +244,27 @@ def _score_one(file_path: str) -> dict:
 def _round_row(row: dict) -> dict:
     """Trim float noise for the JSON artifact only -- never before summarise()."""
     return {k: (round(v, 6) if isinstance(v, float) else v) for k, v in row.items()}
+
+
+def gate_delta(scored: list[dict], threshold: float) -> tuple[int, int, int, int]:
+    """(committed_below, un_cast_below, from_the_at_gate_cohort, from_above).
+
+    `len(low_quality)` in main.py is `sum(score < threshold)`, so this is the
+    number the gate actually reports -- and it is NOT the size of the
+    exactly-at-the-gate cohort. Removing a truncation can only raise a demerit
+    charge, so score_float <= score_int for every series and no series crosses
+    back; but a series that scored 80.4 committed can still fall under an 80.0
+    gate un-cast, and it was never in the score_int == threshold cohort that
+    every other line here counts. Splitting the delta keeps that residue
+    visible instead of leaving it as an unexplained five.
+    """
+    committed = sum(1 for r in scored if r["score_int"] < threshold)
+    un_cast = sum(1 for r in scored if r["score_float"] < threshold)
+    crossers = [r for r in scored
+                if r["score_int"] >= threshold > r["score_float"]]
+    assert un_cast - committed == len(crossers), "score_float > score_int"
+    at_gate = sum(1 for r in crossers if r["score_int"] == threshold)
+    return committed, un_cast, at_gate, len(crossers) - at_gate
 
 
 def summarise(rows: list[dict], threshold: float, cap: int) -> str:
@@ -254,6 +314,28 @@ def summarise(rows: list[dict], threshold: float, cap: int) -> str:
     movers = [r for r in scored if r["score_int"] != r["score_float"]]
     out.append("Series whose score moves at all  : {:,}   ({:.2f}% of corpus)".format(
         len(movers), len(movers) / n * 100))
+    out.append("")
+
+    # What the gate in main.py actually reports, before and after. Swept
+    # rather than quoted at one threshold because on this corpus the two
+    # halves of #389 interfere: every demerit is integer-valued as committed,
+    # so a sub-integer threshold move is a no-op until the cast is gone and
+    # then works against it. One pair cannot show that; the column can.
+    out.append("GATE DELTA  --  len(low_quality), i.e. sum(score < threshold)")
+    out.append("{:>11}  {:>11}  {:>11}  {:>9}".format(
+        "threshold", "committed", "un-cast", "delta"))
+    for t in sorted({threshold - 1, threshold - 0.5, threshold,
+                     threshold + 0.5, threshold + 1}):
+        c, u, _, _ = gate_delta(scored, t)
+        out.append("{:>11}  {:>11,}  {:>11,}  {:>+9,}{}".format(
+            "{:g}".format(t), c, u, u - c,
+            "   <- run threshold" if t == threshold else ""))
+    _, _, _at, _above = gate_delta(scored, threshold)
+    out.append("At {:g} the delta splits {:,} + {:,}: the first from the "
+               "exactly-{:g} cohort".format(threshold, _at, _above, threshold))
+    out.append("above, the second from series that cleared the gate as "
+               "committed and are")
+    out.append("counted nowhere else here.")
 
     if errors:
         out.append("")
@@ -274,7 +356,9 @@ def main(argv=None) -> int:
                     help="path to the data_quality module under test")
     ap.add_argument("--cap", type=int, default=None,
                     help="override the CHECK 6 clamp in BOTH copies "
-                         "(committed: {})".format(COMMITTED_CHECK6_CAP))
+                         "(default: whatever the module under test commits to; "
+                         "the effective value is printed and recorded in "
+                         "--json-out)")
     ap.add_argument("--threshold", type=float, default=80.0,
                     help="the gate being cleared (default: %(default)s)")
     ap.add_argument("--workers", type=int,
@@ -290,9 +374,9 @@ def main(argv=None) -> int:
         ap.error("module not found: {}".format(module_path))
 
     # Build once in the parent too: a substitution failure should abort before
-    # a pool is spawned, not once per worker.
-    build_variant_sources(module_path, args.cap)
-    eff_cap = args.cap if args.cap is not None else COMMITTED_CHECK6_CAP
+    # a pool is spawned, not once per worker. The cap comes back from the same
+    # call that built the pair, so what gets reported is what was scored.
+    _, _, eff_cap = build_variant_sources(module_path, args.cap)
 
     corpus = Path(args.corpus)
     if not corpus.is_dir():
