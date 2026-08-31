@@ -186,14 +186,26 @@ def _score_one(file_path: str) -> dict:
     return {
         "symbol": symbol,
         "bars": int(len(df)),
-        "score_int": round(float(score_int), 6),
-        "score_float": round(float(score_flt), 6),
+        # Full precision. Rounding here would sit UPSTREAM of summarise(),
+        # which classifies on `score_float < threshold` and on
+        # `score_int != score_float` -- so a rounded row could move a series
+        # across the gate or hide a mover. Measured on the 35,309-series
+        # corpus it flips neither (nearest approach from below is 79.995885,
+        # a 4.1e-03 margin against a 5e-07 granularity), but that margin is a
+        # property of the data, not of this code. Round at the writer instead.
+        "score_int": float(score_int),
+        "score_float": float(score_flt),
     }
 
 
 # --------------------------------------------------------------------------
 # Reporting
 # --------------------------------------------------------------------------
+
+def _round_row(row: dict) -> dict:
+    """Trim float noise for the JSON artifact only -- never before summarise()."""
+    return {k: (round(v, 6) if isinstance(v, float) else v) for k, v in row.items()}
+
 
 def summarise(rows: list[dict], threshold: float, cap: int) -> str:
     scored = [r for r in rows if "error" not in r]
@@ -313,7 +325,8 @@ def main(argv=None) -> int:
     if args.json_out:
         Path(args.json_out).write_text(
             json.dumps({"cap": eff_cap, "threshold": args.threshold,
-                        "corpus": str(corpus), "rows": rows}, indent=1),
+                        "corpus": str(corpus),
+                        "rows": [_round_row(r) for r in rows]}, indent=1),
             encoding="utf-8")
         print("[census] wrote {}".format(args.json_out), file=sys.stderr)
 
