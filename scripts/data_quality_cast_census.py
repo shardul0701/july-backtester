@@ -67,6 +67,7 @@ import multiprocessing as mp
 import os
 import sys
 import time
+import warnings
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -155,6 +156,12 @@ _MODS: dict = {}
 
 
 def _init_worker(module_path: str, cap: int | None) -> None:
+    # validate_ohlcv's pct_change raises a FutureWarning on current pandas, and
+    # at corpus scale that is one warning per series on stderr -- enough output
+    # to swamp a terminal or a captured log and, measured here, to kill the run.
+    # Suppressed in the worker only: this census does not control that call and
+    # is not the place to surface it.
+    warnings.filterwarnings("ignore", category=FutureWarning)
     path = Path(module_path)
     as_committed, un_cast = build_variant_sources(path, cap)
     _MODS["committed"] = _exec_module(as_committed, path, "as_committed")
