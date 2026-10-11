@@ -40,8 +40,11 @@ Integration status (so callers don't assume more than is live):
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 def _norm(t):
@@ -85,6 +88,10 @@ def _yaml_change_intervals(start: str, end: str, yaml_dir: "Path",
     for year in range(seed_year, end_y + 1):
         path = yaml_dir / f"{file_prefix}-{year}.yaml"
         if not path.exists():
+            logger.warning(
+                "PIT membership history is incomplete: missing %s. "
+                "Re-sync the roster before trusting index removals.", path,
+            )
             continue
         data = _load_yaml(path)
         if not data:
@@ -214,13 +221,24 @@ def membership_intervals(value: str, config: dict | None = None) -> dict:
             ),
         }
         for candidate in _candidate_roots(index, config):
-            # The interval builder needs the 2004 seed file. Merely existing is
-            # insufficient: sync_data creates the destination before AWS runs,
-            # so a failed/unauthorised sync can leave an empty mirror behind.
+            # An interrupted sync may copy 2004 but omit later removals. Require
+            # the entire timeline the interval builder will read, not just its
+            # seed, before choosing an automatically discovered root.
             for subdir, prefix in layouts[index]:
-                seed = candidate / "src" / subdir / f"{prefix}-2004.yaml"
-                if seed.is_file():
+                yaml_dir = candidate / "src" / subdir
+                if not yaml_dir.is_dir():
+                    continue
+                missing = next((
+                    year for year in range(2004, int(end[:4]) + 1)
+                    if not (yaml_dir / f"{prefix}-{year}.yaml").is_file()
+                ), None)
+                if missing is None:
                     return str(candidate)
+                logger.warning(
+                    "Ignoring incomplete %s PIT roster at %s: missing year %s "
+                    "(%s-%s.yaml). Re-sync the roster.",
+                    index, candidate, missing, prefix, missing,
+                )
         return ""
 
     if kind == "sp500":

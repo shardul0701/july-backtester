@@ -122,7 +122,9 @@ This reads the independently refreshed private mirrors published under
 
 The read-only AWS key used by the sync must include `s3:GetObject` and
 `s3:ListBucket` access for the `pit/` prefix as well as `parquet/`. An
-incomplete or empty roster mirror is ignored by the backtester.
+incomplete or empty roster mirror is ignored by the backtester. Automatic
+discovery requires every yearly YAML from 2004 through the backtest's end year;
+a mirror with a missing year is skipped with a warning to re-sync it.
 
 You can alternatively use the public source repos directly:
 
