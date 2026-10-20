@@ -38,12 +38,19 @@ issue #382's 30) rather than re-quoted across branches. It rewrites the cap in
 
 DATA ACCESS
 -----------
-This reads data/market_data/merged/*.parquet directly rather than through
-data_gate.py. That is deliberate and is not a licence to do the same elsewhere:
-this is a QA audit *of* validate_ohlcv over the population that function exists
-to score, so it must see the frames that function sees -- including the ones
-the gate would reject. Do not copy this access pattern into anything that
-fetches prices for a backtest.
+This reads the merged store's *.parquet files directly (MERGED_DATA_ROOT if
+set, else data/market_data/merged/) rather than through
+src/data/unified_market_data_provider.py. That is deliberate and is not a
+licence to do the same elsewhere: this is a QA audit *of* validate_ohlcv over
+the population that function exists to score, including the series the gate
+would reject. Do not copy this access pattern into anything that fetches prices
+for a backtest.
+
+It scores each file WHOLE. In a backtest, quality_report sees the provider's
+frame instead -- sliced to [start_date, end_date] and reduced to the canonical
+columns -- so a series' census score is its full-history score, not the score
+any particular run computed for it. That is the right population for a corpus
+census; it is not a reproduction of one run's gate.
 
 For the same reason the frames are passed through untouched: no `source`
 filtering, no de-duplication, no sorting. validate_ohlcv does not do those
@@ -70,7 +77,7 @@ USAGE
     python scripts/data_quality_cast_census.py --cap 30              # against a proposed cap
     python scripts/data_quality_cast_census.py --workers 8 --json-out census.json
 
-Census contributed by @shardul (issue #389).
+Census contributed by shardul0701 (issue #389).
 """
 
 from __future__ import annotations
@@ -89,7 +96,10 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_CORPUS = PROJECT_ROOT / "data" / "market_data" / "merged"
+# Same resolution as unified_market_data_provider: MERGED_DATA_ROOT, else the
+# in-repo default.
+DEFAULT_CORPUS = Path(os.environ.get("MERGED_DATA_ROOT") or
+                      PROJECT_ROOT / "data" / "market_data" / "merged")
 DEFAULT_MODULE = PROJECT_ROOT / "helpers" / "data_quality.py"
 
 # The two truncations under test. {cap} is filled in so a --cap run rewrites
@@ -368,6 +378,9 @@ def main(argv=None) -> int:
     ap.add_argument("--json-out", default=None,
                     help="write every scored row to this path as JSON")
     args = ap.parse_args(argv)
+
+    if args.cap is not None and args.cap < 0:
+        ap.error("--cap must be >= 0, got {}".format(args.cap))
 
     module_path = Path(args.module)
     if not module_path.is_file():
