@@ -207,10 +207,42 @@ CONFIG = {
     # Controls the order in which symbols are evaluated for entry when multiple
     # signals fire on the same bar and capital can only fill a subset.
     # "alphabetical" (default) — A→Z, reproducible and Alpaca-replicable
-    # "signal_date"            — earlier-signalling symbols get priority
-    # "random_seed"            — shuffle with a fixed seed (sensitivity testing)
+    # "signal_date"            — earlier-signalling symbols get priority. On
+    #                            daily bars every same-bar signal shares one
+    #                            signal_date, so ties fall through to the symbol:
+    #                            it is effectively ALPHABETICAL on same-bar ties.
+    # "random_seed"            — a different shuffle every bar, seeded from
+    #                            (entry_random_seed, date): reproducible for a
+    #                            given seed; run several seeds for a sensitivity
+    #                            distribution (#412)
     "entry_priority": "alphabetical",
     "entry_random_seed": 42,
+
+    # Whether a bar qualifies as an ENTRY at all.
+    # "level" (default) — enter on any bar whose signal reads the entry value.
+    #                     Strategies emitting a forward-filled state series make
+    #                     every hold bar entry-eligible under this mode.
+    # "edge"            — enter only on the transition INTO the entry state,
+    #                     matching how the live scanner triggers. Opt-in: the
+    #                     default is unchanged so existing results are stable.
+    #
+    # TWO CONSEQUENCES OF "edge" BEYOND THE LATE-ENTRY FIX, both intended:
+    #   * A STOPPED-OUT POSITION DOES NOT RE-ENTER while the state signal is
+    #     still held. Level mode re-enters on the next bar (the series still
+    #     reads 1); edge mode waits for a transition that will not come until
+    #     the strategy actually re-signals. A live scanner triggering on
+    #     `last == 1 and prev != 1` behaves the same way, which is the point —
+    #     but on a stopped strategy this moves results more than the capacity
+    #     path this option was written for.
+    #   * ON A CONTESTED BOOK IT RE-PLANS, IT DOES NOT ONLY SUBTRACT. Skipping
+    #     a late entry frees the capital that entry would have consumed, and
+    #     that capital goes to whatever else is competing on the bar — so a
+    #     surviving trade can change SIZE, and a symbol can end up with MORE
+    #     trades than level mode gave it. Measured over 80 randomised contested
+    #     books (5 symbols x 120 bars): 20 of the 80 had at least one symbol
+    #     trading more often under edge (25 of 400 book-symbol cells), while
+    #     book totals fell 1564 -> 1434. Net subtraction, but not a filter.
+    "entry_trigger": "level",
 
     # ============================================================
     # SECTION 21: VERBOSE SUMMARY TABLE
@@ -413,4 +445,15 @@ CONFIG = {
     # deliberately NO absolute-dollar cap default — a dollar cap is scale-dependent
     # and silently changes behaviour when initial_capital changes.
     "max_position_pct": 1.0,
+
+    # ============================================================
+    # SECTION 31: SIMULATION WORKERS (#414)
+    # ============================================================
+    # Upper bound on the simulation pool. Every worker receives its own copy of
+    # the portfolio's price data, so peak memory is roughly
+    # (workers + 1) x portfolio_data: on a wide universe (e.g. rule:us_liquid_500,
+    # 2004-2026) four workers can exhaust a 16 GB machine. None (default) keeps
+    # min(cpu_count(), number of tasks); 1 runs every task serially in one
+    # invocation, keeping the combined summary. CLI: --workers N.
+    "max_workers": None,
 }
