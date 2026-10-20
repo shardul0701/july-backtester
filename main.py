@@ -823,12 +823,15 @@ def main():
                 tickers_union_for_period as _pit_union,
                 build_membership_schedule as _pit_schedule_build,
                 PitResolutionError as _PitResolutionError,
+                PitRosterError as _PitRosterError,
             )
             _pit_index_name = value.split(":", 1)[1]
             try:
                 symbols = _pit_union(_pit_index_name, CONFIG["start_date"], CONFIG["end_date"], CONFIG)
                 _current_membership_schedule = _pit_schedule_build(_pit_index_name, CONFIG["start_date"], CONFIG["end_date"], CONFIG)
-            except _PitResolutionError:
+            except (_PitResolutionError, _PitRosterError):
+                # A missing roster year (#422) is the same failure: removals
+                # never applied, members never force-exited. Abort, too.
                 # #407: members that cannot be mapped to a single parquet
                 # security must ABORT, not skip the portfolio. `continue` here
                 # would be "drop the member" wearing a different hat — the run

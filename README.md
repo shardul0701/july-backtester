@@ -121,10 +121,17 @@ This reads the independently refreshed private mirrors published under
 `s3://july-backtester-market-data/pit/{sp500,nq100}/`.
 
 The read-only AWS key used by the sync must include `s3:GetObject` and
-`s3:ListBucket` access for the `pit/` prefix as well as `parquet/`. An
-incomplete or empty roster mirror is ignored by the backtester. Automatic
-discovery requires every yearly YAML from 2004 through the backtest's end year;
-a mirror with a missing year is skipped with a warning to re-sync it.
+`s3:ListBucket` access for the `pit/` prefix as well as `parquet/`.
+
+The membership schedule, the fetched universe and daily forced-exit enforcement
+all read **one** roster, chosen by the same completeness rule: every yearly YAML
+from 2004 through the backtest's end year (the current year's file is optional,
+since it may not be published yet). An auto-discovered roster with a missing
+year is skipped with a warning naming that year. If no complete roster is left,
+the run **aborts** (`PitRosterError`) instead of replaying a timeline whose
+missing years never apply their removals. An explicitly configured
+`SP500_DATA_ROOT` / `NQ100_DATA_ROOT` / `*_pit_path` is used even if incomplete,
+with a warning, because you chose it.
 
 You can alternatively use the public source repos directly:
 

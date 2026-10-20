@@ -210,50 +210,27 @@ def membership_intervals(value: str, config: dict | None = None) -> dict:
     end = config.get("end_date")
     if not start or not end:
         return {}
-    from helpers.point_in_time import _candidate_roots
+    from helpers.point_in_time import PitRosterError, select_roster
 
-    def synced_root(index: str) -> str:
-        layouts = {
-            "sp500": (("sp500_ticker_history", "sp500-ticker-changes"),),
-            "nq100": (
-                ("nasdaq_100_ticker_history", "n100-ticker-changes"),
-                ("nasdaq100_ticker_history", "n100-ticker-changes"),
-            ),
-        }
-        for candidate in _candidate_roots(index, config):
-            # An interrupted sync may copy 2004 but omit later removals. Require
-            # the entire timeline the interval builder will read, not just its
-            # seed, before choosing an automatically discovered root.
-            for subdir, prefix in layouts[index]:
-                yaml_dir = candidate / "src" / subdir
-                if not yaml_dir.is_dir():
-                    continue
-                missing = next((
-                    year for year in range(2004, int(end[:4]) + 1)
-                    if not (yaml_dir / f"{prefix}-{year}.yaml").is_file()
-                ), None)
-                if missing is None:
-                    return str(candidate)
-                logger.warning(
-                    "Ignoring incomplete %s PIT roster at %s: missing year %s "
-                    "(%s-%s.yaml). Re-sync the roster.",
-                    index, candidate, missing, prefix, missing,
-                )
-        return ""
+    # Same roster, same completeness rule as build_membership_schedule (#422
+    # review): a partial mirror must not silently drive forced exits off a
+    # timeline with missing removals. Intervals replay from the 2004 seed, so
+    # the selection covers that span.
+    try:
+        yaml_dir, prefix = select_roster(kind, int(str(end)[:4]), config)
+    except PitRosterError as exc:
+        if exc.incomplete:
+            raise
+        yaml_dir = None  # no YAML roster at all: keep the legacy fallbacks below
 
     if kind == "sp500":
-        repo = (config.get("sp500_pit_path") or os.environ.get("SP500_DATA_ROOT", "")
-                or synced_root("sp500"))
-        return _sp500_intervals(start, end, repo) if repo else {}
+        return _yaml_change_intervals(start, end, yaml_dir, prefix) if yaml_dir else {}
 
-    # nq100: prefer the survivorship-free change-event YAML repo (config key or
-    # NQ100_DATA_ROOT env, symmetric with sp500). Fall back to the legacy
-    # daily-snapshot parquet only when the YAML repo yields nothing, so users
+    # nq100: prefer the survivorship-free change-event YAML roster. Fall back to
+    # the legacy daily-snapshot parquet only when no YAML roster exists, so users
     # without the data repo see unchanged behaviour.
-    repo = (config.get("nq100_pit_path") or os.environ.get("NQ100_DATA_ROOT", "")
-            or synced_root("nq100"))
-    if repo:
-        yaml_intervals = _nq100_intervals_from_yaml(start, end, repo)
+    if yaml_dir is not None:
+        yaml_intervals = _yaml_change_intervals(start, end, yaml_dir, prefix)
         if yaml_intervals:
             return yaml_intervals
     parquet = config.get("nq100_pit_path") or os.path.join(

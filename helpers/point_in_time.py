@@ -44,6 +44,8 @@ survivorship bias. There is deliberately no opt-out flag.
 from __future__ import annotations
 
 import bisect
+import datetime
+import logging
 import os
 from functools import lru_cache
 from pathlib import Path
@@ -51,6 +53,12 @@ from typing import Iterable
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+logger = logging.getLogger(__name__)
+
+# Both roster repositories start their change-event timeline here; every reader
+# (schedule, union, daily enforcement) replays membership forward from this seed.
+ROSTER_SEED_YEAR = 2004
 
 INDEX_ALIASES = {
     "nq100": "nq100",
@@ -134,10 +142,10 @@ def _raw_pit_ticker(symbol: str, date: str | None = None) -> str:
     return str(symbol).strip().upper()
 
 
-def _candidate_roots(index: str, config: dict | None = None) -> list[Path]:
+def _explicit_roots(index: str, config: dict | None = None) -> list[Path]:
+    """Roster roots the operator named (config keys, then env), in precedence order."""
     config = config or {}
     roots: list[Path] = []
-
     if index == "sp500":
         for key in ("sp500_pit_path", "sp500_data_root"):
             if config.get(key):
@@ -150,6 +158,12 @@ def _candidate_roots(index: str, config: dict | None = None) -> list[Path]:
                 roots.append(Path(config[key]))
         if os.environ.get("NQ100_DATA_ROOT"):
             roots.append(Path(os.environ["NQ100_DATA_ROOT"]))
+    return [r.expanduser() for r in roots]
+
+
+def _candidate_roots(index: str, config: dict | None = None) -> list[Path]:
+    config = config or {}
+    roots: list[Path] = list(_explicit_roots(index, config))
 
     from helpers.rule_based_universe import resolve_parquet_dir
 
@@ -199,6 +213,113 @@ def _find_year_yaml(index: str, year: int, config: dict | None = None) -> Path:
         f"{'SP500_DATA_ROOT' if index == 'sp500' else 'NQ100_DATA_ROOT'} "
         "or place files under tickers_to_scan/point_in_time/."
     )
+
+
+class PitRosterError(RuntimeError):
+    """No complete PIT roster covers the run.
+
+    Raised instead of returning an empty or stale membership timeline: a roster
+    with a missing year never applies that year's removals, so removed members
+    stay "in the index" and are never force-exited -- survivorship bias with no
+    error. ``incomplete`` lists ``(yaml_dir, missing_years)`` for every roster
+    that was found but rejected; it is empty when no roster exists at all.
+    """
+
+    def __init__(self, index: str, incomplete: list[tuple[Path, list[int]]]):
+        self.index = index
+        self.incomplete = list(incomplete)
+        env = "SP500_DATA_ROOT" if index == "sp500" else "NQ100_DATA_ROOT"
+        if incomplete:
+            detail = "; ".join(
+                f"{d} is missing {', '.join(map(str, years[:5]))}"
+                f"{' ...' if len(years) > 5 else ''}"
+                for d, years in incomplete
+            )
+            msg = (f"No complete {index} PIT roster covers this run ({detail}). "
+                   "Re-sync the roster (an interrupted `aws s3 sync` leaves "
+                   f"exactly this state) or point {env} at a complete copy.")
+        else:
+            msg = (f"No {index} PIT roster found. Configure {env} or sync the "
+                   "rosters beside the parquet corpus.")
+        super().__init__(msg)
+
+
+def _latest_published_year() -> int:
+    """The last roster year that must exist. The current year's file may not be
+    published yet (an early-January run), so it is read when present but never
+    required -- otherwise one unpublished file would reject a complete mirror."""
+    return datetime.date.today().year - 1
+
+
+def select_roster(index: str, end_year: int,
+                  config: dict | None = None) -> tuple[Path, str]:
+    """Return ``(yaml_dir, file_prefix)``: the ONE roster every reader uses.
+
+    The schedule, the union and daily enforcement all go through here, so they
+    read the same files and apply the same completeness rule. Candidates are
+    tried in ``_candidate_roots`` precedence; a roster is complete when it holds
+    every year from ``ROSTER_SEED_YEAR`` through ``min(end_year, last published
+    year)``.
+
+    * An incomplete auto-discovered roster (e.g. a partial S3 mirror) is skipped
+      with a warning naming the first missing year.
+    * An incomplete *explicitly configured* roster is still used -- the operator
+      chose it -- with a warning that those years' removals will be missing.
+    * If nothing complete is found, :class:`PitRosterError` is raised.
+    """
+    required = range(ROSTER_SEED_YEAR, min(end_year, _latest_published_year()) + 1)
+    explicit = set(_explicit_roots(index, config))
+    incomplete: list[tuple[Path, list[int]]] = []
+    for root in _candidate_roots(index, config):
+        for directory in _yaml_dirs_for_root(root, index):
+            if not directory.is_dir():
+                continue
+            for prefix in INDEX_FILE_PREFIXES[index]:
+                if not any(directory.glob(f"{prefix}-*.yaml")):
+                    continue
+                missing = [y for y in required
+                           if not (directory / f"{prefix}-{y}.yaml").is_file()]
+                if not missing:
+                    return directory, prefix
+                if root in explicit:
+                    logger.warning(
+                        "Configured %s PIT roster at %s is missing year %s "
+                        "(%s-%s.yaml); using it because it was set explicitly, "
+                        "but removals in missing years will NOT be applied. "
+                        "Re-sync the roster.",
+                        index, directory, missing[0], prefix, missing[0])
+                    return directory, prefix
+                logger.warning(
+                    "Ignoring incomplete %s PIT roster at %s: missing year %s "
+                    "(%s-%s.yaml). Re-sync the roster.",
+                    index, directory, missing[0], prefix, missing[0])
+                incomplete.append((directory, missing))
+    raise PitRosterError(index, incomplete)
+
+
+def _roster_year_files(index: str, start_year: int, end_year: int,
+                       config: dict | None = None) -> list[tuple[int, Path]]:
+    """``[(year, path)]`` for each roster year in range, from the selected roster.
+
+    A missing year is logged, never silently skipped: a required year can only be
+    missing from an explicitly configured roster (``select_roster`` rejects
+    anything else), and a missing current/future year means that year's
+    removals are not applied yet.
+    """
+    directory, prefix = select_roster(index, end_year, config)
+    out = []
+    for year in range(start_year, end_year + 1):
+        path = directory / f"{prefix}-{year}.yaml"
+        if path.is_file():
+            out.append((year, path))
+        elif year <= _latest_published_year():
+            logger.warning("PIT membership history is incomplete: missing %s. "
+                           "Re-sync the roster before trusting index removals.", path)
+        else:
+            logger.warning("PIT roster for %s %s is not available yet (%s); "
+                           "removals in %s will not be applied.",
+                           index, year, path, year)
+    return out
 
 
 def load_roster_yaml(stream) -> dict:
@@ -333,12 +454,8 @@ def tickers_union_for_period(
     sy = int(start_date[:4])
     ey = int(end_date[:4])
     union: set[str] = set()
-    for year in range(sy, ey + 1):
-        try:
-            path = _find_year_yaml(idx, year, config)
-            data = _load_year_yaml(path)
-        except FileNotFoundError:
-            continue
+    for _year, path in _roster_year_files(idx, sy, ey, config):
+        data = _load_year_yaml(path)
         union.update(normalise_pit_ticker(t) for t in (data.get("tickers_on_Jan_1") or []))
         for entry in ((data.get("changes") or {}).values()):
             if entry:
@@ -389,11 +506,14 @@ def build_membership_schedule(
     # every other provider keeps the established normalisation.
     norm = _raw_pit_ticker if _is_parquet_provider(config) else normalise_pit_ticker
 
+    # One roster for the whole run, completeness-checked: raises PitRosterError
+    # rather than replaying a timeline with missing years (#422 review).
+    year_files = _roster_year_files(idx, sy, ey, config)
+
     # --- Step 1: derive initial membership at exactly start_date ---
     members: set[str] = set()
-    try:
-        path = _find_year_yaml(idx, sy, config)
-        data = _load_year_yaml(path)
+    if year_files and year_files[0][0] == sy:
+        data = _load_year_yaml(year_files[0][1])
         members = {norm(t) for t in (data.get("tickers_on_Jan_1") or [])}
         for change_date in sorted(str(d) for d in (data.get("changes") or {}).keys()):
             if change_date > start_date:
@@ -401,18 +521,12 @@ def build_membership_schedule(
             entry = (data.get("changes") or {}).get(change_date) or {}
             members -= {norm(t) for t in (entry.get("difference") or [])}
             members |= {norm(t) for t in (entry.get("union") or [])}
-    except FileNotFoundError:
-        pass
 
     schedule: list[tuple[str, frozenset]] = [(start_date, frozenset(members))]
 
     # --- Step 2: record every change event strictly after start_date ---
-    for year in range(sy, ey + 1):
-        try:
-            path = _find_year_yaml(idx, year, config)
-            data = _load_year_yaml(path)
-        except FileNotFoundError:
-            continue
+    for _year, path in year_files:
+        data = _load_year_yaml(path)
         for change_date in sorted(str(d) for d in (data.get("changes") or {}).keys()):
             if change_date <= start_date or change_date > end_date:
                 continue
