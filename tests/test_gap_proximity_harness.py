@@ -1,22 +1,25 @@
 # tests/test_gap_proximity_harness.py
 """Tests for the #298 research harness scripts.
 
-PR #298 added research harness scripts with no tests. These cover:
+PR #298 added nine research scripts. This file covers two of them:
 
 * ``scripts/gap_proximity_scan.py`` - ``qualifying`` / ``read_ohlcv`` / ``resolve``
 * ``scripts/make_tearsheet.py``     - ``load_equity`` / ``stats`` / ``annual``
 
-CORRECTED 2026-09-21: this docstring previously said ``check_annual.py`` and
-``check_leverage.py`` were "deliberately NOT covered" because they had no
-functions, hardcoded Windows paths and executed on import. That was true of an
-earlier revision and is false on this one -- the same PR refactored both into
-functions behind a ``__main__`` guard taking a run directory as an argument, and
-they ARE tested, in ``tests/test_run_diagnostics.py``. It also quoted a stale
-"408 lines across four scripts".
+``check_annual.py`` and ``check_leverage.py`` are covered in
+``tests/test_run_diagnostics.py`` (#298 shipped that file too). Both are
+functions behind a ``__main__`` guard: ``check_annual.py`` takes a run directory,
+``check_leverage.py`` a trade-log CSV plus ``--initial-capital``.
 
-Left as a note rather than deleted, because a test file that describes coverage
-it does not have is worse than one that says nothing, and the way this survived
-is that nobody re-read the prose after the code moved underneath it.
+NOT covered anywhere: ``dead_money_entry.py``, ``dead_money_normalised.py`` and
+the three ``vol_*.py`` scripts.
+
+CORRECTED: an earlier version of this docstring said ``check_annual.py`` and
+``check_leverage.py`` were "deliberately NOT covered" (no functions, hardcoded
+Windows paths, executed on import) and that #298 shipped with zero tests. Both
+were true of an earlier revision of #298 and false of what merged. Left as a
+note rather than deleted, because a test file that describes coverage it does
+not have is worse than one that says nothing.
 
 The tests are written as invariants where the script's own docstrings make a
 claim - the trailing average excluding the current bar, Sharpe being an excess
