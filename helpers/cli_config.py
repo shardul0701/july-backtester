@@ -443,9 +443,25 @@ _SECTIONS: list[tuple[str, str, list[dict]]] = [
         {
             "flag": "--min-bars <int>",
             "config_key": "min_bars_required",
-            "desc": "Skip any symbol with fewer bars than this.",
+            "desc": (
+                "Skip any symbol with fewer bars than this inside the backtest\n"
+                "      window (warm-up bars do not count). Survivorship-aware universes\n"
+                "      (pit:, rule:, include_delisted) KEEP short-lived names and only log\n"
+                "      them. Skipped/kept names are written to skipped_symbols.csv."
+            ),
             "options": None,
             "example": "python main.py --min-bars 500",
+        },
+        {
+            "flag": "--set pit_warmup_days=<int>",
+            "config_key": "pit_warmup_days",
+            "desc": (
+                "Calendar days of pre-start history fetched for portfolio symbols so\n"
+                "      indicators are warm on start_date (default 400; 0 disables).\n"
+                "      No trade or equity point occurs before start_date."
+            ),
+            "options": None,
+            "example": "python main.py --set pit_warmup_days=600",
         },
     ]),
     ("strategies", "STRATEGIES", [

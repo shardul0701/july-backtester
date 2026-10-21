@@ -297,6 +297,51 @@ def _task_naming(name, stop_config, naming=None):
 
 # --------------------------------------------------------------------
 
+def _warmup_fetch_start(start_date, config):
+    """Fetch start for portfolio symbols: ``start_date - pit_warmup_days`` (#433).
+
+    Indicators need history before ``start_date``; the simulation, benchmarks and
+    WFA dates all stay anchored to ``start_date`` (see ``_trim_to_start``).
+    ``pit_warmup_days`` of 0/None disables warm-up (fetch from ``start_date``).
+    """
+    days = config.get("pit_warmup_days") or 0
+    if days <= 0:
+        return start_date
+    return (pd.Timestamp(start_date) - pd.Timedelta(days=int(days))).strftime("%Y-%m-%d")
+
+
+def _trim_to_start(obj, start_date):
+    """Return ``obj`` (DataFrame/Series, DatetimeIndex) restricted to >= start_date.
+
+    No-op (same object, no copy) when nothing precedes ``start_date``.
+    """
+    idx = obj.index
+    ts = pd.Timestamp(start_date)
+    if idx.tz is not None:
+        ts = ts.tz_localize(idx.tz)
+    if len(idx) == 0 or idx[0] >= ts:
+        return obj
+    return obj.loc[idx >= ts]
+
+
+def _classify_short_lived(window_idx, start_date, end_date, tol_days=7):
+    """Reasons a symbol's in-window bars look short-lived (#433).
+
+    Returns a list drawn from ``"ended_before_end_date"`` (likely delisted) and
+    ``"started_after_start_date"`` (late listing / IPO), using ``tol_days`` of slack.
+    """
+    reasons = []
+    tol = pd.Timedelta(days=tol_days)
+    first, last = window_idx[0], window_idx[-1]
+    if first.tzinfo is not None:
+        first, last = first.tz_localize(None), last.tz_localize(None)
+    if last < pd.Timestamp(end_date) - tol:
+        reasons.append("ended_before_end_date")
+    if first > pd.Timestamp(start_date) + tol:
+        reasons.append("started_after_start_date")
+    return reasons
+
+
 def run_single_simulation(args):
     """
     Function to run one combination of (portfolio, strategy, stop-loss).
@@ -377,6 +422,16 @@ def run_single_simulation(args):
                 new_sig.loc[removal_days] = -1
                 final_signals[symbol] = new_sig
         # --- END PIT SIGNAL GATING ---
+
+        # --- WARM-UP TRIM (#433) ---
+        # Frames were fetched from start_date - pit_warmup_days so indicators and
+        # signals above are warm on day one. Drop the warm-up bars now so no entry
+        # and no equity-timeline point can land before start_date (the timeline is
+        # built from the frames' indexes). No-op when nothing precedes start_date.
+        portfolio_data = {s_: _trim_to_start(d_, CONFIG["start_date"]) for s_, d_ in portfolio_data.items()}
+        final_signals = {s_: _trim_to_start(sg_, CONFIG["start_date"]) for s_, sg_ in final_signals.items()}
+        portfolio_data = {s_: d_ for s_, d_ in portfolio_data.items() if len(d_)}
+        final_signals = {s_: sg_ for s_, sg_ in final_signals.items() if s_ in portfolio_data}
 
         # Call the simulation, passing the stop_config and using the global dataframes.
         result = run_portfolio_simulation(
@@ -851,6 +906,7 @@ def main():
     all_portfolio_results = [] # To gather results from all portfolios
 
     logger.info("=" * 25 + " PROCESSING PORTFOLIOS " + "=" * 25)
+    _skipped_rows = []  # short-lived symbols (skipped or kept) for skipped_symbols.csv (#433)
     noise_data_saved = False  # Save one noise sample CSV per run (first symbol with noise > 0)
     # Loop through each portfolio sequentially
     for portfolio_name, value in _portfolios.items():
@@ -985,14 +1041,35 @@ def main():
                 )
 
         MIN_BARS = CONFIG.get("min_bars_required", 250)
+        # Survivorship-aware universes (pit:/rule: schedule, or include_delisted)
+        # KEEP short-lived names: early failures and late listings are exactly
+        # what the universe exists to include (#433). Plain lists keep the filter.
+        _keep_short_lived = (_current_membership_schedule is not None
+                             or bool(CONFIG.get("include_delisted", False)))
+        _fetch_start = _warmup_fetch_start(CONFIG["start_date"], CONFIG)
         skipped_symbols = []
+        _kept_short_lived = []
         portfolio_data = {}
         for symbol in tqdm(symbols, desc="  -> Fetching & Preparing Data", unit=" symbols"):
-            df = data_fetcher(symbol, CONFIG["start_date"], CONFIG["end_date"], CONFIG)
+            df = data_fetcher(symbol, _fetch_start, CONFIG["end_date"], CONFIG)
             if df is not None and not df.empty:
-                if len(df) < MIN_BARS:
-                    skipped_symbols.append((symbol, len(df)))
+                # Bars are counted inside the backtest window only: warm-up bars
+                # must not make a short-lived name look long-lived.
+                _window = _trim_to_start(df, CONFIG["start_date"])
+                if len(_window) == 0:
                     continue
+                if len(_window) < MIN_BARS:
+                    _reasons = _classify_short_lived(
+                        _window.index, CONFIG["start_date"],
+                        CONFIG.get("end_date") or datetime.now().strftime("%Y-%m-%d"))
+                    _row = {"portfolio": portfolio_name, "symbol": symbol, "bars": len(_window),
+                            "reason": ";".join(_reasons) or "fewer_than_min_bars",
+                            "action": "kept" if _keep_short_lived else "skipped"}
+                    _skipped_rows.append(_row)
+                    if not _keep_short_lived:
+                        skipped_symbols.append((symbol, len(_window), _row["reason"]))
+                        continue
+                    _kept_short_lived.append(symbol)
                 # --- NOISE INJECTION (stress test) ---
                 _noise_pct = CONFIG.get("noise_injection_pct", 0.0)
                 if _noise_pct > 0:
@@ -1041,10 +1118,21 @@ def main():
                 portfolio_data[symbol] = df
 
         if skipped_symbols:
+            _n_end = sum("ended_before_end_date" in r for _, _, r in skipped_symbols)
+            _n_late = sum("started_after_start_date" in r for _, _, r in skipped_symbols)
             logger.warning(
-                f"  -> Skipped {len(skipped_symbols)} symbol(s) with fewer than {MIN_BARS} bars: "
-                + ", ".join(f"{s} ({n} bars)" for s, n in skipped_symbols)
+                f"  -> Skipped {len(skipped_symbols)} symbol(s) with fewer than {MIN_BARS} bars "
+                f"({_n_end} ended before end_date (likely delisted), {_n_late} started after "
+                f"start_date (late listing)): "
+                + ", ".join(f"{s} ({n} bars)" for s, n, _ in skipped_symbols)
             )
+        if _kept_short_lived:
+            logger.info(
+                f"  -> Kept {len(_kept_short_lived)} short-lived symbol(s) with fewer than "
+                f"{MIN_BARS} bars (survivorship-aware universe)."
+            )
+        if _skipped_rows:
+            pd.DataFrame(_skipped_rows).to_csv(os.path.join(run_base_dir, "skipped_symbols.csv"), index=False)
 
         if not portfolio_data:
             logger.warning(f"Could not fetch data for any symbols in '{portfolio_name}'. Skipping.")
