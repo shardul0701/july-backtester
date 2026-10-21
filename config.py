@@ -399,6 +399,14 @@ CONFIG = {
     # sub-bar open instead of optimistically at the stop level). Opt-in; requires
     # 1-min data availability, so it is off by default.
     "intrabar_resolution": False,
+    # Coarse (non-intrabar) stop fills (issue #425). "open" = a bar that OPENS beyond
+    # the stop (gap-through) fills at the worse open: min(Open, stop) long,
+    # max(Open, stop) short. "level" = legacy, always fill at the stop level.
+    # Sub-bar data (intrabar_resolution) still overrides when present.
+    "stop_gap_fill": "open",
+    # Sleeve A parity: an ARMED trailing_atr trail fills at the exact trail level
+    # (gap or not). Set "open" to apply stop_gap_fill to armed trails too.
+    "stop_gap_fill_armed_trail": "level",
     # Finer-resolution timeframe fetched per symbol when intrabar_resolution is on.
     "intrabar_timeframe": "MIN",     # "MIN" | "H"
     "intrabar_multiplier": 1,        # e.g. 5 for 5-minute sub-bars
