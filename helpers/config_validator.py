@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 KNOWN_KEYS: set[str] = {
     # SECTION 1: Data Provider
     "data_provider",
+    "polygon_max_retries",
     "polygon_api_secret_name",  # PR #187: added — was triggering "unknown key" warning
     "csv_data_dir",
     # --- Rule-based point-in-time universe (zachisit/july-backtester-private-strategies#70) ---

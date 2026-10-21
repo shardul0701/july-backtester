@@ -906,6 +906,7 @@ def main():
     all_portfolio_results = [] # To gather results from all portfolios
 
     logger.info("=" * 25 + " PROCESSING PORTFOLIOS " + "=" * 25)
+    _all_fetch_failures = []  # accumulated across portfolios for fetch_failures.csv (#437)
     _skipped_rows = []  # short-lived symbols (skipped or kept) for skipped_symbols.csv (#433)
     noise_data_saved = False  # Save one noise sample CSV per run (first symbol with noise > 0)
     # Loop through each portfolio sequentially
@@ -1048,10 +1049,14 @@ def main():
                              or bool(CONFIG.get("include_delisted", False)))
         _fetch_start = _warmup_fetch_start(CONFIG["start_date"], CONFIG)
         skipped_symbols = []
+        _fetch_failures = []   # symbols whose fetch returned None (#437)
         _kept_short_lived = []
         portfolio_data = {}
         for symbol in tqdm(symbols, desc="  -> Fetching & Preparing Data", unit=" symbols"):
             df = data_fetcher(symbol, _fetch_start, CONFIG["end_date"], CONFIG)
+            if df is None:
+                _fetch_failures.append({"portfolio": portfolio_name, "symbol": symbol,
+                                        "reason": "fetch_returned_none"})
             if df is not None and not df.empty:
                 # Bars are counted inside the backtest window only: warm-up bars
                 # must not make a short-lived name look long-lived.
@@ -1131,6 +1136,16 @@ def main():
                 f"  -> Kept {len(_kept_short_lived)} short-lived symbol(s) with fewer than "
                 f"{MIN_BARS} bars (survivorship-aware universe)."
             )
+        if _fetch_failures:
+            logger.warning(
+                f"  -> {len(_fetch_failures)} symbol(s) returned no data (fetch error or no history) "
+                f"and are excluded from '{portfolio_name}': "
+                + ", ".join(r["symbol"] for r in _fetch_failures[:20])
+                + (" ..." if len(_fetch_failures) > 20 else "")
+                + " (full list: fetch_failures.csv)"
+            )
+            _all_fetch_failures.extend(_fetch_failures)
+            pd.DataFrame(_all_fetch_failures).to_csv(os.path.join(run_base_dir, "fetch_failures.csv"), index=False)
         if _skipped_rows:
             pd.DataFrame(_skipped_rows).to_csv(os.path.join(run_base_dir, "skipped_symbols.csv"), index=False)
 

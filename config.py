@@ -19,6 +19,8 @@ CONFIG = {
     # polygon_api_secret_name: name of the env-var / .env key that holds the key.
     "data_provider": "polygon",
     "polygon_api_secret_name": "POLYGON_API_KEY",
+    # Retries (exponential backoff, honours Retry-After) on HTTP 429/5xx per request. 0 = off.
+    "polygon_max_retries": 5,
     # Only used when data_provider = "csv":
     "csv_data_dir": "csv_data",
     # Only used when data_provider = "merged" — root of the built unified
