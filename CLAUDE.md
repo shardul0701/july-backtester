@@ -823,6 +823,17 @@ The internal `Trade` counter column is always dropped.
 
 With `include_delisted: True`, `run_portfolio_simulation` liquidates a held long **or short** in a delisted symbol **inside the daily loop**, at the top of the first loop date on/after its delisting date (`_liquidate_delisted` -> `_close_delisted`), before that bar's equity/sizing. Exit price: `delisting_price_assumption` `"zero"` -> 0.0, `"last_close"` -> last non-NaN Close on/before the delisting date. Cash is credited (futures: P&L realised, margin released; shorts: covered at the assumption price, `reserved_short_collateral` released), so later sizing uses real equity and the slot/cash is redeployable (#431, subsumes #149). Trades log `ExitReason: "Delisting"`, `ExitDate` = the delisting date. The old post-loop equity-curve patch (`_delisting_corrections`) is gone; a post-loop safety net remains only for a position whose delisting date falls after the last loop date. A short in a delisted symbol under `"zero"` books the full short gain. `survivorship_stats` keys/semantics are unchanged. Tests: `tests/test_survivorship.py::TestDelistingInLoop431`.
 
+## Results Accounting (Zero-Trade and Errored Runs)
+
+Every strategy x stop x portfolio task yields a result; none silently vanish (#432).
+
+- `run_portfolio_simulation` still returns `None` for zero trades; `main.py::run_single_simulation` converts that into a **stub** via `helpers/result_status.make_stub_result`. A worker exception also returns a stub (`status: "error"`, `error: "<ExceptionType>: <message>"`) after the traceback is printed. The `Pool` / `init_worker` / task-tuple shape is unchanged.
+- Stubs carry the keys real results carry (`Strategy`, `Portfolio`, `Trades: 0`, `pnl_percent: 0.0`, empty `trade_log` / `trade_pnl_list`, neutral metrics, `mc_verdict` "N/A (no trades)" / "N/A (error)", `mc_score: -999`, `wfa_*: "N/A"`, `vs_<bench>_benchmark`) plus `status` = `"no_trades"` or `"error"`. Use `is_stub` / `split_results` to tell them apart.
+- Stubs are never ranked, never written to `overall_portfolio_summary.csv`, analyzer CSVs or trade CSVs, and are excluded from correlation, regime heatmaps, verdict blocks, `llm_verdict.json` and ML export.
+- `generate_per_portfolio_summary` ends with `Not shown: N with 0 trades, M errored`, listing the strategy names (errors with their message).
+- `generate_sensitivity_report` receives stubs and counts them as **not profitable**, so "profitable in X% of variants" includes zero-trade and crashed variants (labelled `[0 trades]` / `[ERROR]`).
+- Tests: `tests/test_main_results_accounting.py`.
+
 ## Common Pitfalls
 - `get_bars_for_period('14d', TIMEFRAME, MULTIPLIER)` — always use this for indicator periods, not raw integers, so strategies work across timeframes
 - Stop-loss config is a dict `{"type": "none"}` or `{"type": "percentage", "value": 0.05}` — not a float

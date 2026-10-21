@@ -18,6 +18,7 @@ from helpers.sensitivity import build_param_grid, is_sweep_enabled, label_for_pa
 from helpers.correlation import run_correlation_analysis, DEFAULT_THRESHOLD
 from helpers.monte_carlo import run_monte_carlo_simulation, analyze_mc_results
 from helpers.mc_scoring import analyze_mc_results_v2
+from helpers.result_status import make_stub_result, split_results, STATUS_NO_TRADES, STATUS_ERROR
 from tqdm import tqdm
 from multiprocessing import Pool, cpu_count
 import orjson
@@ -309,9 +310,16 @@ def run_single_simulation(args):
             intrabar_data=intrabar_data_global,
         )
         
-        if result is None: return None
-        
-        if result and result.get('trade_pnl_list'):
+        # Zero trades: run_portfolio_simulation returns None. Return a stub so the
+        # strategy is still accounted for (#432) instead of silently vanishing.
+        if not result or not result.get('trade_pnl_list'):
+            return make_stub_result(
+                strat_name, portfolio_name, STATUS_NO_TRADES,
+                initial_capital=CONFIG["initial_capital"],
+                benchmark_returns=benchmark_returns_global,
+            )
+
+        if result:
             result['Strategy'] = strat_name
             result['Portfolio'] = portfolio_name
             
@@ -453,10 +461,19 @@ def run_single_simulation(args):
 
             return result
             
-    except Exception:
+    except Exception as exc:
         import traceback
         tqdm.write(f"\n--- FATAL ERROR IN WORKER ---\nStrategy: {name}\nPortfolio: {portfolio_name}\nTraceback:\n{traceback.format_exc()}\n---------------------------\n")
-        return None
+        try:
+            _stub_name = _build_strat_name(name, stop_config)
+        except Exception:
+            _stub_name = name
+        return make_stub_result(
+            _stub_name, portfolio_name, STATUS_ERROR,
+            initial_capital=CONFIG.get("initial_capital"),
+            benchmark_returns=benchmark_returns_global,
+            error=f"{type(exc).__name__}: {exc}",
+        )
 
 
 def _pool_size(n_tasks: int, max_workers=None) -> int:
@@ -1151,6 +1168,14 @@ def main():
     if not all_portfolio_results:
         logger.warning("No simulation tasks were generated or completed successfully.")
         return
+
+    # Stubs (0-trade / errored runs, #432) are accounted for in the per-portfolio
+    # "Not shown" block and the sensitivity report; every other consumer sees
+    # only real results.
+    _real_results, _stub_results = split_results(all_portfolio_results)
+    if _stub_results:
+        logger.warning(f"{len(_stub_results)} of {len(all_portfolio_results)} simulations produced no result "
+                       f"(0 trades or errored); see the 'Not shown' block per portfolio.")
         
     results_by_portfolio = {}
     for res in all_portfolio_results:
@@ -1158,7 +1183,8 @@ def main():
         if p_name not in results_by_portfolio: results_by_portfolio[p_name] = []
         results_by_portfolio[p_name].append(res)
     
-    for p_name, p_results in results_by_portfolio.items():
+    for p_name, p_all_results in results_by_portfolio.items():
+        p_results, _ = split_results(p_all_results)
         # --- Strategy Correlation Analysis (run first so matrix is available for summary) ---
         portfolio_name_safe = p_name.replace(" ", "_")
         corr_csv_path = os.path.join(
@@ -1184,7 +1210,7 @@ def main():
         except Exception as _corr_err:
             logger.warning(f"  Correlation analysis skipped for '{p_name}': {_corr_err}")
 
-        generate_per_portfolio_summary(p_results, p_name, benchmark_returns, run_folder_name, corr_matrix=corr_matrix)
+        generate_per_portfolio_summary(p_all_results, p_name, benchmark_returns, run_folder_name, corr_matrix=corr_matrix)
 
         from helpers.regime import print_regime_heatmap as _print_heatmap
         for _r in p_results:
@@ -1192,18 +1218,18 @@ def main():
                 _print_heatmap(_r["regime_heatmap"], _r.get("Strategy", "Unknown"))
 
     duration_seconds = time.monotonic() - start_time
-    generate_portfolio_summary_report(all_portfolio_results, benchmark_returns, duration_seconds, run_folder_name)
+    generate_portfolio_summary_report(_real_results, benchmark_returns, duration_seconds, run_folder_name)
 
     from helpers.verdict_format import print_strategy_verdicts as _print_verdicts
-    _print_verdicts(all_portfolio_results, benchmark_returns)
+    _print_verdicts(_real_results, benchmark_returns)
 
-    generate_llm_verdict(all_portfolio_results, benchmark_returns, run_folder_name, benchmark_dfs=benchmark_dfs)
+    generate_llm_verdict(_real_results, benchmark_returns, run_folder_name, benchmark_dfs=benchmark_dfs)
     generate_sensitivity_report(all_portfolio_results, run_folder_name)
 
     if CONFIG.get("export_ml_features", False):
         from helpers.ml_export import export_trade_features as _ml_export
         _ml_path = os.path.join("output", "runs", run_folder_name, "ml_features.parquet")
-        _n_rows = _ml_export(all_portfolio_results, _ml_path)
+        _n_rows = _ml_export(_real_results, _ml_path)
         if _n_rows > 0:
             logger.info(f"  ML feature export: {_n_rows} trades -> {_ml_path}")
 
