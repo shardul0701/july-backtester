@@ -133,6 +133,7 @@ Both failures are **silent**: `gh` exits 0 and prints a URL. Nothing tells you t
 "sensitivity_sweep_min_val": 2   # floor for generated values (prevents SMA period = 0)
 "rolling_sharpe_window": 126     # rolling Sharpe window in trading days; 0 or None = disable
 "htb_rate_annual": 0.02          # annual hard-to-borrow rate debited daily on short positions
+"short_margin_requirement": 0.5  # equity short collateral as fraction of notional, reserved from buying power (#430); 0.0 = legacy unbounded shorts
 "mc_sampling": "iid"             # "iid" = independent; "block" = block-bootstrap; "auto" = block for concentrated_futures profile else iid
 "mc_block_size": None            # block size for block-bootstrap; None = auto floor(sqrt(N))
 "smoothness_profile": "auto"     # smoothness-verdict thresholds: "auto"|"equity"|"concentrated_futures"
@@ -648,6 +649,7 @@ A short, wide banner figure (`figsize=(10, 3), dpi=150`) that shows the full dra
 | `-2` | Enter short |
 
 - **Borrow cost**: `htb_rate_annual` (config, default `0.02`) converted to a daily compound rate `(1 + annual)^(1/252) - 1` and debited from cash each day a short is held. Set to `0.0` to disable.
+- **Short collateral / buying power (#430)**: each open equity short reserves `notional * short_margin_requirement` (default `0.5`) in `reserved_short_collateral`, stored as `spos['collateral']` and released on every cover path (strategy/stop/PIT cover loop and `_close_short_now`, which covers the intrabar-trailing and fill-bar stop paths). Any new equity entry, long or short, sees only `cash - reserved_short_collateral`; short size is `min(equity * allocation, buying_power / requirement)`, so 0.5 at allocation 0.10 caps the short book near 2x gross. It is a constraint, not a cash debit: `total_equity` stays `cash + MTM`. Futures shorts keep using `reserved_margin`. `0.0` restores the legacy unbounded behaviour. Tests: `tests/test_short_collateral.py`.
 - **Three new blocks in the daily loop** (all additive — no long-path code changed):
   1. **Borrow cost debit**: iterates `short_positions`, subtracts `notional × htb_rate_daily` from cash and accumulates `spos['total_borrow_cost']`.
   2. **Short cover**: on signal `< 0` for a held short, fills at Open/Close + slippage, deducts commission both sides, nets `total_borrow_cost` out of profit, logs to `trade_log`.

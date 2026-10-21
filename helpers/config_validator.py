@@ -103,6 +103,7 @@ KNOWN_KEYS: set[str] = {
     "rolling_sharpe_window",
     # SECTION 17: Short Selling
     "htb_rate_annual",
+    "short_margin_requirement",
     # SECTION 18: MC Sampling
     "mc_sampling",
     "mc_block_size",
