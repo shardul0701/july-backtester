@@ -228,8 +228,10 @@ def _risk_parity(equity: float, price: float, symbol_data: pd.DataFrame, config:
     legacy ``stop_distance_pct``; points win when both are given and are
     converted here against ``price``.
 
-    The engine still feeds this method ``stop_distance_pct``, NOT points, and
-    #384 deliberately did not switch it. ``portfolio_simulations.py`` builds
+    The engine's LONG path still feeds this method ``stop_distance_pct``, NOT
+    points, and #384 deliberately did not switch it; both SHORT legs feed it
+    ``stop_distance_points`` (the realised stop, since shorts resolve their
+    stop before sizing -- #386). On the long path ``portfolio_simulations.py`` builds
     that fraction with a different denominator per stop type -- native for
     ``percentage``, ``Close`` at the signal bar for the ATR family,
     ``raw_entry_price`` for ``points`` -- while this function then multiplies

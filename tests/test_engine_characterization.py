@@ -485,6 +485,28 @@ def _scenario(name):
                                  "overrides": {}}},
                 {"type": "percentage", "value": 0.05}, {})
 
+    if name == "kelly_short_with_history":
+        # #386, kelly. Every other short scenario completes no trades before
+        # its short entry, and kelly needs >= 10 completed trades before it
+        # reads the record -- so the fixture could not see that the short legs
+        # never SUPPLIED win_rate/avg_win/avg_loss. HHH completes 12 round
+        # trips (7 wins of +3%, 5 losses of -2%), then SSS shorts. Before the
+        # fix SSS sized at the fixed fallback; after it, off the record.
+        # (Adversarial QA on #392: reverting the kelly commit left this file
+        # green.)
+        px, pairs = [], {}
+        for i in range(12):
+            up = (i % 5) not in (1, 3)
+            pairs[3 * i], pairs[3 * i + 1] = 1, -1
+            px += [100.0, 103.0 if up else 98.0, 100.0]
+        px += [100.0] * 4
+        hhh = _df(px)
+        sss = _df([100.0] * len(px))
+        return ({"HHH": hhh, "SSS": sss},
+                {"HHH": _sig(hhh, pairs), "SSS": _sig(sss, {37: -2, 39: -1})},
+                {"position_sizing_method": "kelly", "kelly_fraction": 0.25},
+                {"type": "none"}, {})
+
     raise ValueError(name)
 
 
@@ -500,7 +522,7 @@ SCENARIOS = [
     # #386 -- frozen BEFORE the equity-short change, which the fixture could not
     # otherwise detect at all. See the audit note in the coverage section.
     "equity_short_non_fixed_method", "futures_short_non_fixed_method",
-    "size_mults_both_legs",
+    "size_mults_both_legs", "kelly_short_with_history",
 ]
 
 

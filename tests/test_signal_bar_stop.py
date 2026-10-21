@@ -584,7 +584,11 @@ class TestShortSideHonoursTheSizingMethod:
 
     @pytest.mark.parametrize("instrument", ["equity", "futures"])
     @pytest.mark.parametrize(
-        "method", ["fixed", "vol_parity", "risk_parity", "fixed_contracts"])
+        "method", ["fixed", "vol_parity", "risk_parity", "fixed_contracts",
+                   # Missing from the first version, so halving the equity
+                   # short's risk_pct_capped size left the whole suite green
+                   # (adversarial QA on #392).
+                   "risk_pct_capped"])
     def test_both_legs_agree_on_share_count(self, method, instrument):
         """The acceptance criterion: same method, same count, modulo the
         slippage sign that separates a buy fill from a sell fill.
@@ -667,6 +671,75 @@ class TestShortSideHonoursTheSizingMethod:
         fallback = self._book("fixed", instrument=instrument)["LNG"]
         assert lng < fallback * 0.95, (
             f"long sized {lng} vs fixed {fallback}: kelly stats never applied")
+
+    # One symbol, one direction per run, zero costs: the cleanest long-vs-short
+    # comparison, used for the size_mults-order and heat-gate cases below.
+    @staticmethod
+    def _one_leg(sym, sig_val, method, stop, cfg=None, mult=None, atr=1.0):
+        from unittest.mock import patch
+        import helpers.portfolio_simulations as ps
+        idx = pd.bdate_range("2024-01-02", periods=6)
+        df = pd.DataFrame({"Open": 100.0, "High": 101.0, "Low": 99.0,
+                           "Close": 100.0, "Volume": 1_000_000}, index=idx)
+        df.iloc[0, df.columns.get_loc("High")] = 110.0
+        df.iloc[0, df.columns.get_loc("Low")] = 90.0
+        df["ATR_14"], df["ATR_14_pct"], df["RSI_14"] = atr, atr / 100, 50.0
+        df["SMA_200"] = df["Close"]
+        sig = pd.Series(0, index=idx); sig.iloc[0] = sig_val; sig.iloc[4] = -1
+        base = {"position_sizing_method": method, "target_risk_per_trade": 0.004,
+                "risk_pct_per_trade": 0.01, "max_contracts_cap": 20,
+                "fixed_contracts_per_trade": 3, "max_portfolio_heat": 1.0,
+                "max_pct_adv": 0.0, "slippage_pct": 0.0,
+                "commission_per_share": 0.0, "volume_impact_coeff": 0.0,
+                "execution_time": "open",
+                "instruments": {"default_asset_class": "equity",
+                                "futures_initial_margin_pct": 0.10,
+                                "futures_commission_per_contract": 0.0,
+                                "futures_slippage_ticks": 0.0, "overrides": {}}}
+        base.update(cfg or {})
+        mults = ({sym: pd.Series(mult, index=idx, dtype=float)}
+                 if mult is not None else None)
+        with patch.dict(ps.CONFIG, base):
+            res = ps.run_portfolio_simulation(
+                {sym: df}, {sym: sig}, 100_000.0, 0.10, None, None, None,
+                stop, size_mults=mults)
+        for t in (res or {}).get("trade_log", []):
+            return float(t["Shares"]), t.get("PosSizeMult")
+        return None, None
+
+    @pytest.mark.parametrize("atr,mult", [
+        (205.0, 0.6),   # fractional contracts: floor(floor(x)*m) < floor(x*m)
+        (0.2, 0.5),     # free-margin clamp binds at mult 1.0 but not at 0.5
+    ])
+    def test_futures_size_mults_apply_where_the_long_applies_them(self, atr, mult):
+        """The futures short first applied size_mults AFTER the margin clamp
+        and round_units; the long applies it to the raw sized answer. Measured
+        by adversarial QA on #392: LONG 2 / SHORT 1 and LONG 2000 / SHORT 1000
+        contracts on these two inputs."""
+        none = {"type": "none"}
+        L, _ = self._one_leg("MESM6", 1, "vol_parity", none, mult=mult, atr=atr)
+        S, s_mult = self._one_leg("MESM6", -2, "vol_parity", none, mult=mult, atr=atr)
+        assert L is not None and S == L, (L, S)
+        assert s_mult == mult   # and the short row records the multiplier
+
+    @pytest.mark.parametrize("sym,method,heat", [
+        # equity short used the target_risk proxy where the long used the
+        # real 5% stop: LONG rejected, SHORT admitted 80 shares
+        ("LNG", "risk_parity", 0.003),
+        ("LNG", "risk_pct_capped", 0.003),
+        # futures short used the real stop where the long used the proxy:
+        # LONG 200, SHORT rejected
+        ("MESM6", "fixed", 0.005),
+        ("MESM6", "kelly", 0.005),
+    ])
+    def test_heat_gate_admits_the_same_position_either_way(self, sym, method, heat):
+        pct5 = {"type": "percentage", "value": 0.05}
+        cfg = {"max_portfolio_heat": heat}
+        L, _ = self._one_leg(sym, 1, method, pct5, cfg)
+        S, _ = self._one_leg(sym, -2, method, pct5, cfg)
+        assert (L is None) == (S is None), (method, heat, L, S)
+        if L is not None:
+            assert S == pytest.approx(L, rel=0.01)
 
     def test_fixed_contracts_no_longer_diverges_33x(self):
         """The widest of the five, and the one the banner originally excluded

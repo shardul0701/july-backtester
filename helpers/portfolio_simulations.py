@@ -178,6 +178,9 @@ def _kelly_stats(trade_log):
     for all three sizing call sites: the short legs used to supply none of these
     keys, so past ten trades a long sized off the strategy's record while a
     short on the same bar stayed pinned at the fallback (#386, @shardul0701).
+
+    Known gap, tracked as #466: under execution_time="open" the log already
+    holds trades that stopped out later in the bar being filled at its open.
     """
     if len(trade_log) < 10:
         return {}
@@ -440,7 +443,8 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
             'EntryDate': spos['entry_date'].isoformat(), 'EntryPrice': spos['entry_price'],
             'ExitDate': exit_date.isoformat(), 'ExitPrice': cover_slip,
             'Profit': net_pnl, 'ProfitPct': net_pnl / spos['notional'] if spos['notional'] > 0 else 0,
-            'Shares': spos['shares'], 'is_win': 1 if net_pnl > 0 else 0,
+            'Shares': spos['shares'], 'PosSizeMult': spos.get('size_mult', 1.0),
+            'is_win': 1 if net_pnl > 0 else 0,
             'HoldDuration': _hold_duration_days(spos['entry_date'], exit_date),
             'MAE_pct': short_mae, 'MFE_pct': short_mfe,
             'ExitReason': cover_reason,
@@ -856,7 +860,8 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                 'EntryDate': spos['entry_date'].isoformat(), 'EntryPrice': spos['entry_price'],
                 'ExitDate': date.isoformat(), 'ExitPrice': cover_slip,
                 'Profit': net_pnl, 'ProfitPct': net_pnl / spos['notional'] if spos['notional'] > 0 else 0,
-                'Shares': spos['shares'], 'is_win': 1 if net_pnl > 0 else 0,
+                'Shares': spos['shares'], 'PosSizeMult': spos.get('size_mult', 1.0),
+                'is_win': 1 if net_pnl > 0 else 0,
                 'HoldDuration': _hold_duration_days(spos['entry_date'], date),
                 'MAE_pct': short_mae, 'MFE_pct': short_mfe,
                 'ExitReason': cover_reason,
@@ -1012,6 +1017,21 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                 # trades -- dispatching a method is not the same as feeding it.
                 if _s_eq_sizing_method == "kelly":
                     _s_sizing_kwargs_base.update(_kelly_stats(trade_log))
+                # Portfolio-heat risk fraction, by the LONG path's rule so the
+                # gate admits the same position in either direction: the real
+                # stop fraction for the two methods whose long sizing carries
+                # stop_distance_pct (risk_parity with a resolvable stop,
+                # risk_pct_capped), the target_risk_per_trade proxy otherwise.
+                # Before this the equity short always used the proxy and the
+                # futures short always used the real stop -- opposite
+                # asymmetries, both measured by adversarial QA on #392
+                # (risk_parity 5% stop, 0.3% heat cap: LONG rejected, SHORT
+                # admitted 80 shares; futures fixed: LONG 200, SHORT rejected).
+                _s_heat_frac = (
+                    _s_ir / ep
+                    if (_s_eq_sizing_method in ("risk_parity", "risk_pct_capped")
+                        and _s_ir and _s_ir > 0 and ep and ep > 0)
+                    else CONFIG.get("target_risk_per_trade", 0.02))
                 # NOTE: no `stop_distance_pct` here. It would be DEAD --
                 # `_risk_parity` prefers `stop_distance_points` when both are
                 # given (#384), and the condition under which a fraction could
@@ -1021,7 +1041,8 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                 # how I found out. Kept as a note because the long path DOES
                 # need its fraction, and the asymmetry looks like an omission.
                 # Per-signal size multiplier, resolved exactly as the long path
-                # does at :1241 -- same key, same NaN/<=0 guard.
+                # does (search `_size_mult = 1.0` in the long entry block) -- same
+                # key, same NaN/<=0 guard.
                 _s_size_mult = 1.0
                 if size_mults is not None and symbol in size_mults:
                     _sm_s = size_mults[symbol].get(sig_date, np.nan)
@@ -1043,8 +1064,8 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     # by the end of that same PR, because #384 is what made
                     # the long path unconditional. So the long leg called
                     # this for six and the short leg for two, and
-                    # vol_parity / risk_parity / kelly fell to
-                    # fixed-fractional-over-margin below.
+                    # vol_parity / risk_parity / kelly fell to a
+                    # fixed-fractional-over-margin branch (now removed).
                     #
                     # The short leg was INERT, not merely different --
                     # sweeping the axis each method keys off (MES):
@@ -1099,6 +1120,14 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         **{k: v for k, v in _s_sizing_kwargs_base.items()
                            if k in ("win_rate", "avg_win", "avg_loss")},
                     )
+                    # size_mults on the FUTURES short leg too (#386), at the
+                    # same point the long leg applies it: on the raw sized
+                    # answer, BEFORE unit conversion, the free-margin clamp and
+                    # the single round_units. The first version multiplied after
+                    # clamping and rounding, so floor(floor(x)*m) < floor(x*m)
+                    # and min(x, cap)*m < min(x*m, cap): vol_parity at mult 0.6
+                    # sized LONG 2 / SHORT 1 contracts (adversarial QA on #392).
+                    shares = shares * _s_size_mult
 
                     # Unit-vs-dollar conversion, mirroring the long path's gate.
                     # risk_pct_capped and fixed_contracts answer in CONTRACTS and
@@ -1126,29 +1155,15 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                             continue
                         shares = min(shares, _s_max_by_margin)
                     shares = _inst.round_units(inst_se, shares)
-                    # size_mults on the FUTURES short leg too (#386). #384 pinned
-                    # its absence here as-is rather than fixing it, on the
-                    # grounds that fixing it there would be this ticket arriving
-                    # inside a no-op one. This is that ticket. Applied before
-                    # round_units so a fractional multiplier lands on a whole
-                    # contract count rather than after it.
-                    if _s_size_mult != 1.0:
-                        shares = _inst.round_units(inst_se, shares * _s_size_mult)
                     if shares < 1:
                         continue
                     # Portfolio-heat gate (#324 QA / issue #331). The equity short
                     # branch below gained this in #312; the futures branch did not,
                     # so a futures short was admitted regardless of book heat AND
                     # registered no 'risk', contributing 0 to every later entry's
-                    # gate. Prefer the real per-contract risk (_s_ir is the stop
-                    # distance in points) over the target_risk_per_trade proxy the
-                    # equity path must use, since futures set their stop before sizing.
-                    _fs_stop_dist_pts = _s_ir if (_s_ir and _s_ir > 0) else None
-                    if _fs_stop_dist_pts is not None:
-                        _fs_new_risk = _fs_stop_dist_pts * inst_se.point_value * shares
-                    else:
-                        _fs_new_risk = (_inst.notional(inst_se, shares, _s_entry_fill)
-                                        * CONFIG.get("target_risk_per_trade", 0.02))
+                    # gate. Risk fraction: _s_heat_frac, the long path's rule.
+                    _fs_new_risk = (_inst.notional(inst_se, shares, _s_entry_fill)
+                                    * _s_heat_frac)
                     _fs_max_heat = CONFIG.get("max_portfolio_heat", 1.0)
                     if not check_portfolio_heat({**positions, **short_positions},
                                                 _fs_new_risk, total_equity, _fs_max_heat):
@@ -1168,6 +1183,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         'trail_anchor': _s_trail_anchor,
                         'trail_armed': False, 'initial_risk': _s_ir, 'features': _s_features,
                         'risk': _fs_new_risk,  # registered for the portfolio-heat pot (#324 QA)
+                        'size_mult': _s_size_mult,
                     }
                 else:
                     # Equity cash_full short. Mirror the long entry's four cost
@@ -1242,17 +1258,21 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     # provide. Kept as a clamp rather than folded into the
                     # allocation, because the sizing methods do not all target a
                     # notional and several legitimately exceed cash before it.
-                    if shares * _s_entry_fill > cash:
-                        shares = cash / _s_entry_fill if _s_entry_fill > 0 else 0.0
+                    # Commission included, as the long path's affordability
+                    # step does (`cash / (price + commission_per_share)`), so
+                    # the two legs clamp to the same count when cash binds.
+                    _s_comm_ps = CONFIG.get('commission_per_share', 0.0) or 0.0
+                    if shares * (_s_entry_fill + _s_comm_ps) > cash:
+                        shares = (cash / (_s_entry_fill + _s_comm_ps)
+                                  if _s_entry_fill > 0 else 0.0)
                     if shares <= 0:
                         continue
 
-                    # Portfolio heat gate (mirror of the long path). Fall back to
-                    # target_risk_per_trade for the stop-distance proxy like the
-                    # long fixed-sizing path. NOTE: like the long side, this uses
-                    # the pre-ADV-cap `shares` — the pre-clamp over-statement is
-                    # tracked for both sites as issue #317.
-                    _s_stop_dist = CONFIG.get("target_risk_per_trade", 0.02)
+                    # Portfolio heat gate (mirror of the long path), with the
+                    # long path's risk fraction (_s_heat_frac above). NOTE: like
+                    # the long side, this uses the pre-ADV-cap `shares` — the
+                    # pre-clamp over-statement is tracked for both sites as #317.
+                    _s_stop_dist = _s_heat_frac
                     _s_new_risk = _inst.notional(inst_se, shares, _s_entry_fill) * _s_stop_dist
                     _s_max_heat = CONFIG.get("max_portfolio_heat", 1.0)
                     # Gate against BOTH open longs and open shorts, and register
@@ -1301,6 +1321,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         'trail_armed': False, 'initial_risk': _s_ir, 'features': _s_features,
                         'entry_impact_bps': _s_entry_impact_bps,
                         'risk': _s_new_risk,  # registered for the portfolio-heat pot (#312 QA)
+                        'size_mult': _s_size_mult,
                     }
 
                 # --- ENTRY-BAR EVALUATION (opt-in, mirror of the long entry-bar check) ---
@@ -2135,7 +2156,8 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                 'EntryDate': spos['entry_date'].isoformat(), 'EntryPrice': spos['entry_price'],
                 'ExitDate': last_date.isoformat(), 'ExitPrice': cover_slip,
                 'Profit': net_pnl, 'ProfitPct': net_pnl / spos['notional'] if spos['notional'] > 0 else 0,
-                'Shares': spos['shares'], 'is_win': 1 if net_pnl > 0 else 0,
+                'Shares': spos['shares'], 'PosSizeMult': spos.get('size_mult', 1.0),
+                'is_win': 1 if net_pnl > 0 else 0,
                 'HoldDuration': _hold_duration_days(spos['entry_date'], last_date),
                 'MAE_pct': _s_mae, 'MFE_pct': _s_mfe, 'ExitReason': "End of Backtest",
                 'InitialRisk': _s_ir if (_s_ir and _s_ir > 0) else 0.0, 'RMultiple': _s_rm,

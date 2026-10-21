@@ -355,16 +355,20 @@ class TestSizeMultStaysAtTheCallSite:
         contracts, so 3 x 0.5 = 1.5 lands at **1**, not 1.5. Asserting
         `full * 0.5` here fails on a correct fix — which it did on the first
         draft of this flip. The ratio property belongs on the equity leg; what
-        is assertable here is that the multiplier is applied at all, and that
-        it is applied before the rounding rather than after.
+        is assertable here is that the multiplier is applied at all.
+
+        It does NOT pin where in the pipeline it is applied: from an integer 3,
+        multiply-then-round and round-then-multiply-then-round both give 1. The
+        ordering is pinned in test_signal_bar_stop.py
+        (`test_futures_size_mults_apply_where_the_long_applies_them`) on
+        fractional inputs, where the two orders differ.
         """
         full = self._shares("MESM6", "fixed_contracts", -2, 1.0)
         half = self._shares("MESM6", "fixed_contracts", -2, 0.5)
         assert full == pytest.approx(3.0)
         assert half == pytest.approx(1.0), (
             "expected floor(3 x 0.5) = 1; got %s. 3.0 means the futures short "
-            "leg still drops size_mults, 1.5 means it is applied after "
-            "round_units instead of before" % half)
+            "leg still drops size_mults" % half)
 
 
 class TestUnitCountMethodsSkipConversion:
