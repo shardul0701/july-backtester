@@ -1199,11 +1199,15 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         shares = (_inst.round_units(
                             inst_se, (cash - reserved_margin) / _s_per)
                             if _s_per > 0 else 0.0)
-                        if shares < 1:
-                            continue
                         _s_margin = _inst.margin_required(inst_se, shares, _s_entry_fill)
                         commission = _inst.commission(inst_se, shares)
-                        if _s_margin + commission > cash - reserved_margin:
+                        # Float overshoot of floor(free/per): one fewer, as the
+                        # long does, rather than skip.
+                        if _s_margin + commission > cash - reserved_margin and shares >= 1:
+                            shares -= 1
+                            _s_margin = _inst.margin_required(inst_se, shares, _s_entry_fill)
+                            commission = _inst.commission(inst_se, shares)
+                        if shares < 1 or _s_margin + commission > cash - reserved_margin:
                             continue
                     _fs_new_risk = _fs_risk(shares)
                     reserved_margin += _s_margin
@@ -1797,6 +1801,13 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         shares = _inst.round_units(inst, _free / _per) if _per > 0 else 0.0
                         commission_cost = _inst.commission(inst, shares)
                         _margin = _inst.margin_required(inst, shares, entry_price)
+                        # floor(free/per) can land one unit over by float error
+                        # (~1e-9) when free is an exact multiple of per; take
+                        # one fewer rather than skip (QA round 4 on #392).
+                        if _margin + commission_cost > _free and shares >= 1:
+                            shares -= 1
+                            commission_cost = _inst.commission(inst, shares)
+                            _margin = _inst.margin_required(inst, shares, entry_price)
                     can_afford = shares >= 1 and (_margin + commission_cost) <= (cash - reserved_margin)
                 else:
                     # Equity cash_full: full notional + commission debited from cash.

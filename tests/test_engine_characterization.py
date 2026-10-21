@@ -485,6 +485,31 @@ def _scenario(name):
                                  "overrides": {}}},
                 {"type": "percentage", "value": 0.05}, {})
 
+    if name == "futures_margin_bound_commission":
+        # #386 QA round 3/4. A margin-bound futures entry with commission: the
+        # short SKIPPED it (clamp left no room for commission) and the long cut
+        # it further than needed (subtracted the OVERSIZED count's commission).
+        # Both now take floor(free / (margin + commission)). This moves LONG
+        # numbers, so it is frozen here -- the golden master had no scenario
+        # reaching that branch. Long then short, sequential: the long sees
+        # $100k free (1904 = floor(100000 / 52.5)), the short what the long's
+        # round-trip commission left (1723 = floor(90480 / 52.5)).
+        n = 10
+        df_l = _df([100.0] * n, atr=[0.2] * n)
+        df_s = _df([100.0] * n, atr=[0.2] * n)
+        return ({"MESM6": df_l, "MESZ6": df_s},
+                {"MESM6": _sig(df_l, {1: 1, 3: -1}),
+                 "MESZ6": _sig(df_s, {5: -2, 7: -1})},
+                {"position_sizing_method": "vol_parity",
+                 "target_risk_per_trade": 0.004, "max_portfolio_heat": 1.0,
+                 "max_pct_adv": 0.0,
+                 "instruments": {"default_asset_class": "equity",
+                                 "futures_initial_margin_pct": 0.10,
+                                 "futures_commission_per_contract": 2.50,
+                                 "futures_slippage_ticks": 0.0,
+                                 "overrides": {}}},
+                {"type": "none"}, {})
+
     if name == "kelly_short_with_history":
         # #386, kelly. Every other short scenario completes no trades before
         # its short entry, and kelly needs >= 10 completed trades before it
@@ -523,6 +548,7 @@ SCENARIOS = [
     # otherwise detect at all. See the audit note in the coverage section.
     "equity_short_non_fixed_method", "futures_short_non_fixed_method",
     "size_mults_both_legs", "kelly_short_with_history",
+    "futures_margin_bound_commission",
 ]
 
 

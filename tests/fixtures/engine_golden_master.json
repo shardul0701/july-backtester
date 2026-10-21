@@ -142,6 +142,74 @@
       }
     ]
   },
+  "futures_margin_bound_commission": {
+    "equity_curve": [
+      100000.0,
+      100000.0,
+      95240.0,
+      95240.0,
+      90480.0,
+      90480.0,
+      86172.5,
+      86172.5,
+      81865.0,
+      81865.0
+    ],
+    "equity_len": 10,
+    "scalars": {
+      "Trades": 2,
+      "avg_trade_duration": 2.0,
+      "calmar_ratio": -5.507022,
+      "initial_capital": 100000.0,
+      "max_drawdown": 0.18135,
+      "pnl_percent": -0.18135,
+      "profit_factor": 0.0,
+      "sharpe_ratio": -13.498867,
+      "win_rate": 0.0
+    },
+    "trade_log": [
+      {
+        "EntryDate": "2023-01-03T00:00:00",
+        "EntryPrice": 100.0,
+        "ExitDate": "2023-01-05T00:00:00",
+        "ExitPrice": 100.0,
+        "ExitReason": "Strategy Exit",
+        "HoldDuration": 2,
+        "InitialRisk": 1.0,
+        "MAE_pct": -0.01,
+        "MFE_pct": 0.01,
+        "PosSizeMult": 1.0,
+        "Profit": -9520.0,
+        "ProfitPct": -0.01,
+        "RMultiple": -1.0,
+        "Shares": 1904.0,
+        "Symbol": "MESM6",
+        "Trade": "Long 1",
+        "VolumeImpact_bps": 0.0,
+        "is_win": 0
+      },
+      {
+        "EntryDate": "2023-01-09T00:00:00",
+        "EntryPrice": 100.0,
+        "ExitDate": "2023-01-11T00:00:00",
+        "ExitPrice": 100.0,
+        "ExitReason": "Short Cover",
+        "HoldDuration": 2,
+        "InitialRisk": 0.0,
+        "MAE_pct": 0.01,
+        "MFE_pct": 0.01,
+        "PosSizeMult": 1.0,
+        "Profit": -8615.0,
+        "ProfitPct": -0.01,
+        "RMultiple": null,
+        "Shares": 1723.0,
+        "Symbol": "MESZ6",
+        "Trade": "Short 2",
+        "VolumeImpact_bps": 0.0,
+        "is_win": 0
+      }
+    ]
+  },
   "futures_short_non_fixed_method": {
     "equity_curve": [
       100000.0,
