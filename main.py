@@ -192,36 +192,108 @@ def _build_intrabar_data(portfolio_data, config):
 
 # --------------------------------------------------------------------
 
-def _build_strat_name(name, stop_config):
-    """Build the display name for a strategy given its stop-loss config.
+def _stop_label(stop_config):
+    """Return the stop suffix for a stop-loss config (``""`` for no stop).
 
-    Percentage and ATR stops get a descriptive suffix; every other stop
-    type (``none``, ``points``, ``signal_bar``, ``trailing_atr`` …) — and a
-    config with no ``type`` key at all — leaves the base name unchanged,
-    matching the engine, which resolves the type via ``.get("type", "none")``.
+    Every non-``none`` stop type gets its own descriptive suffix so two
+    different ``stop_loss_configs`` never share a strategy name (#434) -- the
+    name is the key for trade CSVs, correlation columns and display filters:
+
+    - ``percentage``   -> ``w/ 5% SL``
+    - ``atr``          -> ``w/ 3.0x ATR(14) SL``
+    - ``points``       -> ``w/ 10pt SL``
+    - ``signal_bar``   -> ``w/ SigBar(b0,buf0.0) SL``
+    - ``trailing_atr`` -> ``w/ TrailATR(1.0x,T0.0,tr1.0) SL``
+    - ``none`` / no ``type`` key / unknown type -> ``""`` (bare name), matching
+      the engine, which resolves the type via ``.get("type", "none")``.
 
     This helper must never raise on a config the *engine* would happily run,
     otherwise the label crashes the worker before the simulation starts and
     the whole run completes with zero results (issue #309). It therefore
     mirrors the engine's own defaults for every key it reads:
 
-    - ATR ``period`` defaults to 14 — the engine always uses the ``ATR_14``
+    - ATR ``period`` defaults to 14 -- the engine always uses the ``ATR_14``
       column; the documented shape ``{"type": "atr", "multiplier": 2.0}``
       carries no ``period`` (only the CLI shorthand ``atr:14:3.0`` injects
       one). Reading ``stop_config['period']`` unconditionally was the #309
-      crash.
-    - ATR ``multiplier`` defaults to 3.0 (``portfolio_simulations`` uses the
-      same default at its sizing/stop-level sites).
-    - percentage ``value`` defaults to 0.05 (ditto).
+      crash. ATR ``multiplier`` defaults to 3.0.
+    - percentage ``value`` defaults to 0.05; points ``value`` to 0.0.
+    - signal_bar ``bars_back`` 0, ``buffer`` 0.0.
+    - trailing_atr ``stop_mult`` 1.0, ``t1_mult`` 0.0, ``trail_mult`` 1.0.
+
+    Values are interpolated with plain ``{}`` so an unusual value type cannot
+    raise either.
     """
     stop_type = stop_config.get('type')
     if stop_type == 'percentage':
-        return f"{name} w/ {stop_config.get('value', 0.05):.0%} SL"
+        value = stop_config.get('value', 0.05)
+        try:
+            return f"w/ {value:.0%} SL"
+        except (TypeError, ValueError):
+            return f"w/ {value} SL"
     if stop_type == 'atr':
         multiplier = stop_config.get('multiplier', 3.0)
         period = stop_config.get('period', 14)
-        return f"{name} w/ {multiplier}x ATR({period}) SL"
-    return name
+        return f"w/ {multiplier}x ATR({period}) SL"
+    if stop_type == 'points':
+        return f"w/ {stop_config.get('value', 0.0)}pt SL"
+    if stop_type == 'signal_bar':
+        return (f"w/ SigBar(b{stop_config.get('bars_back', 0)},"
+                f"buf{stop_config.get('buffer', 0.0)}) SL")
+    if stop_type == 'trailing_atr':
+        return (f"w/ TrailATR({stop_config.get('stop_mult', 1.0)}x,"
+                f"T{stop_config.get('t1_mult', 0.0)},"
+                f"tr{stop_config.get('trail_mult', 1.0)}) SL")
+    return ""
+
+
+def _build_strat_name(name, stop_config):
+    """Build the display name for a strategy given its stop-loss config:
+    ``name`` plus the :func:`_stop_label` suffix (bare name for ``none``).
+    Never raises -- see :func:`_stop_label`.
+    """
+    label = _stop_label(stop_config)
+    return f"{name} {label}" if label else name
+
+
+def _assign_unique_names(entries):
+    """Return unique final names for ``(portfolio_name, name)`` pairs (#434).
+
+    The first occurrence of a ``(portfolio, name)`` keeps its name; repeats get
+    ``" #2"``, ``" #3"`` ... appended, so identical stop configs (or distinct
+    configs whose labels coincide) can never merge or overwrite each other in
+    trade CSVs, correlation columns or display filters. Order is preserved.
+    """
+    counts = {}
+    used = set()
+    out = []
+    for portfolio, name in entries:
+        n = counts.get((portfolio, name), 0) + 1
+        final = name if n == 1 else f"{name} #{n}"
+        while (portfolio, final) in used:   # a literal "X #2" already exists
+            n += 1
+            final = f"{name} #{n}"
+        counts[(portfolio, name)] = n
+        used.add((portfolio, final))
+        out.append(final)
+    return out
+
+def _task_naming(name, stop_config, naming=None):
+    """Final name + structured metadata for one task (#434).
+
+    ``naming`` is the optional dict the parent puts at the end of the task
+    tuple (``strat_name`` / ``base_strategy`` / ``param_label`` /
+    ``stop_label``). A legacy 9-element tuple has none, so the same fields
+    are derived from ``name`` and ``stop_config``. Never raises.
+    """
+    if naming:
+        return dict(naming)
+    return {
+        "strat_name": _build_strat_name(name, stop_config),
+        "base_strategy": name,
+        "param_label": "(base)",
+        "stop_label": _stop_label(stop_config),
+    }
 
 # --------------------------------------------------------------------
 
@@ -235,7 +307,10 @@ def run_single_simulation(args):
 
     # 1. Unpack the arguments. `portfolio_data` has been REMOVED from the tuple.
     portfolio_name, name, logic_func, dependencies, stop_config, \
-    strategy_params, wfa_split_date, spy_actual_start, spy_actual_end = args
+    strategy_params, wfa_split_date, spy_actual_start, spy_actual_end = args[:9]
+    # Optional 10th element (#434): final unique name + base/param/stop metadata
+    # computed once in the parent. Absent in legacy 9-element tuples.
+    _naming = args[9] if len(args) > 9 else None
 
     # Assign the global data to a local variable for clarity
     portfolio_data = portfolio_data_global
@@ -246,7 +321,8 @@ def run_single_simulation(args):
     tnx_df_local = comparison_dfs_global.get(dependency_map_global.get("tnx"))
 
     try:
-        strat_name = _build_strat_name(name, stop_config)
+        _nm = _task_naming(name, stop_config, _naming)
+        strat_name = _nm.pop("strat_name")
 
         base_signals_with_dfs = {}
         for symbol, df in portfolio_data.items():
@@ -317,11 +393,13 @@ def run_single_simulation(args):
                 strat_name, portfolio_name, STATUS_NO_TRADES,
                 initial_capital=CONFIG["initial_capital"],
                 benchmark_returns=benchmark_returns_global,
+                meta=_nm,
             )
 
         if result:
             result['Strategy'] = strat_name
             result['Portfolio'] = portfolio_name
+            result.update(_nm)
             
             if result.get('Trades', 0) > 0:
                 if result['Trades'] >= CONFIG.get("min_trades_for_mc", 10):
@@ -465,13 +543,16 @@ def run_single_simulation(args):
         import traceback
         tqdm.write(f"\n--- FATAL ERROR IN WORKER ---\nStrategy: {name}\nPortfolio: {portfolio_name}\nTraceback:\n{traceback.format_exc()}\n---------------------------\n")
         try:
-            _stub_name = _build_strat_name(name, stop_config)
+            _nm = _task_naming(name, stop_config, _naming)
+            _stub_name = _nm.pop("strat_name")
         except Exception:
             _stub_name = name
+            _nm = {"base_strategy": name, "param_label": "(base)", "stop_label": ""}
         return make_stub_result(
             _stub_name, portfolio_name, STATUS_ERROR,
             initial_capital=CONFIG.get("initial_capital"),
             benchmark_returns=benchmark_returns_global,
+            meta=_nm,
             error=f"{type(exc).__name__}: {exc}",
         )
 
@@ -1093,8 +1174,10 @@ def main():
 
             for variant_params in param_variants:
                 if len(param_variants) > 1:
-                    display_name = f"{strat_name} [{label_for_params(base_params, variant_params)}]"
+                    param_label = label_for_params(base_params, variant_params)
+                    display_name = f"{strat_name} [{param_label}]"
                 else:
+                    param_label = "(base)"
                     display_name = strat_name
 
                 for stop_config in CONFIG['stop_loss_configs']:
@@ -1105,8 +1188,18 @@ def main():
                         variant_params,
                         wfa_split_date,
                         _spy_actual_start, _spy_actual_end,
+                        # Final name is made unique below; small strings only.
+                        {"strat_name": _build_strat_name(display_name, stop_config),
+                         "base_strategy": strat_name,
+                         "param_label": param_label,
+                         "stop_label": _stop_label(stop_config)},
                     )
                     tasks_for_this_portfolio.append(task_args)
+
+        # Guarantee unique (portfolio, name) keys (#434): repeated names get " #2", " #3".
+        for _t, _final in zip(tasks_for_this_portfolio, _assign_unique_names(
+                (_t[0], _t[9]["strat_name"]) for _t in tasks_for_this_portfolio)):
+            _t[9]["strat_name"] = _final
 
         if not tasks_for_this_portfolio:
             logger.warning(f"No tasks generated for {portfolio_name}.")

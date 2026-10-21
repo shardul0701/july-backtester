@@ -87,8 +87,9 @@ class TestAtrStopNaming:
         assert _build_strat_name("S", {"type": "none"}) == "S"
 
     def test_unknown_stop_type_returns_name_unchanged(self):
-        # points / signal_bar / trailing_atr etc. are not specially labelled
-        assert _build_strat_name("S", {"type": "points", "value": 10}) == "S"
+        # points / signal_bar / trailing_atr now have their own suffix (#434);
+        # a genuinely unknown type is still left bare.
+        assert _build_strat_name("S", {"type": "mystery", "value": 10}) == "S"
 
     def test_missing_type_key_returns_name_unchanged(self):
         """A config with no 'type' is treated as 'none' (matches the engine's
