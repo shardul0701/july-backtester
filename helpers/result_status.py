@@ -36,7 +36,8 @@ def split_results(results: Iterable[Mapping]) -> tuple[list, list]:
 def make_stub_result(strategy: str, portfolio: str, status: str, *,
                      initial_capital: float | None = None,
                      benchmark_returns: Mapping[str, float] | None = None,
-                     error: str | None = None) -> dict:
+                     error: str | None = None,
+                     meta: Mapping | None = None) -> dict:
     """Build a neutral stub carrying the keys a real result carries."""
     stub = {
         "Strategy": strategy,
@@ -74,6 +75,9 @@ def make_stub_result(strategy: str, portfolio: str, status: str, *,
         stub[f"vs_{label.lower().replace(' ', '_')}_benchmark"] = 0.0 - bench
     if error is not None:
         stub["error"] = error
+    if meta:
+        # base_strategy / param_label / stop_label (#434), same as real results.
+        stub.update(meta)
     return stub
 
 
