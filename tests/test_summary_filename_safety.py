@@ -5,10 +5,11 @@ produced output CSVs whose names contained ``>`` (illegal on Windows). Once
 those files were committed, ``git checkout`` aborted on every Windows machine,
 because Git fails the entire checkout when the OS rejects one path.
 
-The fix routes the strategy-name-to-filename step (both sites in
-``helpers/summary.py``) through the shared ``sanitize_symbol_for_filename``.
-These tests pin that the composed helper leaves legal names unchanged and strips
-every Windows-illegal character from the rest.
+The fix routes every name-derived output path component -- strategy, portfolio
+and symbol in ``helpers/summary.py``, the portfolio in ``main.py``'s
+correlation CSV -- through the shared ``sanitize_symbol_for_filename``. These
+tests pin the helpers (legal names unchanged, illegal characters gone) and each
+call site that uses them.
 """
 import os
 from unittest.mock import patch
@@ -100,6 +101,32 @@ class TestCallSitesWriteLegalPaths:
         with patch.dict("config.CONFIG", {"upload_to_s3": False}):
             save_trades_to_csv(_result("EMA_PB-A3_ADX>20"), str(tmp_path), "run")
         assert os.listdir(tmp_path) == ["I_SPX_EMA_PB-A3_ADX_gt_20_trade_log.csv"]
+
+    def test_save_trades_to_csv_without_asset(self, tmp_path):
+        """The real pipeline never sets ``Asset``, so the symbol part falls back
+        to the sanitized portfolio name. Pins that default path."""
+        from helpers.summary import save_trades_to_csv
+        r = _result("EMA_PB-A3_ADX>20")
+        del r["Asset"]
+        with patch.dict("config.CONFIG", {"upload_to_s3": False}):
+            save_trades_to_csv(r, str(tmp_path), "run")
+        assert os.listdir(tmp_path) == ["Nasdaq__PIT_EMA_PB-A3_ADX_gt_20_trade_log.csv"]
+
+    def test_s3_key_is_legal(self, tmp_path):
+        from helpers.summary import save_trades_to_csv
+        r = _result("EMA_PB-A3_ADX>20")
+        del r["Asset"]
+        with patch.dict("config.CONFIG", {"upload_to_s3": True,
+                                          "s3_reports_bucket": "b"}), \
+                patch("helpers.summary.upload_file_to_s3") as up:
+            save_trades_to_csv(r, str(tmp_path), "run")
+        key = up.call_args[0][2]
+        assert key == "run/Nasdaq__PIT/trades/Nasdaq__PIT_EMA_PB-A3_ADX_gt_20_trade_log.csv"
+
+    def test_main_correlation_csv_path(self):
+        import main
+        path = main._correlation_csv_path("run", "Nasdaq: PIT")
+        assert os.path.basename(path) == "Nasdaq__PIT_strategy_correlation.csv"
 
     def test_generate_per_portfolio_summary_analyzer_csvs(self, tmp_path, monkeypatch):
         from helpers.summary import generate_per_portfolio_summary

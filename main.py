@@ -462,6 +462,14 @@ def _portfolio_data_mb(portfolio_data) -> float | None:
         return None
     return total / 1e6
 
+def _correlation_csv_path(run_folder_name, portfolio_name):
+    """Where a portfolio's strategy-correlation CSV is written (#403: the
+    portfolio name goes through the same sanitizer as the summary paths)."""
+    return os.path.join(
+        "output", "runs", run_folder_name,
+        f"{safe_path_component(portfolio_name)}_strategy_correlation.csv")
+
+
 def main():
     # --- ARGUMENT PARSING (full parser, applied before any CONFIG reads) ---
     from helpers.cli_config import build_parser, apply_overrides, print_help_config
@@ -1141,11 +1149,7 @@ def main():
     
     for p_name, p_results in results_by_portfolio.items():
         # --- Strategy Correlation Analysis (run first so matrix is available for summary) ---
-        portfolio_name_safe = safe_path_component(p_name)
-        corr_csv_path = os.path.join(
-            "output", "runs", run_folder_name,
-            f"{portfolio_name_safe}_strategy_correlation.csv"
-        )
+        corr_csv_path = _correlation_csv_path(run_folder_name, p_name)
         corr_matrix = None
         try:
             corr_matrix, high_pairs = run_correlation_analysis(p_results, corr_csv_path)

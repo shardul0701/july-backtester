@@ -260,3 +260,25 @@ class TestGenerateTearsheetPdfIncludesVerdict:
         # At least one captured page must be the Strategy Verdict page
         assert any("Strategy Verdict" in c for c in captured), \
             f"expected a Strategy Verdict page; captured titles: {captured}"
+
+
+class TestVerdictMatchesWhatTheWriterWrote:
+    """#403: report.py used to MIRROR the writer's sanitizer by hand. When the
+    writer learned ``>``/``<`` the mirror did not, so ``--all`` silently dropped
+    the verdict section for every renamed strategy. Round-trip through the real
+    writer instead of restating its rule."""
+
+    @pytest.mark.parametrize("strategy,portfolio", [
+        ("EMA_PB-A3_ADX>20", "Nasdaq: PIT"),
+        ("SMA Crossover (20/50)", "Nasdaq 100"),
+        ("EC-VIX-27: WR70", "S&P 500 PIT"),
+    ])
+    def test_round_trip(self, strategy, portfolio):
+        from helpers.summary import _safe_strategy_name, safe_path_component
+        stem, folder = _safe_strategy_name(strategy), safe_path_component(portfolio)
+        decoy = {"strategy": strategy, "portfolio": "Other", "verdict": "decoy"}
+        real = {"strategy": strategy, "portfolio": portfolio, "verdict": "real"}
+        # Decoy first: only an exact strategy+portfolio match picks `real`;
+        # the strategy-only fallback would return the decoy.
+        match = report_cli._match_strategy_verdict([decoy, real], stem, folder)
+        assert match is real, (stem, folder)

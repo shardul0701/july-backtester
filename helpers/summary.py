@@ -13,7 +13,7 @@ def _safe_strategy_name(strategy_name):
     """Strategy name made safe for use in an output filename.
 
     Applies the historical cosmetic transforms (drop spaces/parens) so existing
-    legal filenames are byte-for-byte unchanged, then runs the result through the
+    legal filenames are unchanged, then runs the result through the
     shared ``sanitize_symbol_for_filename`` so ANY Windows-illegal character is
     handled — not just the ``/ ( ) : space`` this site used to strip by hand.
 
@@ -22,6 +22,12 @@ def _safe_strategy_name(strategy_name):
     Windows contributor once the file was committed. The shared sanitizer maps
     ``>``/``<`` to distinct ``_gt_``/``_lt_`` tokens, so comparison-sweep variants
     stay distinct instead of colliding.
+
+    Two deliberate departures from "legal names never change", both inherited
+    from the shared sanitizer: a Windows reserved device name gains a leading
+    ``_`` (``CON`` -> ``_CON``), and trailing dots/spaces are stripped, so
+    ``"RSI 2."`` and ``"RSI 2"`` share a stem -- Windows already treats them as
+    the same file.
     """
     cosmetic = (
         str(strategy_name)
@@ -38,6 +44,7 @@ def safe_path_component(name):
     legal folder names do not churn, then run the shared sanitizer. A portfolio
     key like ``"Nasdaq: PIT"`` or an index asset like ``I:SPX`` otherwise lands
     a ``:`` in the path, which Windows rejects the same way it rejects ``>``.
+    Same reserved-name and trailing-dot caveats as :func:`_safe_strategy_name`.
     """
     return sanitize_symbol_for_filename(str(name).replace(" ", "_"))
 

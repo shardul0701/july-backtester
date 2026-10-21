@@ -138,8 +138,21 @@ def _load_strategy_verdicts(run_dir: Path) -> list[dict]:
 
 
 def _sanitize_for_filename(name: str) -> str:
-    """Mirror the engine's analyzer-csv name sanitization (spaces -> _, drop ( ) :)."""
-    return (name or "").replace(" ", "_").replace("(", "").replace(")", "").replace(":", "")
+    """The analyzer-csv file stem the engine writes for strategy *name*.
+
+    Delegates to the writer's own helper rather than mirroring it: the hand-kept
+    copy that lived here drifted from the writer twice (it never handled ``/``,
+    and #403 taught the writer ``>``/``<``), and each drift silently dropped the
+    verdict section in ``--all`` mode for the affected strategies.
+    """
+    from helpers.summary import _safe_strategy_name
+    return _safe_strategy_name(name) if name else ""
+
+
+def _portfolio_dir_for(name: str) -> str:
+    """The analyzer-csv folder name the engine writes for portfolio *name*."""
+    from helpers.summary import safe_path_component
+    return safe_path_component(name) if name else ""
 
 
 def _match_strategy_verdict(verdicts: list[dict], strategy_stem: str,
@@ -151,7 +164,7 @@ def _match_strategy_verdict(verdicts: list[dict], strategy_stem: str,
     """
     for v in verdicts:
         v_strat = _sanitize_for_filename(v.get("strategy", ""))
-        v_port = _sanitize_for_filename(v.get("portfolio", ""))
+        v_port = _portfolio_dir_for(v.get("portfolio", ""))
         if v_strat == strategy_stem and v_port == portfolio_dir:
             return v
     # fallback: match on strategy only (handles trade-csv naming variants)

@@ -1134,7 +1134,7 @@ class TestReadPathListIsDerived:
         tests a sanitized name for existence. The tripwire fired in CI on the
         PR, which is what it is for.
 
-        I published "234 modules" on this PR; the real coverage is 5, and 234
+        On #355 I published "234 modules"; the real coverage then was 5, and 234
         came from a walk over a polluted working tree. This exists so a change
         in coverage is noticed rather than assumed.
 
