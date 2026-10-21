@@ -63,12 +63,14 @@ def load(corpus, sym):
 def load_strats(private_dir):
     # Every registered strategy, whatever the local config.py's "strategies"
     # filter says -- the delta is a property of the library, not of one run.
+    _orig = C.CONFIG.get("strategies", "all")
     C.CONFIG["strategies"] = "all"
     from helpers.registry import get_active_strategies, load_strategies
     strats = get_active_strategies(os.path.join(ROOT, "custom_strategies"))
     if private_dir and os.path.isdir(private_dir):
         load_strategies(private_dir)
         strats = get_active_strategies(os.path.join(ROOT, "custom_strategies"))
+    C.CONFIG["strategies"] = _orig
     return strats
 
 
@@ -78,9 +80,12 @@ def is_private(meta, private_dirs):
     public and printed under --hide-private (adversarial QA on #405)."""
     import inspect
     try:
-        src = os.path.realpath(inspect.getsourcefile(meta["logic"]) or "")
+        src = inspect.getsourcefile(meta["logic"])
     except TypeError:
+        src = None
+    if not src:
         return True     # unknown origin: never print it as public
+    src = os.path.realpath(src)
     return any(src.startswith(os.path.realpath(d) + os.sep)
                for d in private_dirs if d)
 
@@ -123,6 +128,12 @@ def main():
                     help="list private strategies only as aggregate counts, never "
                          "by name (use this for anything committed to the public repo)")
     args = ap.parse_args()
+    if args.hide_private:
+        # Two more ways a private name reaches the terminal: the registry's
+        # import-failure warning carries the module path, and a strategy may
+        # print. Silence the first; the second is swallowed per call below.
+        import logging
+        logging.getLogger("helpers.registry").setLevel(logging.ERROR)
 
     data = {s: d for s in SYMS if (d := load(args.corpus, s)) is not None}
     spy = load(args.corpus, "SPY")
@@ -142,7 +153,13 @@ def main():
         # or a `2>&1` capture leaks them.
         print(f"  [{i}/{len(strats)}]" + ("" if args.hide_private else f" {name}"),
               file=sys.stderr, flush=True)
-        sigs, failed = signals_for(meta, data, spy, vix)
+        if args.hide_private:
+            import contextlib
+            import io
+            with contextlib.redirect_stdout(io.StringIO()):
+                sigs, failed = signals_for(meta, data, spy, vix)
+        else:
+            sigs, failed = signals_for(meta, data, spy, vix)
         if failed:
             sig_fail[name] = failed
         tag = "private" if is_private(meta, private_dirs) else "public"

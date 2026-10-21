@@ -255,6 +255,8 @@ CONFIG = {
     # value runs as "edge" -- None silently (it means unset), a typo with a
     # config_validator warning.
     # A held -2 (hold-state SHORT) holds the short: -2 is not a cover signal.
+    # Asymmetry to know: -2 exits a long, but 1 does not cover a short, so a
+    # direct -2 -> 1 stays short; a flip needs a -1 bar in between.
     "entry_trigger": "edge",
 
     # ============================================================

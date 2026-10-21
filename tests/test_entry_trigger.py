@@ -346,6 +346,34 @@ class TestHoldStateShort:
         assert pd.Timestamp(log.iloc[0]["ExitDate"]) == idx[8]
 
 
+    def test_a_second_minus_2_pulse_does_not_reshort(self):
+        """[0,-2,0,0,-2,0,0,-1] used to cover and re-open on the second -2,
+        resetting the entry price and stop (2 trades). -2 never covers, so it
+        is one short held to the -1, in both modes."""
+        frame, idx = _frame_px([100.0] * 8)
+        sig = pd.Series([0, -2, 0, 0, -2, 0, 0, -1], index=idx, dtype=float)
+        for mode in ("level", "edge"):
+            with patch.dict(CONFIG, {"entry_trigger": mode, "execution_time": "close"}):
+                res = run_portfolio_simulation(
+                    {"X": frame}, {"X": sig}, 100_000.0, 0.5,
+                    None, None, None, {"type": "none"})
+            log = pd.DataFrame(res["trade_log"])
+            assert len(log) == 1, (mode, len(log))
+
+    def test_short_to_long_needs_a_cover_bar(self):
+        """Documented asymmetry, pinned: -2 exits a long (it is <= -1), but 1
+        does not cover a short (#313's long-over-short guard), so a direct
+        -2 -> 1 holds the short. A flip is -1 then 1."""
+        frame, idx = _frame_px([100.0] * 10)
+        sig = pd.Series([0, -2, -2, -2, 1, 1, 1, 1, 1, 0], index=idx, dtype=float)
+        with patch.dict(CONFIG, {"entry_trigger": "edge", "execution_time": "close"}):
+            res = run_portfolio_simulation(
+                {"X": frame}, {"X": sig}, 100_000.0, 0.5,
+                None, None, None, {"type": "none"})
+        log = pd.DataFrame(res["trade_log"])
+        assert len(log) == 1 and str(log.iloc[0]["Trade"]).startswith("Short")
+
+
 class TestFreshSignalOnTheStopBar:
     """Pinned as-is, NOT endorsed. #401's review measured that a fresh 1
     emitted ON the stop bar ({1: 1, 5: 1}) enters that bar in both modes --
@@ -411,7 +439,7 @@ class TestShortSide:
 # --------------------------------------------------------------------------
 class TestConfigValidation:
     def test_known_values_produce_no_entry_trigger_warning(self):
-        for value in ("level", "edge", "EDGE"):
+        for value in ("level", "edge", "EDGE", " edge "):
             warns = validate_config({"entry_trigger": value})
             assert not [w for w in warns if "entry_trigger" in w]
 

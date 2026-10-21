@@ -643,7 +643,7 @@ A short, wide banner figure (`figsize=(10, 3), dpi=150`) that shows the full dra
 | `1` | Enter long |
 | `0` | No change |
 | `-1` | Exit long **or** cover short |
-| `-2` | Enter short (on a bar already short: hold — `-2` never covers) |
+| `-2` | Enter short (on a bar already short: hold — `-2` never covers). Also exits a long. `1` does NOT cover a short, so a short→long flip needs a `-1` bar first |
 
 - **Borrow cost**: `htb_rate_annual` (config, default `0.02`) converted to a daily compound rate `(1 + annual)^(1/252) - 1` and debited from cash each day a short is held. Set to `0.0` to disable.
 - **Three new blocks in the daily loop** (all additive — no long-path code changed):
