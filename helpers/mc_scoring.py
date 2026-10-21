@@ -35,10 +35,17 @@ def bootstrap_mean_pvalue(trade_pnl_list, n_boot=_MIN_BOOT, rng=None):
         return 1.0
     gen = rng if rng is not None else np.random
     centered = pnl - pnl.mean()
-    idx = gen.integers(0, n, size=(n_boot, n)) if hasattr(gen, "integers") \
-        else gen.randint(0, n, size=(n_boot, n))
-    boot_means = centered[idx].mean(axis=1)
-    return float((np.sum(boot_means >= pnl.mean()) + 1) / (n_boot + 1))
+    draw = gen.integers if hasattr(gen, "integers") else gen.randint
+    # Chunked so the index matrix stays ~<=2M entries per draw: an intraday run
+    # with 50k trades would otherwise allocate n_boot x n ints (~400MB) per worker.
+    chunk = max(1, min(n_boot, 2_000_000 // n))
+    hits, done = 0, 0
+    while done < n_boot:
+        k = min(chunk, n_boot - done)
+        boot_means = centered[draw(0, n, size=(k, n))].mean(axis=1)
+        hits += int(np.sum(boot_means >= pnl.mean()))
+        done += k
+    return float((hits + 1) / (n_boot + 1))
 
 
 def closed_trade_drawdown(trade_pnl_list, initial_capital):
