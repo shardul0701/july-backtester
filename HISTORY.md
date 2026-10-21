@@ -31,6 +31,14 @@
 - **`verbose_output` config is honoured**; new `--no-verbose` flag (#440).
 - **Yahoo includes the `end_date` bar** (#441).
 
+### RC audit follow-ups (#460)
+- Fix UTC delisting liquidation, re-entry after delisting, future delistings leaking into earlier runs, and missing safety-net exit commissions.
+- Refine fill-bar stops with intraday data and include entry commissions in short collateral sizing.
+- Preserve warm-up signals, structural stop history and ADV through the first execution bar; warm strategy dependencies while keeping benchmark/WFA periods inside the selected window.
+- Include the final day's trades and intraday equity in WFA; exclude N/A folds and infer anchored IS history correctly.
+- Apply block sampling to the MC edge test when selected; distinguish fractional percentage stops, ATR caps and trailing floors in sensitivity labels.
+- Pass resolved runtime settings to spawned workers so CLI overrides, including `--seed`, apply consistently on macOS and Windows.
+
 ### Fixed
 - **`pit:` rosters: an unquoted `ON` parsed as a boolean (all data providers).** PyYAML reads an
   unquoted `- ON` as `True`, so in the NQ100 2023–2025 rosters ON Semiconductor became the ticker

@@ -79,9 +79,9 @@ class TestAtrStopNaming:
         """Engine defaults a missing percentage value to 0.05; label mirrors it."""
         assert _build_strat_name("S", {"type": "percentage"}) == "S w/ 5% SL"
 
-    def test_percentage_rounding_is_half_even(self):
-        """`:.0%` uses Python round-half-to-even: 12.5% -> '12%'. Pin it."""
-        assert _build_strat_name("S", {"type": "percentage", "value": 0.125}) == "S w/ 12% SL"
+    def test_percentage_label_preserves_fractional_percent(self):
+        """Distinct percentage stops must not collapse into the same label."""
+        assert _build_strat_name("S", {"type": "percentage", "value": 0.125}) == "S w/ 12.5% SL"
 
     def test_none_config_returns_name_unchanged(self):
         assert _build_strat_name("S", {"type": "none"}) == "S"

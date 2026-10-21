@@ -339,7 +339,7 @@ CONFIG = {
     # _pit_force_exit marks the last available member bar when no timely post-leave
     # bar exists, so the simulator can close at Close instead of waiting.
     "pit_enforce_daily": True,
-    "pit_warmup_days": 400,              # calendar days of pre-join data for indicators
+    "pit_warmup_days": 400,              # pre-start calendar days for symbols/dependency indicators
     "pit_exit_buffer_days": 10,          # grace-period bars after index removal
     "pit_coverage_tolerance_days": 7,
 

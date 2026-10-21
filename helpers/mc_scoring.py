@@ -21,13 +21,16 @@ EDGE_P_THRESHOLD = 0.05
 _MIN_BOOT = 1000
 
 
-def bootstrap_mean_pvalue(trade_pnl_list, n_boot=_MIN_BOOT, rng=None):
+def bootstrap_mean_pvalue(trade_pnl_list, n_boot=_MIN_BOOT, rng=None,
+                          sampling="iid", block_size=None):
     """One-sided bootstrap p-value for H0: mean trade P&L <= 0.
 
     Resamples the DEMEANED trade P&L (null distribution with mean 0) and
     returns P(resampled mean >= observed mean), with +1 smoothing so p > 0.
     Chosen over "share of paths below initial capital" because it is a proper
     significance test with a fixed, interpretable threshold (p < 0.05).
+    ``sampling="block"`` uses circular blocks, matching the MC resampler and
+    preserving serial dependence in the edge test as well as the risk tests.
     """
     pnl = np.asarray(trade_pnl_list, dtype=float)
     n = len(pnl)
@@ -40,9 +43,24 @@ def bootstrap_mean_pvalue(trade_pnl_list, n_boot=_MIN_BOOT, rng=None):
     # with 50k trades would otherwise allocate n_boot x n ints (~400MB) per worker.
     chunk = max(1, min(n_boot, 2_000_000 // n))
     hits, done = 0, 0
+    if sampling == "block":
+        size = max(1, min(n, int(block_size or max(1, int(n ** 0.5)))))
+        n_blocks = int(np.ceil(n / size))
+        # Prefix sums let each sampled block contribute its sum without
+        # allocating a bootstrap x trades matrix of expanded block indices.
+        prefix = np.concatenate(([0.0], np.cumsum(np.tile(centered, 2))))
+        starts = np.arange(n)
+        block_sums = prefix[starts + size] - prefix[starts]
+        remainder = n - (n_blocks - 1) * size
+        last_sums = prefix[starts + remainder] - prefix[starts]
     while done < n_boot:
         k = min(chunk, n_boot - done)
-        boot_means = centered[draw(0, n, size=(k, n))].mean(axis=1)
+        if sampling == "block":
+            indices = draw(0, n, size=(k, n_blocks))
+            totals = block_sums[indices[:, :-1]].sum(axis=1) + last_sums[indices[:, -1]]
+            boot_means = totals / n
+        else:
+            boot_means = centered[draw(0, n, size=(k, n))].mean(axis=1)
         hits += int(np.sum(boot_means >= pnl.mean()))
         done += k
     return float((hits + 1) / (n_boot + 1))
@@ -57,7 +75,8 @@ def closed_trade_drawdown(trade_pnl_list, initial_capital):
     return float(dd)
 
 
-def analyze_mc_results_v2(result, mc_results, trade_pnl_list, rng=None, n_boot=None):
+def analyze_mc_results_v2(result, mc_results, trade_pnl_list, rng=None, n_boot=None,
+                          sampling="iid", block_size=None):
     """Score a strategy against its Monte Carlo results.
 
     Points (same total range as legacy):
@@ -77,7 +96,8 @@ def analyze_mc_results_v2(result, mc_results, trade_pnl_list, rng=None, n_boot=N
     mc_median_dd = np.percentile(mc_results['max_drawdowns'], 50)
     mc_95th_dd = np.percentile(mc_results['max_drawdowns'], 95)
 
-    p_val = bootstrap_mean_pvalue(trade_pnl_list, n_boot or _MIN_BOOT, rng)
+    p_val = bootstrap_mean_pvalue(trade_pnl_list, n_boot or _MIN_BOOT, rng,
+                                  sampling=sampling, block_size=block_size)
     hist_dd = closed_trade_drawdown(trade_pnl_list, initial)
 
     score = 0

@@ -471,7 +471,7 @@ _SECTIONS: list[tuple[str, str, list[dict]]] = [
             "flag": "--set pit_warmup_days=<int>",
             "config_key": "pit_warmup_days",
             "desc": (
-                "Calendar days of pre-start history fetched for portfolio symbols so\n"
+                "Calendar days of pre-start history fetched for symbols and dependencies so\n"
                 "      indicators are warm on start_date (default 400; 0 disables).\n"
                 "      No trade or equity point occurs before start_date."
             ),
