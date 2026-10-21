@@ -1,57 +1,78 @@
-# entry_trigger level -> edge: per-strategy trade-count delta (#401)
+# entry_trigger level → edge: per-strategy trade-count delta (#401)
 
-Universe: 30 large-cap US equities, 2018-01-01 .. 2026-06-30, $100k, 10% allocation,
-5% percentage stop. Same data, same strategies, only entry_trigger changed.
-Generated 2026-09-21. Reproduce with scripts/entry_trigger_delta.py.
+This compares the number of trades each registered strategy makes under `entry_trigger="level"` and under `"edge"`. Everything else is held fixed: the same data and the same signals, computed once per strategy and reused for both modes. The universe is 30 large-cap US equities from 2018-01-01 to 2026-06-30, with $100k capital, 10% allocation and a 5% percentage stop. The report's `config:` line lists every other setting that moves the numbers.
+
+Generated 2026-10-21 on engine commit `08e285ac` (#405). The report below is the script's exact `--out` file, with nothing pasted by hand.
+
+## What a public checkout can reproduce
+
+Run `python scripts/entry_trigger_delta.py --hide-private --out <file>` from a public clone with the price corpus. That reproduces **the 38 public rows and the "public only" total: 55,335 → 39,285, −29.0%**. In an independent re-run on a different data path, @shardul0701 got 55,291 → 39,242, also −29.0%.
+
+The "all" total also includes 99 strategies from the private submodule, which isn't available in a public checkout. Those strategies appear here only as aggregate counts and are never named. `--hide-private` enforces that, and `tests/test_entry_trigger_delta_script.py` checks that strategies are tagged public or private by their source file.
+
+## Reading it
+
+- **Every public strategy trades less under edge: 38 of 38 fewer, 0 unchanged.** The size of the drop tracks how the strategy's signal is built. State-shaped signals move a lot: the crossover and confluence family drops 45–65%, and Bollinger fade drops 45–47%. Pulse-like and calendar signals barely move: `Weekend Hold` −1.1%, `SMA 200 Trend Filter` −2.1%, `OBV Trend` −7.4%. So the effect is a gradient, not a split into "affected" and "unaffected" strategies.
+- **The 19 unchanged strategies are all private.** No public strategy is unchanged, so this report makes no claim about signal shape that a public reader can't check.
+- **Edge can add trades as well as remove them.** One private strategy trades *more* under edge: +21 trades, +1.7%. That's the capacity re-plan effect noted in `config.py`: skipping a late entry frees capital for another symbol. It is real but rare on this book.
+- **Strategies that never traded are excluded.** "Not exercised" strategies (0 trades in both modes) are left out of the counts, because 0 = 0 says nothing about the semantics. Errors are listed rather than dropped. A symbol that fails at the signal stage is missing from both modes' books, never from just one.
+
+## Report
 
 ```
-Chaikin Money Flow (10d)                        2586    1927    -659   -25.5%
-Chaikin Money Flow (20d/0.05/0.05)              1338     774    -564   -42.2%
-Daily Overnight Hold (weekdays) w/ VIX Filte    3641    3310    -331    -9.1%
-Donchian Breakout (20d/10d)                     1129     681    -448   -39.7%
-EMA ADX Combo                                   1090    1090      +0    +0.0%
-EMA Crossover (Unfiltered)                       659     331    -328   -49.8%
-EMA Crossover w/ SPY+VIX Filter                  505     277    -228   -45.1%
-EMA Crossover w/ SPY-Only Filter                 659     331    -328   -49.8%
-EMA Crossover w/ VIX-Only Filter                 659     331    -328   -49.8%
-EMA Pullback Continuation                        526     526      +0    +0.0%
-Gamma Wall Breakout                               57      57      +0    +0.0%
-Hold The Week (Tue-Fri)                         4496    3860    -636   -14.1%
-Isabella - Chaikin Money Flow                   1338     774    -564   -42.2%
-Isabella - Donchian Channel Breakout            1129     681    -448   -39.7%
-Isabella - Keltner Channel Breakout             1043     739    -304   -29.1%
-Keltner Channel Breakout (20d)                  1043     739    -304   -29.1%
-MA Bounce (20d)                                 1950    1414    -536   -27.5%
-MA Confluence (Fast Entry & Exit)                915     459    -456   -49.8%
-MA Confluence (Fast Entry)                       833     395    -438   -52.6%
-MA Confluence (Fast MA Exit)                     866     455    -411   -47.5%
-MA Confluence (Full Stack)                       774     373    -401   -51.8%
-MA Confluence (Full Stack) w/ Regime Filter      777     660    -117   -15.1%
-MA Confluence (Medium MA Exit)                  1408    1007    -401   -28.5%
-MACD Crossover (12/26/9)                        2273    1552    -721   -31.7%
-MACD+RSI Confirmation                           1859    1392    -467   -25.1%
-OBV + Volatility Regime                         2016    1838    -178    -8.8%
-OBV Breakout (20d)                               964     721    -243   -25.2%
-OBV Trend (20d MA)                              2760    2556    -204    -7.4%
-OBV Weighted Momentum                           1966    1802    -164    -8.3%
-ORB 5-Min Breakout                                 0       0      +0    +nan%
-RS LW 60/15                                      308     308      +0    +0.0%
-RSI (14d) w/ SMA200 Filter                       216      99    -117   -54.2%
-RSI Mean Reversion (14/30)                       829     388    -441   -53.2%
-RSI Mean Reversion (7/20)                        908     527    -381   -42.0%
-RSI Oversold MA200 Crossback                     411     304    -107   -26.0%
-Relative Strength vs SPY                        1044    1044      +0    +0.0%
-SMA 200 Trend Filter (200d)                      482     472     -10    -2.1%
-SMA Crossover (20d/50d)                          908     437    -471   -51.9%
-SMA Crossover (50d/200d)                         400     142    -258   -64.5%
-Stochastic Oscillator (14d)                     2696    1836    -860   -31.9%
-Volatility Compression Breakout                  264     197     -67   -25.4%
-Volume Spike Reversal                             98      58     -40   -40.8%
-Volume-Weighted RSI (14/30)                     1166     563    -603   -51.7%
-Weekend Hold (Fri-Mon)                          4184    4140     -44    -1.1%
-Williams %R Oversold Bounce (14d/-80/-50)       2710    1835    -875   -32.3%
+universe: 30/30 symbols, 2018-01-01..2026-06-30, $100,000, 10% allocation, 5% percentage stop
+config: execution_time='open', slippage_pct=0.0005, commission_per_share=0.002, max_pct_adv=0.05, volume_impact_coeff=0.0, entry_priority='alphabetical', position_sizing_method='fixed', max_portfolio_heat=0.1, timeframe='D', timeframe_multiplier=1
+strategies registered: 137  (38 public, 99 private)
 
-TOTAL                                          69099   50885  -18214   -26.4%
-strategies compared: 59   unchanged: 10   fewer: 49   more: 0
+strategy                                             src       level    edge   delta      pct
+ATR Trailing Stop (14/3)                             public      745     487    -258   -34.6%
+ATR Trailing Stop w/ Trend Filter                    public     1024     693    -331   -32.3%
+Bollinger Band Breakout (20d)                        public     1282     873    -409   -31.9%
+Bollinger Band Fade (20d/2.0)                        public     1791     987    -804   -44.9%
+Bollinger Band Fade (20d/2.5)                        public      992     527    -465   -46.9%
+Bollinger Band Fade w/ SPY Trend Filter (20d/2.0)    public     1791     987    -804   -44.9%
+Bollinger Band Squeeze (20d/40d)                     public      308     257     -51   -16.6%
+Bollinger Mean Reversion w/ ATR Stop (20d/2.0/2xATR) public     1773    1211    -562   -31.7%
+Chaikin Money Flow (10d)                             public     2586    1927    -659   -25.5%
+Chaikin Money Flow (20d/0.05/0.05)                   public     1338     774    -564   -42.2%
+Daily Overnight Hold (weekdays) w/ VIX Filter        public     3641    3310    -331    -9.1%
+Donchian Breakout (20d/10d)                          public     1129     681    -448   -39.7%
+EMA Crossover (Unfiltered)                           public      659     331    -328   -49.8%
+EMA Crossover w/ SPY+VIX Filter                      public      505     277    -228   -45.1%
+EMA Crossover w/ SPY-Only Filter                     public      659     331    -328   -49.8%
+EMA Crossover w/ VIX-Only Filter                     public      659     331    -328   -49.8%
+Hold The Week (Tue-Fri)                              public     4496    3860    -636   -14.1%
+Keltner Channel Breakout (20d)                       public     1043     739    -304   -29.1%
+MA Bounce (20d)                                      public     1950    1414    -536   -27.5%
+MA Confluence (Fast Entry & Exit)                    public      915     459    -456   -49.8%
+MA Confluence (Fast Entry)                           public      833     395    -438   -52.6%
+MA Confluence (Fast MA Exit)                         public      866     455    -411   -47.5%
+MA Confluence (Full Stack)                           public      774     373    -401   -51.8%
+MA Confluence (Full Stack) w/ Regime Filter          public      777     660    -117   -15.1%
+MA Confluence (Medium MA Exit)                       public     1408    1007    -401   -28.5%
+MACD Crossover (12/26/9)                             public     2273    1552    -721   -31.7%
+MACD+RSI Confirmation                                public     1859    1392    -467   -25.1%
+OBV Trend (20d MA)                                   public     2760    2556    -204    -7.4%
+RSI (14d) w/ SMA200 Filter                           public      216      99    -117   -54.2%
+RSI Mean Reversion (14/30)                           public      829     388    -441   -53.2%
+RSI Mean Reversion (7/20)                            public      908     527    -381   -42.0%
+SMA 200 Trend Filter (200d)                          public      482     472     -10    -2.1%
+SMA Crossover (20d/50d)                              public      908     437    -471   -51.9%
+SMA Crossover (50d/200d)                             public      400     142    -258   -64.5%
+Stochastic Oscillator (14d)                          public     2696    1836    -860   -31.9%
+Volume-Weighted RSI (14/30)                          public     1166     563    -603   -51.7%
+Weekend Hold (Fri-Mon)                               public     4184    4140     -44    -1.1%
+Williams %R Oversold Bounce (14d/-80/-50)            public     2710    1835    -875   -32.3%
 
+TOTAL (all)                                                   173245  136066  -37179   -21.5%
+                                                             compared 130   unchanged 19   fewer 110   more 1
+TOTAL (public only)                                            55335   39285  -16050   -29.0%
+                                                             compared 38   unchanged 0   fewer 38   more 0
+TOTAL (private only)                                          117910   96781  -21129   -17.9%
+                                                             compared 92   unchanged 19   fewer 72   more 1
+
+unchanged (level == edge, > 0 trades): 19 private (not named)
+not exercised (0 trades in both modes, excluded from counts): 6 private (not named)
+simulation errors (excluded, listed): 1 private (not named)
+signal-stage symbol failures: 30 across 1 strategies
 ```
