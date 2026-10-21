@@ -891,17 +891,27 @@ def generate_sensitivity_report(all_results: list[dict], run_id: str) -> None:
     from config import CONFIG
     if not CONFIG.get("sensitivity_sweep_enabled", False) or not all_results:
         return
+    def _meta(r):
+        # Structured metadata from main.py (#434); parse the display name only
+        # for legacy results that predate it.
+        if "base_strategy" in r and "param_label" in r:
+            return r["base_strategy"], r["param_label"], r.get("stop_label", "") or ""
+        name = r.get("Strategy", "")
+        label = name.split(" [")[-1].rstrip("]") if " [" in name else "(base)"
+        return name.split(" [")[0], label, ""
+
+    # One verdict per (portfolio, strategy, stop config), never pooled across them.
     groups = {}
     for r in all_results:
-        base = r.get("Strategy", "").split(" [")[0]
-        groups.setdefault(base, []).append(r)
+        base, _, stop = _meta(r)
+        groups.setdefault((r.get("Portfolio", ""), base, stop), []).append(r)
     swept = {k: v for k, v in groups.items() if len(v) > 1}
     if not swept:
         return
     print("\n" + "=" * 70)
     print("  PARAMETER SENSITIVITY REPORT")
     print("=" * 70)
-    for base_name, variants in swept.items():
+    for (portfolio, base_name, stop), variants in swept.items():
         # Zero-trade / errored variants (stubs, #432) stay in the denominator and
         # are never profitable, so they count against robustness.
         profitable = [v for v in variants
@@ -909,11 +919,12 @@ def generate_sensitivity_report(all_results: list[dict], run_id: str) -> None:
         pct = len(profitable) / len(variants) * 100
         flag = f"*** FRAGILE — profitable in only {pct:.0f}% of variants ***" if pct < 30 else \
                f"Robust — profitable in {pct:.0f}% of variants ({len(profitable)}/{len(variants)})"
-        print(f"\n  {base_name}\n  {flag}")
+        header = f"{base_name} | {portfolio}" + (f" | {stop}" if stop else "")
+        print(f"\n  {header}\n  {flag}")
         print(f"\n  {'Variant':<35} {'P&L':>8} {'Sharpe':>8} {'Max DD':>8} {'MC Score':>9}")
         print("  " + "-" * 70)
-        for r in sorted(variants, key=lambda x: (0 if "(base)" in x.get("Strategy", "") else 1, -x.get("pnl_percent", -999))):
-            label = r.get("Strategy", "").split(" [")[-1].rstrip("]") if " [" in r.get("Strategy", "") else "(base)"
+        for r in sorted(variants, key=lambda x: (0 if _meta(x)[1] == "(base)" else 1, -x.get("pnl_percent", -999))):
+            label = _meta(r)[1]
             mark = " <-- base" if label == "(base)" else ""
             if r.get("status") == "no_trades":
                 mark += " [0 trades]"
