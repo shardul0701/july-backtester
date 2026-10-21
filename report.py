@@ -159,19 +159,27 @@ def _match_strategy_verdict(verdicts: list[dict], strategy_stem: str,
                             portfolio_dir: str) -> dict | None:
     """Find the llm_verdict entry matching a per-strategy CSV file.
 
-    ``strategy_stem`` is the CSV file stem (sanitized); ``portfolio_dir`` is the
-    parent folder name (sanitized portfolio name).
+    Accept current names and names written before #403. Only use the
+    strategy-only fallback when it identifies a single verdict; otherwise a
+    report can inherit another portfolio's performance assessment.
     """
+    strategy_matches, exact_matches = [], []
     for v in verdicts:
-        v_strat = _sanitize_for_filename(v.get("strategy", ""))
-        v_port = _portfolio_dir_for(v.get("portfolio", ""))
-        if v_strat == strategy_stem and v_port == portfolio_dir:
-            return v
-    # fallback: match on strategy only (handles trade-csv naming variants)
-    for v in verdicts:
-        if _sanitize_for_filename(v.get("strategy", "")) == strategy_stem:
-            return v
-    return None
+        strategy = v.get("strategy") or ""
+        portfolio = v.get("portfolio") or ""
+        # Historical writer rules are retained only for reading saved runs.
+        legacy_stem = (strategy.replace('/', '_').replace(' ', '_')
+                       .replace('(', '').replace(')', '').replace(':', ''))
+        stems = {_sanitize_for_filename(strategy), legacy_stem}
+        if strategy_stem not in stems:
+            continue
+        strategy_matches.append(v)
+        folders = {_portfolio_dir_for(portfolio), portfolio.replace(" ", "_")}
+        if portfolio_dir in folders:
+            exact_matches.append(v)
+    if exact_matches:
+        return exact_matches[0] if len(exact_matches) == 1 else None
+    return strategy_matches[0] if len(strategy_matches) == 1 else None
 
 
 def _load_wfa_split_ratio(run_dir: Path) -> float | None:

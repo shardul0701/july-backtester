@@ -23,17 +23,18 @@ def _safe_strategy_name(strategy_name):
     ``>``/``<`` to distinct ``_gt_``/``_lt_`` tokens, so comparison-sweep variants
     stay distinct instead of colliding.
 
-    Two deliberate departures from "legal names never change", both inherited
-    from the shared sanitizer: a Windows reserved device name gains a leading
-    ``_`` (``CON`` -> ``_CON``), and trailing dots/spaces are stripped, so
-    ``"RSI 2."`` and ``"RSI 2"`` share a stem -- Windows already treats them as
-    the same file.
+    A Windows reserved device name gains a leading ``_`` (``CON`` -> ``_CON``).
+    Sanitize with the extension attached: a dot at the end of a strategy stem
+    is legal inside ``RSI_2..csv`` and must survive, or ``RSI 2.`` overwrites
+    ``RSI 2``. All callers append an extension or a suffix plus extension.
     """
     cosmetic = (
         str(strategy_name)
         .replace('/', '_').replace(' ', '_').replace('(', '').replace(')', '').replace(':', '')
     )
-    return sanitize_symbol_for_filename(cosmetic)
+    if not cosmetic:
+        return sanitize_symbol_for_filename(cosmetic)
+    return sanitize_symbol_for_filename(cosmetic + ".csv").removesuffix(".csv")
 
 
 def safe_path_component(name):
@@ -44,7 +45,8 @@ def safe_path_component(name):
     legal folder names do not churn, then run the shared sanitizer. A portfolio
     key like ``"Nasdaq: PIT"`` or an index asset like ``I:SPX`` otherwise lands
     a ``:`` in the path, which Windows rejects the same way it rejects ``>``.
-    Same reserved-name and trailing-dot caveats as :func:`_safe_strategy_name`.
+    Reserved device names gain a leading underscore; trailing dots/spaces are
+    stripped here because these components can be directory names.
     """
     return sanitize_symbol_for_filename(str(name).replace(" ", "_"))
 

@@ -42,6 +42,12 @@ class TestSafeStrategyName:
         # overwrite each other's output files.
         assert _safe_strategy_name("ADX>20") != _safe_strategy_name("ADX<20")
 
+    @pytest.mark.parametrize("name,expected", [
+        ("CON", "_CON"), ("CON.", "_CON."), ("()", "_EMPTY_"),
+    ])
+    def test_reserved_and_empty_stems_still_safe(self, name, expected):
+        assert _safe_strategy_name(name) == expected
+
     def test_legal_names_unchanged_from_prior_behaviour(self):
         # The historical cosmetic transforms (drop spaces/parens) are preserved,
         # so already-legal strategy filenames do not churn.
@@ -96,6 +102,31 @@ def _illegal_paths(root):
 
 
 class TestCallSitesWriteLegalPaths:
+    def test_trailing_stem_dot_preserves_distinct_trade_and_equity_files(self, tmp_path, monkeypatch):
+        import pandas as pd
+        from helpers.summary import generate_per_portfolio_summary
+        monkeypatch.chdir(tmp_path)
+        results = [_result("RSI 2", portfolio="Nasdaq 100"),
+                   _result("RSI 2.", portfolio="Nasdaq 100")]
+        for result, profit in zip(results, [101., 202.]):
+            result["trade_log"][0]["Profit"] = profit
+            result["portfolio_timeline"] = pd.Series(
+                [100000., 100000. + profit],
+                index=pd.to_datetime(["2024-01-02", "2024-01-05"]))
+        with patch.dict("config.CONFIG", {
+                "upload_to_s3": False, "save_individual_trades": True,
+                "save_only_filtered_trades": False}):
+            generate_per_portfolio_summary(results, "Nasdaq 100", {}, "dots")
+        root = tmp_path / "output/runs/dots"
+        folder = root / "analyzer_csvs/Nasdaq_100"
+        for stem, profit in [("RSI_2", 101.), ("RSI_2.", 202.)]:
+            assert pd.read_csv(folder / f"{stem}.csv")["Profit"].tolist() == [profit]
+            equity = pd.read_csv(folder / f"{stem}_equity.csv", index_col=0)
+            assert equity.iloc[-1, 0] == 100000. + profit
+            trade_path, = root.rglob(f"I_SPX_{stem}_trade_log.csv")
+            assert pd.read_csv(trade_path)["Profit"].tolist() == [profit]
+        assert _illegal_paths(root) == []
+
     def test_save_trades_to_csv(self, tmp_path):
         from helpers.summary import save_trades_to_csv
         with patch.dict("config.CONFIG", {"upload_to_s3": False}):
