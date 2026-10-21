@@ -566,7 +566,7 @@ _SECTIONS: list[tuple[str, str, list[dict]]] = [
         {
             "flag": "--mc-sims <int>",
             "config_key": "num_mc_simulations",
-            "desc": "Number of Monte Carlo simulation runs.",
+            "desc": "Number of Monte Carlo simulation runs. MC Score (-4..5) = bootstrap edge test on mean trade P&L (p<0.05: +2, else -1 'No Significant Edge') + closed-trade DD realism (+1/-1 'DD Understated') + tail risk (+2/-1/-2).",
             "options": None,
             "example": "python main.py --mc-sims 2000",
         },
