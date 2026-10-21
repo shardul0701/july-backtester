@@ -428,6 +428,7 @@ printed extreme. The level is **static — it does not trail**.
 - **New file**: `services/yahoo_service.py` — uses `yfinance` (lazy import inside `get_price_data` so the library is optional for non-Yahoo users)
 - **Dependency**: `yfinance` added to `requirements.txt`
 - **Interval building**: `_build_interval(config)` maps `timeframe`/`timeframe_multiplier` → yfinance interval string (`"1d"`, `"1h"`, `"5m"`, `"1wk"`, `"1mo"`). Multiplier >1 on D/W/M falls back to base interval with a warning.
+- **Inclusive `end_date` (#441)**: yfinance's `end` is exclusive, so `get_price_data` requests `end_date + 1 day` and then filters the index to `< end_date + 1 day` (daily bar dated `end_date` kept; next-day bars dropped; intraday bars on `end_date` kept). `end_date=None` ("run to today") passes `end=None` and skips the filter.
 - **No API key** needed — free data, but quality/availability varies.
 - **Mock pattern** in tests: yfinance is imported *inside* `get_price_data()` via `import yfinance as yf`, so patching `sys.modules["yfinance"]` in `patch.dict` intercepts the import on every call without needing to reload the module.
 
