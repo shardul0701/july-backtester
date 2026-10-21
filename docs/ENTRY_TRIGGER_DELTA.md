@@ -2,7 +2,7 @@
 
 This compares the number of trades each registered strategy makes under `entry_trigger="level"` and under `"edge"`. Everything else is held fixed: the same data and the same signals, computed once per strategy and reused for both modes. The universe is 30 large-cap US equities from 2018-01-01 to 2026-06-30, with $100k capital, 10% allocation and a 5% percentage stop. The report's `config:` line lists every other setting that moves the numbers.
 
-Generated 2026-10-21 on engine commit `08e285ac` (#405). The report below is the script's exact `--out` file, with nothing pasted by hand, apart from one census label renamed afterwards to match a later script change (`simulation errors` → `errors, signal or simulation`). No number changed.
+Regenerated 2026-10-21 using the corrected delta runner at `c802162b` (#405), with the same engine code as `b66a8412`. The report below is the script's exact `--out` file. The runner now supplies each ticker and applies explicit strategy parameters after injected arguments, matching the production call order.
 
 ## What a public checkout can reproduce
 
@@ -12,14 +12,22 @@ So the exact row values need that corpus. A different data source gives approxim
 
 To regenerate from a full checkout, run `python scripts/entry_trigger_delta.py --hide-private --out <file>`.
 
-The "all" total also includes 99 strategies from the private submodule, which isn't available in a public checkout. Those strategies appear here only as aggregate counts and are never named. `--hide-private` enforces that, and `tests/test_entry_trigger_delta_script.py` checks that strategies are tagged public or private by their source file.
+The census also includes 99 strategies from the private submodule, which isn't available in a public checkout. Only successfully exercised strategies contribute to trade totals. Private strategies appear here only as aggregate counts and are never named. `--hide-private` enforces that, and `tests/test_entry_trigger_delta_script.py` checks that strategies are tagged public or private by their source file.
 
 ## Reading it
 
 - **Every public strategy trades less under edge: 38 of 38 fewer, 0 unchanged.** The size of the drop tracks how the strategy's signal is built. State-shaped signals move a lot: the EMA/SMA crossovers and the unfiltered MA Confluence variants drop 45–65% (the regime-filtered and medium-exit confluence variants drop 15% and 29%), and Bollinger fade drops 45–47%. Pulse-like and calendar signals barely move: `Weekend Hold` −1.1%, `SMA 200 Trend Filter` −2.1%, `OBV Trend` −7.4%. So the effect is a gradient, not a split into "affected" and "unaffected" strategies.
-- **The 19 unchanged strategies are all private.** No public strategy is unchanged, so this report makes no claim about signal shape that a public reader can't check.
-- **Edge can add trades as well as remove them.** One private strategy trades *more* under edge: +21 trades, +1.7%. That's the capacity re-plan effect noted in `config.py`: skipping a late entry frees capital for another symbol. It is real but rare on this book.
+- **The 10 unchanged strategies are all private.** No public strategy is unchanged, so this report makes no claim about signal shape that a public reader can't check.
+- **Edge can add trades as well as remove them.** One private strategy trades *more* under edge. That's the capacity re-plan effect noted in `config.py`: skipping a late entry frees capital for another symbol. It is real but rare on this book.
 - **Strategies that never traded are excluded.** "Not exercised" strategies (0 trades in both modes) are left out of the counts, because 0 = 0 says nothing about the semantics. Errors are listed rather than dropped. A symbol that fails at the signal stage is missing from both modes' books, never from just one.
+
+## Audit correction and private coverage
+
+The old runner omitted `symbol`, which the normal pipeline always supplies. The corrected call exposes **41 private signal-stage failures**: 40 strategies reject the existing production `symbol` keyword, and one fails later with an `AttributeError` inside its logic. All 41 also fail before reaching the simulator under the normal pipeline on both base `d22f6695` and head `c802162b`; a positive control reaches the simulator on both. These are existing private implementation incompatibilities, rather than an effect of changing `entry_trigger`.
+
+Consequently the corrected report compares 90 strategies (38 public and 52 private), with six unexercised and 41 errored private strategies explicitly excluded. The older combined/private totals used a different call contract and are superseded. All 38 public rows and their total reproduce exactly. Private strategy names remain omitted.
+
+The public default suite passed (2,838 tests), and all 101 local private tests passed. That private suite does not cover the full registry: its passing result does not establish that the 41 excluded strategies can run through the production pipeline.
 
 ## Report
 
@@ -68,15 +76,15 @@ Volume-Weighted RSI (14/30)                          public     1166     563    
 Weekend Hold (Fri-Mon)                               public     4184    4140     -44    -1.1%
 Williams %R Oversold Bounce (14d/-80/-50)            public     2710    1835    -875   -32.3%
 
-TOTAL (all)                                                   173245  136066  -37179   -21.5%
-                                                             compared 130   unchanged 19   fewer 110   more 1
+TOTAL (all)                                                   117881   88905  -28976   -24.6%
+                                                             compared 90   unchanged 10   fewer 79   more 1
 TOTAL (public only)                                            55335   39285  -16050   -29.0%
                                                              compared 38   unchanged 0   fewer 38   more 0
-TOTAL (private only)                                          117910   96781  -21129   -17.9%
-                                                             compared 92   unchanged 19   fewer 72   more 1
+TOTAL (private only)                                           62546   49620  -12926   -20.7%
+                                                             compared 52   unchanged 10   fewer 41   more 1
 
-unchanged (level == edge, > 0 trades): 19 private (not named)
+unchanged (level == edge, > 0 trades): 10 private (not named)
 not exercised (0 trades in both modes, excluded from counts): 6 private (not named)
-errors, signal or simulation (excluded, listed): 1 private (not named)
-signal-stage symbol failures: 30 across 1 strategies
+errors, signal or simulation (excluded, listed): 41 private (not named)
+signal-stage symbol failures: 1230 across 41 strategies
 ```
