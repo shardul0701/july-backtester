@@ -744,26 +744,48 @@ class TestShortSideHonoursTheSizingMethod:
         if L is not None:
             assert S == pytest.approx(L, rel=0.01)
 
-    @pytest.mark.parametrize("sym,atr,heat", [
-        ("LNG", 1.0, 0.03),     # cash clamp binds
-        ("MESM6", 0.2, 1.0),    # free-margin clamp binds; diverged at heat 1.0
+    @pytest.mark.parametrize("sym,atr,heat,comm", [
+        ("LNG", 1.0, 0.03, 0.0),     # cash clamp binds
+        ("MESM6", 0.2, 1.0, 0.0),    # free-margin clamp binds; diverged at heat 1.0
     ])
-    def test_heat_gate_runs_before_the_clamp_on_both_legs(self, sym, atr, heat):
+    def test_heat_gate_runs_before_the_clamp_on_both_legs(self, sym, atr, heat, comm):
         """The long gates heat on the UNCLAMPED count, then clamps to cash /
         margin. The shorts gated after clamping, so a method sizing past cash
         was rejected long and admitted short: LONG None / SHORT 1000 (equity),
         LONG None / SHORT 2000 (futures). Adversarial QA round 2 on #392."""
-        cfg = {"max_portfolio_heat": heat, "target_risk_per_trade": 0.02}
+        cfg = {"max_portfolio_heat": heat, "target_risk_per_trade": 0.02,
+               "instruments": {"default_asset_class": "equity",
+                               "futures_initial_margin_pct": 0.10,
+                               "futures_commission_per_contract": comm,
+                               "futures_slippage_ticks": 0.0, "overrides": {}}}
         none = {"type": "none"}
         L, _ = self._one_leg(sym, 1, "vol_parity", none, cfg, atr=atr)
         S, _ = self._one_leg(sym, -2, "vol_parity", none, cfg, atr=atr)
         assert L == S, (L, S)
 
+    def test_margin_bound_futures_shrink_by_margin_plus_commission(self):
+        """With commission, the futures short SKIPPED a margin-bound entry
+        instead of shrinking it (LONG 1800 / SHORT none, QA round 3 on #392),
+        and the two legs then disagreed on the shrink (1800 / 1900). Both now
+        take the largest count whose margin AND commission fit:
+        floor(100,000 / (50 + 2.50)) = 1904."""
+        cfg = {"instruments": {"default_asset_class": "equity",
+                               "futures_initial_margin_pct": 0.10,
+                               "futures_commission_per_contract": 2.50,
+                               "futures_slippage_ticks": 0.0, "overrides": {}}}
+        none = {"type": "none"}
+        L, _ = self._one_leg("MESM6", 1, "vol_parity", none, cfg, atr=0.2)
+        S, _ = self._one_leg("MESM6", -2, "vol_parity", none, cfg, atr=0.2)
+        assert (L, S) == (1904.0, 1904.0)
+
     def test_futures_short_registers_real_stop_risk(self):
-        """Two 5%-stop MES shorts at 200 contracts risk 5% of equity each. A 6%
-        cap must admit one. Registering the target_risk proxy instead (an
-        intermediate draft of #392's symmetry fix) admitted both -- 10% real
-        risk under a 6% cap."""
+        """A 5%-stop MES short at 200 contracts risks 5% of equity and must
+        REGISTER 5% for later entries. The follower is a futures long whose own
+        heat risk is the 2% proxy (#467), so the outcome turns only on what the
+        short registered: real 5% + 2% > 6% cap -> rejected; the target_risk
+        proxy 2% + 2% -> admitted. (QA round 3: the first version used a second
+        5%-stop short, which its own risk rejected either way, so registering
+        the proxy passed it.)"""
         from unittest.mock import patch
         import helpers.portfolio_simulations as ps
         idx = pd.bdate_range("2024-01-02", periods=6)
@@ -773,7 +795,12 @@ class TestShortSideHonoursTheSizingMethod:
                                "Close": 100.0, "Volume": 1_000_000}, index=idx)
             df["ATR_14"], df["ATR_14_pct"], df["RSI_14"] = 1.0, 0.01, 50.0
             df["SMA_200"] = df["Close"]
-            sig = pd.Series(0, index=idx); sig.iloc[0] = -2; sig.iloc[4] = -1
+            sig = pd.Series(0, index=idx)
+            if sym == "MESM6":
+                sig.iloc[0] = -2      # short first
+            else:
+                sig.iloc[1] = 1       # long follows, while the short is open
+            sig.iloc[4] = -1
             data[sym], sigs[sym] = df, sig
         cfg = {"position_sizing_method": "fixed", "target_risk_per_trade": 0.02,
                "max_portfolio_heat": 0.06, "max_pct_adv": 0.0,

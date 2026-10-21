@@ -1183,11 +1183,29 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         continue
                     # Registered for later entries' gates from the FINAL count
                     # (#317), as the long path does.
-                    _fs_new_risk = _fs_risk(shares)
                     _s_margin = _inst.margin_required(inst_se, shares, _s_entry_fill)
                     commission = _inst.commission(inst_se, shares)
                     if _s_margin + commission > cash - reserved_margin:
-                        continue
+                        # Shrink to the largest count whose margin + commission
+                        # fit -- the same step as the long's affordability
+                        # check -- rather than skip.
+                        # The clamp above sizes to free margin with no room for
+                        # commission, so once the non-fixed methods could reach
+                        # it every margin-bound short was dropped whenever
+                        # commission > 0 (vol_parity, $2.50/contract: LONG 1800,
+                        # SHORT none; adversarial QA round 3 on #392).
+                        _s_per = (_inst.margin_required(inst_se, 1, _s_entry_fill)
+                                  + _inst.commission(inst_se, 1))
+                        shares = (_inst.round_units(
+                            inst_se, (cash - reserved_margin) / _s_per)
+                            if _s_per > 0 else 0.0)
+                        if shares < 1:
+                            continue
+                        _s_margin = _inst.margin_required(inst_se, shares, _s_entry_fill)
+                        commission = _inst.commission(inst_se, shares)
+                        if _s_margin + commission > cash - reserved_margin:
+                            continue
+                    _fs_new_risk = _fs_risk(shares)
                     reserved_margin += _s_margin
                     cash -= commission
                     short_positions[symbol] = {
@@ -1767,8 +1785,16 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     _margin = _inst.margin_required(inst, shares, entry_price)
                     _free = cash - reserved_margin
                     if _margin + commission_cost > _free:
-                        _per = _inst.margin_required(inst, 1, entry_price)
-                        shares = _inst.round_units(inst, (_free - commission_cost) / _per) if _per > 0 else 0.0
+                        # Largest count whose margin AND commission fit:
+                        # floor(free / (margin_per + commission_per)). This
+                        # subtracted the commission of the OVERSIZED count
+                        # before dividing, so a size far past free margin was
+                        # cut further than it needed to be (MES vol_parity,
+                        # $2.50/contract: 1800 where 1904 fit). Fixed with the
+                        # short leg's identical step (#386, QA round 3).
+                        _per = (_inst.margin_required(inst, 1, entry_price)
+                                + _inst.commission(inst, 1))
+                        shares = _inst.round_units(inst, _free / _per) if _per > 0 else 0.0
                         commission_cost = _inst.commission(inst, shares)
                         _margin = _inst.margin_required(inst, shares, entry_price)
                     can_afford = shares >= 1 and (_margin + commission_cost) <= (cash - reserved_margin)
