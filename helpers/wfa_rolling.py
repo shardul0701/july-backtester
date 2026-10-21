@@ -119,7 +119,14 @@ def evaluate_rolling_wfa(
 
     pass_count   = 0
     scored_count = 0
-    is_start     = actual_start or fold_dates[0][0]
+    # An anchored layout begins its first OOS fold after the initial IS period.
+    # Recover that history when callers omit actual_start.
+    if actual_start is not None:
+        is_start = actual_start
+    elif equity_curve is not None and not equity_curve.empty:
+        is_start = equity_curve.index.min()
+    else:
+        is_start = min(pd.Timestamp(t["ExitDate"]).tz_localize(None) for t in trade_log)
 
     for oos_start, oos_end in fold_dates:
         # Convert fold boundary strings to pd.Timestamp for datetime handling
@@ -129,6 +136,10 @@ def evaluate_rolling_wfa(
         oos_end_ts = pd.Timestamp(oos_end)
         if oos_end_ts.tzinfo is not None:
             oos_end_ts = oos_end_ts.tz_localize(None)
+        # Internal boundaries are exclusive; actual_end is the inclusive last
+        # data day. Include its daily and intraday exits in the final fold.
+        if (oos_start, oos_end) == fold_dates[-1]:
+            oos_end_ts += pd.Timedelta(days=1)
 
         # Convert ExitDate strings to pd.Timestamp for comparison
         is_trades = []
@@ -145,13 +156,15 @@ def evaluate_rolling_wfa(
         if len(oos_trades) < min_fold_trades or len(is_trades) < min_fold_trades:
             continue  # insufficient IS or OOS data — skip this fold
 
-        scored_count += 1
         fold_result = _evaluate_wfa(
             is_trades, oos_trades, initial_capital,
             equity_curve=equity_curve,
             is_window=(is_start, oos_start),
-            oos_window=(oos_start, oos_end),
+            oos_window=(oos_start, oos_end_ts),
         )
+        if fold_result.get("wfa_verdict") == "N/A":
+            continue
+        scored_count += 1
         if fold_result.get("wfa_verdict") == "Pass":
             pass_count += 1
 

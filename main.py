@@ -1,6 +1,7 @@
 # main_portfolio.py (Cleaned up and fully refactored)
 
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 import logging
 import os
 import sys
@@ -82,7 +83,7 @@ intrabar_data_global = None
 # --------------------------------------------------------------------
 # --- WORKER INITIALIZER FOR MULTIPROCESSING ---
 # --------------------------------------------------------------------
-def init_worker(comparison_dfs_dict, benchmark_returns_dict, dependency_map_dict, portfolio_data_for_worker, delisting_dates_for_worker=None, pit_member_masks_dict=None, intrabar_data_for_worker=None):
+def init_worker(comparison_dfs_dict, benchmark_returns_dict, dependency_map_dict, portfolio_data_for_worker, delisting_dates_for_worker=None, pit_member_masks_dict=None, intrabar_data_for_worker=None, config_for_worker=None):
     """
     Initializer for the multiprocessing pool.
     Makes comparison ticker DataFrames, benchmark returns, dependency symbol map,
@@ -90,6 +91,13 @@ def init_worker(comparison_dfs_dict, benchmark_returns_dict, dependency_map_dict
     and optional intraday (sub-bar) data globally available to each worker process.
     """
     global comparison_dfs_global, benchmark_returns_global, dependency_map_global, portfolio_data_global, delisting_dates_global, pit_member_masks_global, intrabar_data_global
+    if config_for_worker is not None:
+        # Spawned workers import config.py afresh rather than inheriting CLI
+        # overrides. Update the shared dict in place so helpers see the same
+        # settings as main. Tasks still carry only small strategy metadata.
+        snapshot = dict(config_for_worker)
+        CONFIG.clear()
+        CONFIG.update(snapshot)
     comparison_dfs_global = comparison_dfs_dict
     benchmark_returns_global = benchmark_returns_dict
     dependency_map_global = dependency_map_dict
@@ -229,22 +237,27 @@ def _stop_label(stop_config):
     if stop_type == 'percentage':
         value = stop_config.get('value', 0.05)
         try:
-            return f"w/ {value:.0%} SL"
-        except (TypeError, ValueError):
+            percent = format((Decimal(str(value)) * 100).normalize(), 'f')
+            return f"w/ {percent}% SL"
+        except (InvalidOperation, TypeError, ValueError):
             return f"w/ {value} SL"
     if stop_type == 'atr':
         multiplier = stop_config.get('multiplier', 3.0)
         period = stop_config.get('period', 14)
-        return f"w/ {multiplier}x ATR({period}) SL"
+        cap = stop_config.get('point_cap')
+        extra = f" cap{cap}pt" if cap is not None else ""
+        return f"w/ {multiplier}x ATR({period}) SL{extra}"
     if stop_type == 'points':
         return f"w/ {stop_config.get('value', 0.0)}pt SL"
     if stop_type == 'signal_bar':
         return (f"w/ SigBar(b{stop_config.get('bars_back', 0)},"
                 f"buf{stop_config.get('buffer', 0.0)}) SL")
     if stop_type == 'trailing_atr':
+        extra = "".join(f" {key}={stop_config[key]}" for key in ('point_cap', 'floor')
+                        if stop_config.get(key) is not None)
         return (f"w/ TrailATR({stop_config.get('stop_mult', 1.0)}x,"
                 f"T{stop_config.get('t1_mult', 0.0)},"
-                f"tr{stop_config.get('trail_mult', 1.0)}) SL")
+                f"tr{stop_config.get('trail_mult', 1.0)}) SL{extra}")
     return ""
 
 
@@ -424,15 +437,8 @@ def run_single_simulation(args):
                 final_signals[symbol] = new_sig
         # --- END PIT SIGNAL GATING ---
 
-        # --- WARM-UP TRIM (#433) ---
-        # Frames were fetched from start_date - pit_warmup_days so indicators and
-        # signals above are warm on day one. Drop the warm-up bars now so no entry
-        # and no equity-timeline point can land before start_date (the timeline is
-        # built from the frames' indexes). No-op when nothing precedes start_date.
-        portfolio_data = {s_: _trim_to_start(d_, CONFIG["start_date"]) for s_, d_ in portfolio_data.items()}
-        final_signals = {s_: _trim_to_start(sg_, CONFIG["start_date"]) for s_, sg_ in final_signals.items()}
-        portfolio_data = {s_: d_ for s_, d_ in portfolio_data.items() if len(d_)}
-        final_signals = {s_: sg_ for s_, sg_ in final_signals.items() if s_ in portfolio_data}
+        # Preserve history for the first in-window open's prior signal, structural
+        # stop anchors and ADV. The engine restricts execution/timeline dates.
 
         # Call the simulation, passing the stop_config and using the global dataframes.
         result = run_portfolio_simulation(
@@ -440,6 +446,7 @@ def run_single_simulation(args):
             spy_df_local, vix_df_local, tnx_df_local, stop_config,
             delisting_dates=delisting_dates_global,
             intrabar_data=intrabar_data_global,
+            start_date=CONFIG["start_date"],
         )
         
         # Zero trades: run_portfolio_simulation returns None. Return a stub so the
@@ -506,7 +513,9 @@ def run_single_simulation(args):
                         if _np_state is not None:
                             np.random.set_state(_np_state)
                     legacy = analyze_mc_results(result, mc_sim_results)
-                    result.update(analyze_mc_results_v2(result, mc_sim_results, _mc_pnl, rng=_boot_rng))
+                    result.update(analyze_mc_results_v2(
+                        result, mc_sim_results, _mc_pnl, rng=_boot_rng,
+                        sampling=_eff_sampling, block_size=CONFIG.get("mc_block_size")))
                     result["mc_score_legacy"] = legacy["mc_score"]
                     result["mc_verdict_legacy"] = legacy["mc_verdict"]
                 else:
@@ -526,7 +535,7 @@ def run_single_simulation(args):
                     _is, _oos, result['initial_capital'],
                     equity_curve=result.get('portfolio_timeline'),
                     is_window=(spy_actual_start, wfa_split_date),
-                    oos_window=(wfa_split_date, spy_actual_end),
+                    oos_window=(wfa_split_date, pd.Timestamp(spy_actual_end) + pd.Timedelta(days=1)),
                 ))
             else:
                 result.update({'oos_pnl_pct': None, 'wfa_verdict': 'N/A'})
@@ -858,11 +867,18 @@ def main():
         benchmark_dfs = {}
 
         # Fetch all comparison tickers (benchmarks + dependencies)
+        _dependency_symbols = set(comparison_config["dependencies"].values())
+        _comparison_windows = {}
         for symbol in comparison_config["all_symbols"]:
             normalized = normalize_ticker(symbol, CONFIG["data_provider"])
-            df = data_fetcher(normalized, CONFIG["start_date"], CONFIG["end_date"], CONFIG)
+            fetch_start = (_warmup_fetch_start(CONFIG["start_date"], CONFIG)
+                           if symbol in _dependency_symbols else CONFIG["start_date"])
+            df = data_fetcher(normalized, fetch_start, CONFIG["end_date"], CONFIG)
             if df is not None and not df.empty:
                 comparison_dfs[symbol] = df
+                window = _trim_to_start(df, CONFIG["start_date"])
+                if not window.empty:
+                    _comparison_windows[symbol] = window
             else:
                 logger.warning(f"Failed to fetch data for comparison ticker '{symbol}' (normalized: '{normalized}')")
                 dep_warning = _dependency_warning_for_failed_fetch(symbol, comparison_config["dependencies"])
@@ -871,8 +887,8 @@ def main():
 
         # Derive actual data period from comparison ticker data if available,
         # otherwise fall back to config dates (valid when comparison_tickers = [])
-        if comparison_dfs:
-            spy_df = _pick_reference_df(comparison_dfs)
+        if _comparison_windows:
+            spy_df = _pick_reference_df(_comparison_windows)
             _spy_actual_start = spy_df.index.min().strftime("%Y-%m-%d")
             _spy_actual_end   = spy_df.index.max().strftime("%Y-%m-%d")
             logger.info("-" * 60)
@@ -890,8 +906,8 @@ def main():
         for bm in comparison_config["benchmarks"]:
             symbol = bm["symbol"]
             label = bm["label"]
-            if symbol in comparison_dfs:
-                df = comparison_dfs[symbol]
+            if symbol in _comparison_windows:
+                df = _comparison_windows[symbol]
                 bnh_return = (df['Close'].iloc[-1] - df['Close'].iloc[0]) / df['Close'].iloc[0]
                 benchmark_returns[label] = bnh_return
                 benchmark_dfs[label] = df
@@ -1344,8 +1360,8 @@ def main():
                           if CONFIG.get("intrabar_resolution", False) else None)
 
         # Pass comparison data, portfolio data, delisting dates, PIT masks, and
-        # optional intraday data during initialization
-        init_args = (comparison_dfs, benchmark_returns, comparison_config["dependencies"], portfolio_data, delisting_dates, _pit_member_masks, _intrabar_data)
+        # optional intraday data and the resolved runtime config at initialization.
+        init_args = (comparison_dfs, benchmark_returns, comparison_config["dependencies"], portfolio_data, delisting_dates, _pit_member_masks, _intrabar_data, dict(CONFIG))
 
         # _n_workers caps at the actual task count (not always cpu_count()): with
         # intrabar_resolution on, each worker gets its own pickled copy of the full

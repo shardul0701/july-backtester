@@ -258,7 +258,7 @@ def _is_entry_bar(signals, edge_masks, symbol, sig_date, entry_value):
     return bool(_sym_masks[entry_value].loc[sig_date])
 
 
-def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocation_pct, spy_df, vix_df, tnx_df, stop_config, size_mults=None, delisting_dates=None, intrabar_data=None):
+def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocation_pct, spy_df, vix_df, tnx_df, stop_config, size_mults=None, delisting_dates=None, intrabar_data=None, start_date=None):
     """
     Runs a portfolio simulation with integrated stop-loss handling and logs
     a rich set of features for each trade for future machine learning analysis.
@@ -269,6 +269,9 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
     delisting_dates : dict[str, str], optional
         {symbol: "YYYY-MM-DD"} mapping of delisting dates from helpers/survivorship.py.
         When provided, open positions are force-closed on delisting.
+    start_date : date-like, optional
+        First execution/timeline date. Earlier bars remain available for signal
+        timing, structural stops and prior-bar ADV, but are never simulated.
     """
     from helpers.timeframe_utils import get_bars_per_year, get_bars_per_day_exact
 
@@ -430,6 +433,15 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
     _short_margin_req = max(float(CONFIG.get("short_margin_requirement", 0.5) or 0.0), 0.0)
     positions = {}
     all_dates = sorted(list(set(date for df in portfolio_data.values() for date in df.index)))
+    if start_date is not None and all_dates:
+        _start = pd.Timestamp(start_date)
+        _tz = all_dates[0].tzinfo
+        _start = (_start.tz_localize(_tz) if _start.tzinfo is None
+                  else _start.tz_convert(_tz) if _tz is not None
+                  else _start.tz_localize(None))
+        all_dates = [dt for dt in all_dates if dt >= _start]
+    if not all_dates:
+        return None
     portfolio_timeline = pd.Series(index=all_dates, dtype=float)
     trade_log = []
     trade_counter = 0
@@ -576,9 +588,26 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
     # slot freed before any later sizing / heat decision (no phantom equity).
     _delist_on = bool(delisting_dates) and CONFIG.get("include_delisted", False)
     _delist_assumption = CONFIG.get("delisting_price_assumption", "last_close")
-    _delist_ts = ({sym: pd.Timestamp(d) for sym, d in delisting_dates.items()}
-                  if _delist_on else {})
+    _delist_ts = {}
+    if _delist_on:
+        _end_day = pd.Timestamp(CONFIG.get("end_date") or pd.Timestamp.now().date())
+        _end_day = _end_day.tz_localize(None).normalize()
+        for sym, value in delisting_dates.items():
+            if sym not in portfolio_data:
+                continue
+            ts = pd.Timestamp(value)
+            # A delisting known today must not be applied to an earlier backtest.
+            if ts.tz_localize(None).normalize() > _end_day:
+                continue
+            tz = portfolio_data[sym].index.tz
+            _delist_ts[sym] = (ts.tz_localize(tz) if ts.tzinfo is None
+                               else ts.tz_convert(tz) if tz is not None
+                               else ts.tz_localize(None))
     _delist_stats = {"n": 0, "loss": 0.0}
+
+    def _is_delisted(symbol, date):
+        dts = _delist_ts.get(symbol)
+        return dts is not None and date >= dts
 
     def _delist_exit_price(symbol, fallback_price, delisting_ts):
         if _delist_assumption == "zero":
@@ -1103,6 +1132,8 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
         for symbol, df in _short_items:
             if date not in df.index or symbol in positions or symbol in short_positions:
                 continue
+            if _is_delisted(symbol, date):
+                continue
             if (not _pit_flag(symbol, date, '_pit_member', True)
                     or _pit_flag(symbol, date, '_pit_force_exit', False)):
                 continue
@@ -1296,6 +1327,12 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     if alloc <= 1e-9 * max(total_equity, 1.0):
                         continue
                     shares = alloc / _s_entry_fill
+                    if _short_margin_req > 0:
+                        # Collateral and entry commission consume the same buying
+                        # power; reserving all cash and then charging commission
+                        # otherwise leaves a negative available balance.
+                        shares = min(shares, _s_bp / (
+                            _s_entry_fill * _short_margin_req + _inst.commission(inst_se, 1.0)))
 
                     # Portfolio heat gate (mirror of the long path). Fall back to
                     # target_risk_per_trade for the stop-distance proxy like the
@@ -1381,6 +1418,13 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         _cov0 = _coarse_stop_fill(
                             _spos0['stop_loss_level'], df.loc[date].get('Open'),
                             "short", _stop_gap_mode(stop_config, _spos0))
+                        if _intrabar_on and symbol in intrabar_data:
+                            _bars0 = _intrabar.window_bars(intrabar_data[symbol], date,
+                                                          next_trading_dates[symbol].get(date))
+                            _refined0, _ = _intrabar.resolve_stop_fill(
+                                _bars0, _spos0['stop_loss_level'], side="short")
+                            if _refined0 is not None:
+                                _cov0 = _refined0
                         _close_short_now(symbol, _spos0, date, _cov0, f"Stop Loss ({stop_config['type']})")
                         del short_positions[symbol]
 
@@ -1417,6 +1461,8 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
             # enters the long (same-bar stop/margin/PIT covers also free the
             # symbol before this loop, so a 1 that bar can enter).
             if symbol in positions or symbol in short_positions: continue
+            if _is_delisted(symbol, date):
+                continue
             if (not _pit_flag(symbol, date, '_pit_member', True)
                     or _pit_flag(symbol, date, '_pit_force_exit', False)):
                 continue
@@ -1962,6 +2008,13 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                             _fill0 = _coarse_stop_fill(
                                 _pos0['stop_loss_level'], df.loc[date].get('Open'),
                                 "long", _stop_gap_mode(stop_config, _pos0))
+                            if _intrabar_on and symbol in intrabar_data:
+                                _bars0 = _intrabar.window_bars(intrabar_data[symbol], date,
+                                                              next_trading_dates[symbol].get(date))
+                                _refined0, _ = _intrabar.resolve_stop_fill(
+                                    _bars0, _pos0['stop_loss_level'], side="long")
+                                if _refined0 is not None:
+                                    _fill0 = _refined0
                             _close_long_now(symbol, _pos0, date, _fill0, f"Stop Loss ({stop_config['type']})")
                             del positions[symbol]
 
@@ -2005,7 +2058,8 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
             if _mtm is not None and pd.notna(portfolio_timeline.loc[_last_loop_date]):
                 _sign = -1 if _is_short else 1
                 portfolio_timeline.loc[_last_loop_date] += (
-                    _sign * pos['shares'] * (exit_price - _mtm) * instruments[symbol].point_value)
+                    _sign * pos['shares'] * (exit_price - _mtm) * instruments[symbol].point_value
+                    - _inst.commission(instruments[symbol], pos['shares']))
             if _is_short:
                 del short_positions[symbol]
             else:
