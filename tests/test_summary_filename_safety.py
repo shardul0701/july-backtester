@@ -128,6 +128,28 @@ class TestCallSitesWriteLegalPaths:
         path = main._correlation_csv_path("run", "Nasdaq: PIT")
         assert os.path.basename(path) == "Nasdaq__PIT_strategy_correlation.csv"
 
+    def test_main_builds_the_correlation_path_only_through_the_helper(self):
+        """The helper test above cannot see main() inlining the old expression
+        (QA round 2 on #404: that mutant passed 268 tests). main() is too heavy
+        to drive here, so pin it structurally: the filename suffix may appear
+        only inside _correlation_csv_path, and main() must call it."""
+        import ast
+        import inspect
+        import main
+        tree = ast.parse(inspect.getsource(main))
+        owners = []
+        for fn in ast.walk(tree):
+            if isinstance(fn, ast.FunctionDef):
+                for n in ast.walk(fn):
+                    if (isinstance(n, ast.Constant) and isinstance(n.value, str)
+                            and "_strategy_correlation.csv" in n.value):
+                        owners.append(fn.name)
+        assert set(owners) == {"_correlation_csv_path"}, owners
+        main_fn = next(f for f in ast.walk(tree)
+                       if isinstance(f, ast.FunctionDef) and f.name == "main")
+        assert any(isinstance(n, ast.Call) and getattr(n.func, "id", None)
+                   == "_correlation_csv_path" for n in ast.walk(main_fn))
+
     def test_generate_per_portfolio_summary_analyzer_csvs(self, tmp_path, monkeypatch):
         from helpers.summary import generate_per_portfolio_summary
         monkeypatch.chdir(tmp_path)
