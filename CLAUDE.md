@@ -617,10 +617,11 @@ A short, wide banner figure (`figsize=(10, 3), dpi=150`) that shows the full dra
   | `sensitivity_sweep_min_val` | `2` | Floor prevents e.g. SMA period = 0 |
 
 - **Strategy naming convention**: when enabled, each variant is named `StrategyName [(base)]` for the base params and `StrategyName [fast=16]` for changed keys. Only changed keys appear in the label.
+- **Grouping (#435)**: `generate_sensitivity_report` computes one verdict per `(Portfolio, base_strategy, stop_label)` and prints portfolio and stop label in each group header, so variants are never pooled across portfolios or stop configs. Row labels and the base marker come from the result's structured `param_label` (`"(base)"` or `label_for_params` output), not from parsing `Strategy`; results lacking the `base_strategy`/`param_label` keys fall back to string parsing. Zero-trade/errored stubs stay in the denominator as not profitable.
 - **Fragility threshold**: `< 30%` of variants profitable → `*** FRAGILE ***` printed in the sensitivity report. ≥ 30% → `Robust`.
 - **Performance note**: 2 params × `steps=2` produces 25 grid points (5² cartesian). Keep disabled for normal runs; enable only for targeted fragility checks.
 - **No-regression guarantee**: when `sensitivity_sweep_enabled: False` (default), `param_variants = [base_params]` — identical to pre-sweep behaviour. The existing task-building loop runs exactly as before.
-- **Tests**: `tests/test_sensitivity.py` — covers `build_param_grid` (12 tests), `label_for_params`, and the no-regression default path.
+- **Tests**: `tests/test_sensitivity.py` — covers `build_param_grid` (12 tests), `label_for_params`, the no-regression default path, and report grouping.
 
 ## Rolling Sharpe (126-Day)
 
