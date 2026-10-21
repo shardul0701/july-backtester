@@ -555,8 +555,11 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                 current_market_value += _inst.unrealized_pnl(
                     instruments[symbol], spos['shares'], spos['entry_price'], cur, side="short")
 
+        # Start-of-bar equity: drives sizing and heat decisions this iteration.
+        # The RECORDED timeline point is taken at the end of the bar (issue #438)
+        # so it reflects this bar's fills; this value must stay as-is so share
+        # counts do not change.
         total_equity = cash + current_market_value
-        portfolio_timeline[date] = total_equity
 
         # --- POSITION MANAGEMENT (EXITS) ---
         exited_symbols = []
@@ -1819,6 +1822,23 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                                 "long", _stop_gap_mode(stop_config, _pos0))
                             _close_long_now(symbol, _pos0, date, _fill0, f"Stop Loss ({stop_config['type']})")
                             del positions[symbol]
+
+        # --- END-OF-BAR EQUITY SNAPSHOT (issue #438) ---
+        # Recorded after exits, borrow debit, covers and entries so a position
+        # sold/stopped at today's open shows its realised proceeds today, and one
+        # bought today is valued at today's Close. Same-bar round trips
+        # (_close_*_now) are already out of `positions` / in `cash` here.
+        _eob_mv = 0.0
+        for symbol, pos in positions.items():
+            close_price = _mtm_close(portfolio_data[symbol], date)
+            if close_price is not None:
+                _eob_mv += _equity_contribution(instruments[symbol], pos, close_price, side="long")
+        for symbol, spos in short_positions.items():
+            cur = _mtm_close(portfolio_data[symbol], date)
+            if cur is not None:
+                _eob_mv += _inst.unrealized_pnl(
+                    instruments[symbol], spos['shares'], spos['entry_price'], cur, side="short")
+        portfolio_timeline[date] = cash + _eob_mv
 
     exclude_open = CONFIG.get('exclude_open_positions', False)
 
