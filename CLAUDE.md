@@ -27,7 +27,8 @@ helpers/indicators.py              # All strategy signal logic — do not touch
 helpers/registry.py                # Strategy registry: register_strategy decorator, load_strategies, get_active_strategies
 helpers/simulations.py             # Single-asset trade simulation engine
 helpers/portfolio_simulations.py   # Multi-asset portfolio simulation engine
-helpers/monte_carlo.py             # Monte Carlo robustness scoring
+helpers/monte_carlo.py             # Monte Carlo resampling (Do-Not-Touch); legacy scoring kept for mc_score_legacy
+helpers/mc_scoring.py              # MC scoring v2 (analyze_mc_results_v2): bootstrap edge test + closed-trade DD realism
 helpers/summary.py                 # Report generation, S3 upload; dynamic benchmark columns via _build_benchmark_columns(); _get_t1_cols()/_get_t2_cols()/_T3_COLS/_VERBOSE_SHORT_NAMES control tiered table layout; _print_table() handles all bordered terminal output
 helpers/wfa.py                     # Walk-Forward Analysis (get_split_date, split_trades, evaluate_wfa)
 helpers/wfa_rolling.py             # Rolling multi-fold WFA (get_fold_dates, evaluate_rolling_wfa)
@@ -889,3 +890,18 @@ In `helpers/summary.py::generate_per_portfolio_summary()`, Step 4b's `save_only_
 **Fix**: after Step 2 produces the filtered `display_df`, capture `passed_display_filter = set(display_df['Strategy'].tolist())`. Step 4b now filters via `[r for r in portfolio_results if r['Strategy'] in passed_display_filter]` — no DataFrame rebuild needed.
 
 **Regression tests**: `tests/test_save_filtered_trades.py::TestSaveOnlyFilteredTrades` — three tests confirm `save_trades_to_csv` is called exactly once (the passing strategy) when `save_only_filtered_trades=True` and one result fails `min_pandl_to_show_in_summary`, and called twice when the flag is `False`.
+
+## MC Scoring v2 (#429)
+
+`helpers/mc_scoring.py::analyze_mc_results_v2` produces `mc_score` / `mc_verdict` (range -4..5, "Robust" = no flags). The legacy `analyze_mc_results` (helpers/monte_carlo.py, unchanged) still runs and is kept in `mc_score_legacy` / `mc_verdict_legacy` for one release.
+
+| Test | Pass | Fail | Flag |
+| --- | --- | --- | --- |
+| Edge: one-sided bootstrap p-value of mean trade P&L (resampling demeaned P&L) | p < 0.05: +2 | -1 | `No Significant Edge` |
+| DD realism: closed-trade historical DD >= MC median DD (both closed-trade, chronological ExitDate order) | +1 | -1 | `DD Understated` |
+| Tail risk (unchanged): MC 95th pct DD | <50%: +2 | <80%: -1; else -2 | `Moderate/High Tail Risk` |
+
+- The legacy "historical >= 5th percentile" test was near-tautological (passed ~100% of zero-edge strategies); the legacy DD test compared daily-MTM drawdown to a closed-trade distribution.
+- `main.py` sorts trades by `ExitDate` before MC and scoring (end-of-backtest/delisting closes are appended after the loop). Extra result keys: `mc_edge_pvalue`, `mc_closed_trade_dd`.
+- Functions accept an optional numpy `rng` (Generator) for deterministic seeding.
+- Tests: `tests/test_mc_scoring.py`.

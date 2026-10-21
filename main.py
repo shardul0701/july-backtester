@@ -17,6 +17,7 @@ from helpers.llm_verdict import generate_llm_verdict
 from helpers.sensitivity import build_param_grid, is_sweep_enabled, label_for_params
 from helpers.correlation import run_correlation_analysis, DEFAULT_THRESHOLD
 from helpers.monte_carlo import run_monte_carlo_simulation, analyze_mc_results
+from helpers.mc_scoring import analyze_mc_results_v2
 from tqdm import tqdm
 from multiprocessing import Pool, cpu_count
 import orjson
@@ -330,16 +331,27 @@ def run_single_simulation(args):
                     _eff_sampling = _rms(CONFIG.get("mc_sampling", "iid"), _mc_profile)
                     result["mc_sampling_effective"] = _eff_sampling
                     _saved_sampling = CONFIG.get("mc_sampling", "iid")
+                    # Chronological ExitDate order: end-of-backtest / delisting closes
+                    # are appended after the loop, and block-bootstrap + the closed-
+                    # trade DD comparison both depend on true exit order (#429).
+                    _tl = result.get('trade_log') or []
+                    if _tl and len(_tl) == len(result['trade_pnl_list']):
+                        _order = sorted(range(len(_tl)), key=lambda i: pd.Timestamp(_tl[i]['ExitDate']))
+                        _mc_pnl = [_tl[i]['Profit'] for i in _order]
+                    else:
+                        _mc_pnl = list(result['trade_pnl_list'])
                     try:
                         CONFIG["mc_sampling"] = _eff_sampling
                         mc_sim_results = run_monte_carlo_simulation(
-                            result['trade_pnl_list'], initial_equity=result['initial_capital'],
+                            _mc_pnl, initial_equity=result['initial_capital'],
                             num_simulations=CONFIG["num_mc_simulations"]
                         )
                     finally:
                         CONFIG["mc_sampling"] = _saved_sampling
-                    mc_analysis = analyze_mc_results(result, mc_sim_results)
-                    result.update(mc_analysis)
+                    legacy = analyze_mc_results(result, mc_sim_results)
+                    result.update(analyze_mc_results_v2(result, mc_sim_results, _mc_pnl))
+                    result["mc_score_legacy"] = legacy["mc_score"]
+                    result["mc_verdict_legacy"] = legacy["mc_verdict"]
                 else:
                     result.update({"mc_verdict": "N/A (few trades)", "mc_score": -999})
             else:
