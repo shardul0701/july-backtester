@@ -421,6 +421,10 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
 
     cash = initial_capital
     reserved_margin = 0.0  # initial margin reserved by open futures positions (buying-power)
+    # Collateral reserved by open EQUITY shorts (#430): a constraint on new entries,
+    # not a cash debit (total_equity stays cash + MTM). Released on every cover path.
+    reserved_short_collateral = 0.0
+    _short_margin_req = max(float(CONFIG.get("short_margin_requirement", 0.5) or 0.0), 0.0)
     positions = {}
     all_dates = sorted(list(set(date for df in portfolio_data.values() for date in df.index)))
     portfolio_timeline = pd.Series(index=all_dates, dtype=float)
@@ -495,7 +499,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
     def _close_short_now(symbol, spos, exit_date, raw_cover_price, cover_reason):
         """Cover a short position immediately — mirror of ``_close_long_now``
         for the opt-in entry-bar intrabar-parity check on the short side."""
-        nonlocal cash, reserved_margin, trade_counter
+        nonlocal cash, reserved_margin, reserved_short_collateral, trade_counter
         inst_c = instruments[symbol]
         cover_slip = _inst.apply_slippage(inst_c, raw_cover_price, "buy")
         # Cover-leg market impact (mirror of the strategy-cover path, #312 QA).
@@ -513,6 +517,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
         cash += _gross - commission
         if inst_c.margin_mode == _inst.INITIAL_MARGIN:
             reserved_margin -= spos.get('margin', 0.0)
+        reserved_short_collateral = max(reserved_short_collateral - spos.get('collateral', 0.0), 0.0)
         trade_counter += 1
         short_trade_df = portfolio_data[symbol].loc[spos['entry_date']:exit_date]
         if not short_trade_df.empty:
@@ -940,6 +945,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
             cash += _gross - commission
             if inst_c.margin_mode == _inst.INITIAL_MARGIN:
                 reserved_margin -= spos.get('margin', 0.0)
+            reserved_short_collateral = max(reserved_short_collateral - spos.get('collateral', 0.0), 0.0)
             trade_counter += 1
             # MAE/MFE for shorts: favorable = price drops, adverse = price rises
             short_trade_df = portfolio_data[symbol].loc[spos['entry_date']:date]
@@ -1178,8 +1184,14 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     # computed from it above; the slipped/impacted price is only
                     # the realized fill used for notional / P&L accounting.
                     _s_entry_fill = _inst.apply_slippage(inst_se, ep, "sell")
-                    alloc = min(total_equity * allocation_pct, cash)
-                    if alloc <= 0:
+                    # Buying power: cash net of collateral held by open shorts (#430).
+                    # Size so the collateral this short needs also fits in it.
+                    _s_bp = cash - reserved_short_collateral
+                    alloc = min(total_equity * allocation_pct,
+                                _s_bp / _short_margin_req if _short_margin_req > 0 else _s_bp)
+                    # Dust guard: float residue after the last admissible short must
+                    # not open a ~zero-size position.
+                    if alloc <= 1e-9 * max(total_equity, 1.0):
                         continue
                     shares = alloc / _s_entry_fill
 
@@ -1224,13 +1236,16 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         continue
                     commission = _inst.commission(inst_se, shares)
                     cash -= commission   # proceeds and collateral cancel; only commission is a real cash cost
+                    # Reserve collateral off the FINAL (post-ADV-cap) notional (#430).
+                    _s_collateral = shares * _s_entry_fill * _short_margin_req
+                    reserved_short_collateral += _s_collateral
                     # Recompute registered heat risk from the FINAL post-ADV-cap
                     # share count (#317), mirroring the long path.
                     _s_new_risk = _inst.notional(inst_se, shares, _s_entry_fill) * _s_stop_dist
                     short_positions[symbol] = {
                         'entry_date': date, 'entry_price': _s_entry_fill, 'raw_entry_price': ep,
                         'shares': shares, 'notional': shares * _s_entry_fill, 'total_borrow_cost': 0.0,
-                        'margin': 0.0,
+                        'margin': 0.0, 'collateral': _s_collateral,
                         'stop_loss_level': _s_stop, 'initial_stop_loss_level': _s_stop,
                         'trail_target': _s_target, 'atr_locked': _s_atr,
                         'trail_anchor': _s_trail_anchor,
@@ -1313,7 +1328,11 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
 
             entry_price = _inst.apply_slippage(instruments[symbol], raw_entry_price, "buy")
 
-            if entry_price > 0 and cash > 0:
+            # Equity buying power nets out collateral held by open shorts (#430);
+            # futures buying power is governed by reserved_margin instead.
+            _bp = cash - (0.0 if instruments[symbol].margin_mode == _inst.INITIAL_MARGIN
+                          else reserved_short_collateral)
+            if entry_price > 0 and _bp > 0:
                 # --- PER-SIGNAL SIZE MULTIPLIER ---
                 # Apply per-signal size multiplier when the strategy provides one
                 # (e.g. 0.6x / 0.8x / 1.0x based on ML probability band). Multiplied
@@ -1535,8 +1554,8 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                 # Cash constraint (equity full-notional pre-clamp; futures clamp on margin below)
                 if inst.margin_mode != _inst.INITIAL_MARGIN:
                     capital_needed = _inst.margin_required(inst, shares, entry_price)
-                    if capital_needed > cash:
-                        shares = cash / entry_price
+                    if capital_needed > _bp:
+                        shares = _bp / entry_price
 
                 # --- VOLUME-BASED LIQUIDITY FILTER ---
                 max_pct_adv = CONFIG.get('max_pct_adv') or 0
@@ -1578,13 +1597,13 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                 else:
                     # Equity cash_full: full notional + commission debited from cash.
                     total_cost = _inst.margin_required(inst, shares, entry_price) + commission_cost
-                    if total_cost > cash:
+                    if total_cost > _bp:
                         # Robustly calculate the absolute maximum number of shares we can possibly afford
-                        shares = cash / (entry_price + CONFIG['commission_per_share'])
+                        shares = _bp / (entry_price + CONFIG['commission_per_share'])
                         if shares <= 0: continue  # Cannot afford even a fraction of a share
                         # Recalculate final total cost with the affordable share size
                         total_cost = (shares * entry_price) + (shares * CONFIG['commission_per_share'])
-                    can_afford = cash >= total_cost and shares > 0.001
+                    can_afford = _bp >= total_cost and shares > 0.001
 
                 # Final check: Ensure we can afford the trade and it's a meaningful size
                 if can_afford:

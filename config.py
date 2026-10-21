@@ -166,6 +166,12 @@ CONFIG = {
     # SECTION 17: SHORT SELLING BORROW COST
     # ============================================================
     "htb_rate_annual": 0.0,         # 0.0 = disabled (long-only default); set to e.g. 0.02 for short strategies
+    # Equity short buying power (#430): each open equity short reserves
+    # notional * this fraction of cash as collateral, released on cover. New
+    # entries (long or short) can only use cash minus the reserved collateral,
+    # so 0.5 with allocation_per_trade=0.10 caps the short book near 2x gross.
+    # 0.0 = legacy behaviour (shorts reserve nothing; unbounded gross leverage).
+    "short_margin_requirement": 0.5,
 
     # ============================================================
     # SECTION 18: MONTE CARLO SAMPLING
