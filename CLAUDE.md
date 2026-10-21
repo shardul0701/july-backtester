@@ -140,6 +140,7 @@ Both failures are **silent**: `gh` exits 0 and prints a URL. Nothing tells you t
 "short_margin_requirement": 0.5  # equity short collateral as fraction of notional, reserved from buying power (#430); 0.0 = legacy unbounded shorts
 "mc_sampling": "iid"             # "iid" = independent; "block" = block-bootstrap; "auto" = block for concentrated_futures profile else iid
 "mc_block_size": None            # block size for block-bootstrap; None = auto floor(sqrt(N))
+"random_seed": None              # None = unseeded (legacy); int (e.g. 42) = reproducible MC, bootstrap p-value and noise injection (#439); CLI: --seed
 "smoothness_profile": "auto"     # smoothness-verdict thresholds: "auto"|"equity"|"concentrated_futures"
 "volume_impact_coeff": 0.0       # square-root market impact coefficient; 0.0 = disabled
 "stop_gap_fill": "open"          # "open" = stop gapped through fills at the bar Open (min/max with stop); "level" = legacy fill at stop level (#425)
@@ -713,16 +714,18 @@ Interactive four-step wizard for first-time setup. Writes `config_starter.py` to
 
 ## MC Block-Bootstrap
 
-Controlled by two config keys (SECTION 18):
+Controlled by config keys in SECTION 18:
 
 | Key | Default | Description |
 | --- | --- | --- |
+| `random_seed` | `None` | `None` = unseeded (legacy). An int makes MC scores, the `mc_edge_pvalue` bootstrap and noise injection reproducible (see "Reproducible randomness" below) |
 | `mc_sampling` | `"iid"` | `"iid"` = independent resampling (original behaviour); `"block"` = block-bootstrap; `"auto"` = block for a `concentrated_futures` smoothness profile, else iid |
 | `mc_block_size` | `None` | Trades per block. `None` = auto: `floor(sqrt(N))` (Politis-Romano rule of thumb) |
 
 - **`"iid"` (default)**: trades are resampled independently, each with equal probability. Fast and statistically clean for strategies with no autocorrelation.
 - **`"block"`**: consecutive blocks of `block_size` trades are sampled as a unit, preserving win/loss streaks and regime clustering. Use when the strategy shows known regime dependency (e.g., consistently loses only during bear markets / high-VIX periods identified by the Regime Heatmap).
 - **`"auto"` (issue #243)**: resolved per strategy in `main.py::run_single_simulation` via `helpers.smoothness_profiles.resolve_mc_sampling` — a `concentrated_futures` profile (single-instrument regime-dependent strategy, e.g. Sleeve A) gets `"block"`, everything else `"iid"`. This calibrates the MC **"DD-Understated"** verdict, which i.i.d. resampling structurally trips for that strategy class. Applied via a **scoped `CONFIG["mc_sampling"]` override** (restored in a `finally`) around the MC call — `helpers/monte_carlo.py` is Do-Not-Touch, so the effective method is chosen at the caller. The effective value is stored on the result as `mc_sampling_effective` and feeds `mc_sampling_caveat` (so the "consider block" note stays silent once block is actually used). Default stays `"iid"` → opt-in, no change to existing runs.
+- **Reproducible randomness (#439)**: with `random_seed` set, `run_single_simulation` seeds the process-global `np.random` right before `run_monte_carlo_simulation` (Do-Not-Touch module) with `helpers.rng.derive_seed(seed, portfolio, strat_name, "mc")` (crc32) and restores the prior global state afterwards; the `analyze_mc_results_v2` bootstrap gets `np.random.default_rng(derive_seed(seed, portfolio, strat_name, "boot"))`; `inject_price_noise(df, pct, rng=)` gets `default_rng(derive_seed(seed, "noise", symbol))`. Seeds depend only on labels, never on worker/fork state, so results are identical across runs and `max_workers`. `None` = legacy unseeded behaviour (forked workers may share RNG state). Recommended for reproducible runs: `42` / `--seed 42`.
 - **Auto block size**: `max(1, int(N ** 0.5))`. For 100 trades → blocks of 10; for 400 trades → blocks of 20.
 - **Circular wrap**: blocks that extend past the end of the trade list wrap around — no trades are omitted and edge blocks are not under-represented.
 - **No caller changes**: `run_monte_carlo_simulation` signature is unchanged. The refactor extracted a `_equity_and_drawdown` helper used by both branches.

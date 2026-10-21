@@ -239,6 +239,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--mc-sampling", dest="mc_sampling", metavar="METHOD",
         help="MC resampling method: iid | block",
     )
+    parser.add_argument(
+        "--seed", dest="random_seed", type=int, metavar="INT",
+        help="Random seed for reproducible MC / noise injection. Omit = unseeded",
+    )
 
     # ---- WFA ----
     parser.add_argument(
@@ -311,7 +315,7 @@ _DIRECT_KEYS = [
     "htb_rate_annual", "max_pct_adv", "volume_impact_coeff",
     "min_pandl_to_show_in_summary", "max_acceptable_drawdown",
     "mc_score_min_to_show_in_summary", "min_performance_vs_spy",
-    "num_mc_simulations", "min_trades_for_mc", "mc_sampling",
+    "num_mc_simulations", "min_trades_for_mc", "mc_sampling", "random_seed",
     "save_individual_trades", "save_only_filtered_trades",
     "noise_injection_pct", "rolling_sharpe_window",
     "export_ml_features", "upload_to_s3", "max_workers",
@@ -599,6 +603,13 @@ _SECTIONS: list[tuple[str, str, list[dict]]] = [
             "desc": "Resampling method. iid = independent. block = preserves streaks/regimes.",
             "options": "iid | block",
             "example": "python main.py --mc-sampling block",
+        },
+        {
+            "flag": "--seed <int>",
+            "config_key": "random_seed",
+            "desc": "Seed MC resampling, bootstrap p-value and noise injection for reproducible runs.",
+            "options": None,
+            "example": "python main.py --seed 42",
         },
     ]),
     ("wfa", "WALK-FORWARD ANALYSIS", [

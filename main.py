@@ -24,6 +24,7 @@ from multiprocessing import Pool, cpu_count
 import orjson
 from helpers.caching import CACHE_DIR
 from helpers.noise import inject_price_noise
+from helpers.rng import derive_seed
 
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -481,6 +482,19 @@ def run_single_simulation(args):
                         _mc_pnl = [_tl[i]['Profit'] for i in _order]
                     else:
                         _mc_pnl = list(result['trade_pnl_list'])
+                    # random_seed (#439): per-task seeds from the final unique strat_name +
+                    # portfolio, so draws are reproducible and independent of worker
+                    # assignment. monte_carlo.py (Do-Not-Touch) draws from the process-global
+                    # np.random, so seed that immediately before the call and restore the
+                    # prior state afterwards (no fixed state leaks into other code paths).
+                    # None = legacy unseeded behaviour, untouched.
+                    _rseed = CONFIG.get("random_seed")
+                    _boot_rng = None
+                    _np_state = None
+                    if _rseed is not None:
+                        _np_state = np.random.get_state()
+                        np.random.seed(derive_seed(_rseed, portfolio_name, strat_name, "mc"))
+                        _boot_rng = np.random.default_rng(derive_seed(_rseed, portfolio_name, strat_name, "boot"))
                     try:
                         CONFIG["mc_sampling"] = _eff_sampling
                         mc_sim_results = run_monte_carlo_simulation(
@@ -489,8 +503,10 @@ def run_single_simulation(args):
                         )
                     finally:
                         CONFIG["mc_sampling"] = _saved_sampling
+                        if _np_state is not None:
+                            np.random.set_state(_np_state)
                     legacy = analyze_mc_results(result, mc_sim_results)
-                    result.update(analyze_mc_results_v2(result, mc_sim_results, _mc_pnl))
+                    result.update(analyze_mc_results_v2(result, mc_sim_results, _mc_pnl, rng=_boot_rng))
                     result["mc_score_legacy"] = legacy["mc_score"]
                     result["mc_verdict_legacy"] = legacy["mc_verdict"]
                 else:
@@ -1078,7 +1094,10 @@ def main():
                 # --- NOISE INJECTION (stress test) ---
                 _noise_pct = CONFIG.get("noise_injection_pct", 0.0)
                 if _noise_pct > 0:
-                    df_noisy = inject_price_noise(df, _noise_pct)
+                    _nseed = CONFIG.get("random_seed")
+                    _noise_rng = (np.random.default_rng(derive_seed(_nseed, "noise", symbol))
+                                  if _nseed is not None else None)
+                    df_noisy = inject_price_noise(df, _noise_pct, rng=_noise_rng)
                     if not noise_data_saved:
                         _sample_clean = df[["Open", "High", "Low", "Close"]].tail(30).copy()
                         _sample_noisy = df_noisy[["Open", "High", "Low", "Close"]].tail(30).copy()

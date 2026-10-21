@@ -183,6 +183,10 @@ CONFIG = {
                                     # profile, else iid (calibrates the MC "DD-Understated"
                                     # verdict for single-instrument regime-dependent strategies)
     "mc_block_size": None,          # None = auto floor(sqrt(N))
+    "random_seed": None,            # None = unseeded (legacy: MC / bootstrap p-value / noise differ
+                                    # run to run). An int (e.g. 42) makes MC scores, the edge p-value
+                                    # and noise injection reproducible; seeds are derived per
+                                    # portfolio+strategy / symbol, independent of worker assignment (#439)
 
     # ============================================================
     # SECTION 18b: CURVE-SMOOTHNESS VERDICT PROFILE
