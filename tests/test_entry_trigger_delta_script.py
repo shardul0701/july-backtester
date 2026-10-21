@@ -1,4 +1,4 @@
-"""scripts/entry_trigger_delta.py must never tag a private strategy public.
+"""Delta-runner call contract and private-strategy source classification.
 
 The report it writes is committed to the PUBLIC repo with --hide-private, so a
 mistag publishes a private strategy's name. The first version tagged by module
@@ -66,3 +66,42 @@ def test_load_strats_restores_the_strategies_filter():
         assert C.CONFIG["strategies"] == ["Some Subset"]
     finally:
         C.CONFIG["strategies"] = before
+
+
+def test_ticker_dependent_signals_cover_each_symbol_and_report_real_failures():
+    import pandas as pd
+    D = _script()
+    dates = pd.date_range("2024-01-02", periods=3)
+    data = {s: pd.DataFrame({"Close": [10., 11., 12.]}, index=dates)
+            for s in ("AAA", "BBB", "BROKEN")}
+
+    def logic(df, **kwargs):
+        symbol = kwargs["symbol"]
+        if symbol == "BROKEN":
+            raise ValueError("unavailable events")
+        df["Signal"] = [1, 0, -1] if symbol == "AAA" else [0, 1, -1]
+        return df
+
+    signals, failed = D.signals_for({"logic": logic}, data, None, None)
+    assert failed == ["BROKEN:ValueError"]
+    assert set(signals) == {"AAA", "BBB"}
+    assert signals["AAA"].tolist() == [1, 0, -1]
+    assert signals["BBB"].tolist() == [0, 1, -1]
+    assert all("Signal" not in df for df in data.values())
+
+
+def test_strategy_params_override_injected_kwargs_like_the_pipeline():
+    import pandas as pd
+    D = _script()
+    frame = pd.DataFrame({"Close": [10.]})
+
+    def logic(df, **kwargs):
+        assert kwargs["symbol"] == "OVERRIDE"
+        assert kwargs["spy_df"] == "custom benchmark"
+        return pd.Series([1], index=df.index)
+
+    meta = {"logic": logic, "dependencies": ["spy"],
+            "params": {"symbol": "OVERRIDE", "spy_df": "custom benchmark"}}
+    signals, failed = D.signals_for(meta, {"AAA": frame}, frame, None)
+    assert failed == []
+    assert signals["AAA"].tolist() == [1]

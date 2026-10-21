@@ -96,11 +96,14 @@ def signals_for(meta, data, spy, vix):
     deps = meta.get("dependencies") or []
     for sym, df in data.items():
         try:
-            kw = dict(meta.get("params") or {})
+            # Match main.run_single_simulation: inject the ticker and
+            # dependencies first, then let explicit strategy params override.
+            kw = {"symbol": sym}
             if "spy" in deps:
                 kw["spy_df"] = spy
             if "vix" in deps:
                 kw["vix_df"] = vix
+            kw.update(meta.get("params") or {})
             r = meta["logic"](df.copy(), **kw)
             s = r["Signal"] if isinstance(r, pd.DataFrame) and "Signal" in r else r
             sigs[sym] = pd.Series(s).reindex(df.index).fillna(0)
