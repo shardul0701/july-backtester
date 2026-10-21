@@ -247,10 +247,14 @@ CONFIG = {
     #     a late entry frees the capital that entry would have consumed, and
     #     that capital goes to whatever else is competing on the bar — so a
     #     surviving trade can change SIZE, and a symbol can end up with MORE
-    #     trades than level mode gave it. Measured over 80 randomised contested
-    #     books (5 symbols x 120 bars): 20 of the 80 had at least one symbol
-    #     trading more often under edge (25 of 400 book-symbol cells), while
-    #     book totals fell 1564 -> 1434. Net subtraction, but not a filter.
+    #     trades than level mode gave it. On the docs/ENTRY_TRIGGER_DELTA.md
+    #     book (30 large caps, 2018-2026) that happened for 1 strategy of 130
+    #     (+1.7%); totals fell 21%. Net subtraction, but not strictly a filter.
+    #
+    # ONLY an exact "level" selects level (case/whitespace ignored); any other
+    # value runs as "edge" -- None silently (it means unset), a typo with a
+    # config_validator warning.
+    # A held -2 (hold-state SHORT) holds the short: -2 is not a cover signal.
     "entry_trigger": "edge",
 
     # ============================================================

@@ -61,6 +61,9 @@ def load(corpus, sym):
 
 
 def load_strats(private_dir):
+    # Every registered strategy, whatever the local config.py's "strategies"
+    # filter says -- the delta is a property of the library, not of one run.
+    C.CONFIG["strategies"] = "all"
     from helpers.registry import get_active_strategies, load_strategies
     strats = get_active_strategies(os.path.join(ROOT, "custom_strategies"))
     if private_dir and os.path.isdir(private_dir):
@@ -69,9 +72,17 @@ def load_strats(private_dir):
     return strats
 
 
-def is_private(meta):
-    mod = getattr(meta["logic"], "__module__", "") or ""
-    return mod.startswith("private.") or ".private." in mod
+def is_private(meta, private_dirs):
+    """By SOURCE FILE, not module name: load_strategies names a module after
+    its folder, so a private folder not literally called "private" was tagged
+    public and printed under --hide-private (adversarial QA on #405)."""
+    import inspect
+    try:
+        src = os.path.realpath(inspect.getsourcefile(meta["logic"]) or "")
+    except TypeError:
+        return True     # unknown origin: never print it as public
+    return any(src.startswith(os.path.realpath(d) + os.sep)
+               for d in private_dirs if d)
 
 
 def signals_for(meta, data, spy, vix):
@@ -119,15 +130,22 @@ def main():
     if vix is None:
         vix = load(args.corpus, "VIX")
     strats = load_strats(args.private_dir)
+    # The registry ALWAYS loads custom_strategies/private when it exists, so it
+    # is private whatever --private-dir says.
+    private_dirs = [os.path.join(ROOT, "custom_strategies", "private"), args.private_dir]
+    _orig_trigger = C.CONFIG.get("entry_trigger", "edge")
 
     rows, errors, idle, sig_fail = [], [], [], {}
-    for name in sorted(strats):
+    for i, name in enumerate(sorted(strats), 1):
         meta = strats[name]
-        print(f"  {name}", file=sys.stderr, flush=True)
+        # Progress goes to stderr; under --hide-private it must not carry names,
+        # or a `2>&1` capture leaks them.
+        print(f"  [{i}/{len(strats)}]" + ("" if args.hide_private else f" {name}"),
+              file=sys.stderr, flush=True)
         sigs, failed = signals_for(meta, data, spy, vix)
         if failed:
             sig_fail[name] = failed
-        tag = "private" if is_private(meta) else "public"
+        tag = "private" if is_private(meta, private_dirs) else "public"
         if not sigs:
             errors.append((name, tag, "no symbol produced signals"))
             continue
@@ -144,19 +162,28 @@ def main():
             idle.append((name, tag))
         else:
             rows.append((name, tag, a, b))
+    C.CONFIG["entry_trigger"] = _orig_trigger
 
     out = []
     w = out.append
     w(f"universe: {len(data)}/{len(SYMS)} symbols, {START}..{END}, "
       f"${CAPITAL:,.0f}, {ALLOC:.0%} allocation, {STOP['value']:.0%} percentage stop")
-    n_priv = sum(1 for m in strats.values() if is_private(m))
+    # Everything else comes from the local config.py and moves the numbers, so
+    # say what it was rather than imply the four values above are the whole run.
+    _keys = ("execution_time", "slippage_pct", "commission_per_share",
+             "max_pct_adv", "volume_impact_coeff", "entry_priority",
+             "position_sizing_method", "max_portfolio_heat", "timeframe",
+             "timeframe_multiplier")
+    w("config: " + ", ".join(f"{k}={C.CONFIG.get(k)!r}" for k in _keys))
+    n_priv = sum(1 for m in strats.values() if is_private(m, private_dirs))
     w(f"strategies registered: {len(strats)}  ({len(strats) - n_priv} public, {n_priv} private)")
     w("")
     w(f"{'strategy':52s} {'src':7s} {'level':>7s} {'edge':>7s} {'delta':>7s} {'pct':>8s}")
     for name, tag, a, b in rows:
         if args.hide_private and tag == "private":
             continue
-        w(f"{name[:52]:52s} {tag:7s} {a:7d} {b:7d} {b - a:+7d} {(b - a) / a * 100:+7.1f}%")
+        pct = f"{(b - a) / a * 100:+7.1f}%" if a else "    n/a"
+        w(f"{name[:52]:52s} {tag:7s} {a:7d} {b:7d} {b - a:+7d} {pct}")
 
     def total(label, sel):
         la = sum(r[2] for r in sel)

@@ -200,9 +200,9 @@ def _is_entry_bar(signals, edge_masks, symbol, sig_date, entry_value):
     True when ``symbol`` may be ENTERED on ``sig_date`` for ``entry_value``
     (1 = long, -2 = short).
 
-    ``edge_masks`` is None in the default "level" mode, where this reduces to the
-    original equality test byte-for-byte. In "edge" mode the bar must ALSO be a
-    transition into the entry state.
+    ``edge_masks`` is None in "level" mode, where this reduces to the original
+    equality test byte-for-byte. In "edge" mode (the default since #401) the bar
+    must ALSO be a transition into the entry state.
     """
     if pd.isna(sig_date) or symbol not in signals:
         return False
@@ -242,7 +242,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
     # Off / no data -> stop fills behave exactly as before (no-op).
     _intrabar_on = bool(CONFIG.get("intrabar_resolution", False)) and intrabar_data is not None
 
-    # --- ENTRY TRIGGER MODE: level (default) vs edge ---
+    # --- ENTRY TRIGGER MODE: edge (default) vs level ---
     # "level" enters on ANY bar whose signal reads the entry value. A strategy
     # that emits a forward-filled *state* series -- 1 on every bar of a hold, as
     # custom_strategies/bull_flag.py does via .replace(0, np.nan).ffill() --
@@ -259,8 +259,13 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
     # The golden master pins both (scenario hold_state_stop). The fallback
     # matches the shipped default so a config missing the key does not silently
     # get the behaviour the default was flipped away from.
-    _entry_trigger = str(CONFIG.get("entry_trigger", "edge")).lower()
-    _edge_masks = _build_entry_edge_masks(signals) if _entry_trigger == "edge" else None
+    # Only an explicit "level" selects level; ANY other value -- a typo like
+    # "edges", None, "Edge " -- runs as edge. Inverted from the original test
+    # (`== "edge"`), under which every unrecognised value silently ran level,
+    # the very behaviour the flip removed, while config_validator told the user
+    # it had fallen back to edge (adversarial QA on #405).
+    _entry_trigger = str(CONFIG.get("entry_trigger", "edge")).strip().lower()
+    _edge_masks = None if _entry_trigger == "level" else _build_entry_edge_masks(signals)
 
     # Dynamic HTB rate compounding based on timeframe (fixes issue #55)
     bars_per_year = get_bars_per_year(CONFIG)
@@ -838,11 +843,18 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                             cover_raw = _mc_close
                             cover_reason = "Margin Call"
 
-            # STRATEGY cover (signal < 0 while short)
+            # STRATEGY cover: any negative signal EXCEPT -2, which is the
+            # short-entry value and, on a bar already short, means "hold". This
+            # covered on -2 too, so a hold-state short ([-2, -2, -2, ...], e.g.
+            # a short ORB) covered every bar: under "level" it churned a round
+            # trip per bar, and under the "edge" default (#401) the re-entry is
+            # refused, so the position went flat after ONE bar
+            # (adversarial QA on #405).
             if pd.isna(cover_raw):
                 sig_date = prev_trading_dates[symbol].get(date) if execution_time == 'open' else date
                 if (pd.notna(sig_date) and sig_date in signals[symbol].index
-                        and signals[symbol].loc[sig_date] < 0):
+                        and signals[symbol].loc[sig_date] < 0
+                        and signals[symbol].loc[sig_date] != -2):
                     cover_raw = row.get('Open' if execution_time == 'open' else 'Close')
                     cover_reason = "Short Cover"
 
@@ -1220,7 +1232,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
 
             # Mirror the short-entry guard: never open a long while a short is
             # still open on the same symbol (issue #313). A signal of 1 does not
-            # cover a short (only <= -1 covers), so without this the long would
+            # cover a short (only a negative signal other than -2 does), so without this the long would
             # stack on top of the open short — a hedged double position the
             # strategy never intended. A flip is still expressible as a two-bar
             # sequence: -1 on one bar covers the short, then 1 on a later bar

@@ -34,6 +34,9 @@ Regression map — scenario -> engine behaviour proven unchanged
   trailing_atr_equity  trailing_atr stop on an equity (CASH_FULL) symbol — anchors
                        stop/target/breakeven floor to slipped entry_price, not raw
                        (#240 fix); arm + trail + floor all exercise the equity path
+  hold_state_stop      #401: a forward-filled 1 stopped out does NOT re-enter (edge)
+  hold_state_stop_level  ...and DOES under entry_trigger="level" (the twin)
+  hold_state_short     a held -2 is one short to the -1 cover, not a cover per bar
 
 Regenerate the fixture (ONLY when an intended behaviour change is reviewed):
     REGEN_GOLDEN=1 .venv/bin/python -m pytest tests/test_engine_characterization.py -q
@@ -191,12 +194,33 @@ def _scenario(name):
         # This is the missing coverage: same bars as long_pct_stop, same 5% stop,
         # signal forward-filled instead of pulsed. Under "level" the stop closes
         # the position and the still-held 1 re-enters; under "edge" it does not.
-        # Pins the semantics in both directions so neither default can be flipped
-        # again without a test moving.
+        # entry_trigger is set EXPLICITLY (it was inherited from the local
+        # config.py, so a user running "level" locally failed the golden
+        # master), and hold_state_stop_level is the twin: the two together pin
+        # the semantics in both directions. The shipped default is pinned
+        # separately by test_entry_trigger.TestDefaultIsEdge.
         df = _df([100, 101, 102, 101, 100, 94, 95, 96, 97, 98])
         sig = pd.Series(0, index=df.index, dtype=int)
         sig.iloc[1:] = 1                                  # enter and STAY 1
-        return {"BBB": df}, {"BBB": sig}, {}, {"type": "percentage", "value": 0.05}, {}
+        return ({"BBB": df}, {"BBB": sig}, {"entry_trigger": "edge"},
+                {"type": "percentage", "value": 0.05}, {})
+
+    if name == "hold_state_stop_level":
+        df = _df([100, 101, 102, 101, 100, 94, 95, 96, 97, 98])
+        sig = pd.Series(0, index=df.index, dtype=int)
+        sig.iloc[1:] = 1
+        return ({"BBB": df}, {"BBB": sig}, {"entry_trigger": "level"},
+                {"type": "percentage", "value": 0.05}, {})
+
+    if name == "hold_state_short":
+        # #405 QA: -2 held on every bar of a short. The cover test treated -2
+        # as a cover, so level churned a round trip per bar and edge went flat
+        # after one bar. Pins one short held to the -1 cover.
+        df = _df([100, 99, 98, 97, 96, 95, 96, 97, 98, 99])
+        sig = pd.Series(0, index=df.index, dtype=int)
+        sig.iloc[1:8] = -2
+        sig.iloc[8] = -1
+        return {"SSS": df}, {"SSS": sig}, {}, {"type": "none"}, {}
 
     raise ValueError(name)
 
@@ -204,7 +228,8 @@ def _scenario(name):
 SCENARIOS = [
     "long_basic", "long_pct_stop", "long_atr_stop", "short_borrow",
     "vol_impact", "risk_parity_stop", "exclude_open", "multi_symbol",
-    "trailing_atr_equity", "hold_state_stop",
+    "trailing_atr_equity", "hold_state_stop", "hold_state_stop_level",
+    "hold_state_short",
 ]
 
 

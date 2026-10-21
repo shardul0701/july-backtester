@@ -132,6 +132,7 @@ Both failures are **silent**: `gh` exits 0 and prints a URL. Nothing tells you t
 "sensitivity_sweep_steps": 2     # 2 steps each side → 5 values per param
 "sensitivity_sweep_min_val": 2   # floor for generated values (prevents SMA period = 0)
 "rolling_sharpe_window": 126     # rolling Sharpe window in trading days; 0 or None = disable
+"entry_trigger": "edge"          # "edge" (default, #401) = enter only on the transition INTO the entry value; "level" = any bar reading it
 "htb_rate_annual": 0.02          # annual hard-to-borrow rate debited daily on short positions
 "mc_sampling": "iid"             # "iid" = independent; "block" = block-bootstrap; "auto" = block for concentrated_futures profile else iid
 "mc_block_size": None            # block size for block-bootstrap; None = auto floor(sqrt(N))
@@ -642,12 +643,12 @@ A short, wide banner figure (`figsize=(10, 3), dpi=150`) that shows the full dra
 | `1` | Enter long |
 | `0` | No change |
 | `-1` | Exit long **or** cover short |
-| `-2` | Enter short |
+| `-2` | Enter short (on a bar already short: hold — `-2` never covers) |
 
 - **Borrow cost**: `htb_rate_annual` (config, default `0.02`) converted to a daily compound rate `(1 + annual)^(1/252) - 1` and debited from cash each day a short is held. Set to `0.0` to disable.
 - **Three new blocks in the daily loop** (all additive — no long-path code changed):
   1. **Borrow cost debit**: iterates `short_positions`, subtracts `notional × htb_rate_daily` from cash and accumulates `spos['total_borrow_cost']`.
-  2. **Short cover**: on signal `< 0` for a held short, fills at Open/Close + slippage, deducts commission both sides, nets `total_borrow_cost` out of profit, logs to `trade_log`.
+  2. **Short cover**: on a negative signal other than `-2` for a held short, fills at Open/Close + slippage, deducts commission both sides, nets `total_borrow_cost` out of profit, logs to `trade_log`.
   3. **Short entry**: on signal `== -2`, skips if `symbol in positions or symbol in short_positions`, allocates `min(total_equity × allocation_pct, cash)`, receives proceeds into cash.
 - **Short trades in `trade_log`**: `Trade: "Short N"`, `ExitReason: "Short Cover"`. `RMultiple` is `None` for shorts (initial risk undefined without a stop).
 - **Equity MTM for shorts**: `current_market_value += (shares × entry_price) − (shares × current_close)` — profit when price falls.
