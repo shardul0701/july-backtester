@@ -2,26 +2,26 @@
   "exclude_open": {
     "equity_curve": [
       100000.0,
-      100000.0,
+      99994.804578,
       100093.764999,
       100192.725419,
-      100291.68584,
       100286.341978,
       100286.341978,
+      100281.141041,
       100375.703517
     ],
     "equity_len": 8,
     "scalars": {
       "Trades": 1,
-      "avg_recovery_days": 2.0,
+      "avg_recovery_days": 1.0,
       "avg_trade_duration": 3.0,
-      "calmar_ratio": 3084.992711,
+      "calmar_ratio": 3163.906692,
       "initial_capital": 100000.0,
-      "max_drawdown": 5.3e-05,
-      "max_recovery_days": 2,
+      "max_drawdown": 5.2e-05,
+      "max_recovery_days": 1,
       "pnl_percent": 0.002863,
       "profit_factor": null,
-      "sharpe_ratio": 10.464573,
+      "sharpe_ratio": 10.169253,
       "win_rate": 1.0
     },
     "trade_log": [
@@ -52,10 +52,10 @@
       100000.0,
       100000.0,
       100000.0,
-      100000.0,
+      100004.813234,
       100101.949229,
       99713.405249,
-      99324.861268,
+      99310.684075,
       99310.684075,
       99310.684075,
       99310.684075,
@@ -71,7 +71,7 @@
       "max_drawdown": 0.007905,
       "pnl_percent": -0.006893,
       "profit_factor": 0.0,
-      "sharpe_ratio": -7.934886,
+      "sharpe_ratio": -7.789281,
       "win_rate": 0.0
     },
     "trade_log": [
@@ -102,13 +102,13 @@
       100000.0,
       100000.0,
       100000.0,
-      100000.0,
+      99994.808421,
       100091.84728,
       99994.808421,
       99897.769562,
-      100188.886139,
       100183.597522,
       100183.597522,
+      100178.40368,
       100271.986419,
       100365.569158,
       100459.151897,
@@ -118,15 +118,15 @@
     "equity_len": 15,
     "scalars": {
       "Trades": 2,
-      "avg_recovery_days": 3.0,
+      "avg_recovery_days": 2.0,
       "avg_trade_duration": 6.5,
       "calmar_ratio": 72.024955,
       "initial_capital": 100000.0,
       "max_drawdown": 0.001939,
-      "max_recovery_days": 4,
+      "max_recovery_days": 3,
       "pnl_percent": 0.006463,
       "profit_factor": null,
-      "sharpe_ratio": 4.32367,
+      "sharpe_ratio": 4.342875,
       "win_rate": 1.0
     },
     "trade_log": [
@@ -173,11 +173,11 @@
   "long_pct_stop": {
     "equity_curve": [
       100000.0,
-      100000.0,
+      99994.804578,
       100093.764999,
       99994.804578,
       99895.844157,
-      99302.081632,
+      99287.934943,
       99287.934943,
       99287.934943,
       99287.934943,
@@ -186,13 +186,15 @@
     "equity_len": 10,
     "scalars": {
       "Trades": 1,
+      "avg_recovery_days": 1.0,
       "avg_trade_duration": 6.0,
       "calmar_ratio": -26.237622,
       "initial_capital": 100000.0,
       "max_drawdown": 0.008051,
+      "max_recovery_days": 1,
       "pnl_percent": -0.007121,
       "profit_factor": 0.0,
-      "sharpe_ratio": -7.756914,
+      "sharpe_ratio": -7.551493,
       "win_rate": 0.0
     },
     "trade_log": [
@@ -221,25 +223,27 @@
   "multi_symbol": {
     "equity_curve": [
       100000.0,
-      100000.0,
+      99989.415116,
       100284.355978,
       100187.335957,
       100090.315937,
-      99993.295917,
-      100183.883015,
+      99987.902574,
+      100178.591543,
       100178.591543,
       100178.591543
     ],
     "equity_len": 9,
     "scalars": {
       "Trades": 2,
+      "avg_recovery_days": 1.0,
       "avg_trade_duration": 6.5,
-      "calmar_ratio": 23.202941,
+      "calmar_ratio": 22.780812,
       "initial_capital": 100000.0,
-      "max_drawdown": 0.002902,
+      "max_drawdown": 0.002956,
+      "max_recovery_days": 1,
       "pnl_percent": 0.001786,
       "profit_factor": 1.864175,
-      "sharpe_ratio": 0.338697,
+      "sharpe_ratio": 0.33072,
       "win_rate": 0.5
     },
     "trade_log": [
@@ -288,12 +292,12 @@
   "risk_parity_stop": {
     "equity_curve": [
       100000.0,
-      100000.0,
+      99979.218312,
       100375.059995,
       100770.901678,
       101166.743361,
       101562.585044,
-      101958.426727,
+      101936.655435,
       101936.655435,
       101936.655435,
       101936.655435
@@ -301,13 +305,15 @@
     "equity_len": 10,
     "scalars": {
       "Trades": 1,
+      "avg_recovery_days": 1.0,
       "avg_trade_duration": 7.0,
-      "calmar_ratio": 4170.960811,
+      "calmar_ratio": 4285.646741,
       "initial_capital": 100000.0,
-      "max_drawdown": 0.000214,
+      "max_drawdown": 0.000208,
+      "max_recovery_days": 1,
       "pnl_percent": 0.019367,
       "profit_factor": null,
-      "sharpe_ratio": 14.832272,
+      "sharpe_ratio": 14.836302,
       "win_rate": 1.0
     },
     "trade_log": [
@@ -336,24 +342,26 @@
   "short_borrow": {
     "equity_curve": [
       100000.0,
-      100000.0,
-      100095.856009,
-      100196.130791,
-      100296.405573,
-      100396.680355,
+      99994.795377,
+      100095.070159,
+      100195.344941,
+      100295.619723,
+      100390.892004,
       100390.892004,
       100390.892004
     ],
     "equity_len": 8,
     "scalars": {
       "Trades": 1,
+      "avg_recovery_days": 1.0,
       "avg_trade_duration": 6.0,
-      "calmar_ratio": 2975.469792,
+      "calmar_ratio": 3296.110709,
       "initial_capital": 100000.0,
-      "max_drawdown": 5.8e-05,
+      "max_drawdown": 5.2e-05,
+      "max_recovery_days": 1,
       "pnl_percent": 0.003909,
       "profit_factor": null,
-      "sharpe_ratio": 10.697557,
+      "sharpe_ratio": 10.731425,
       "win_rate": 1.0
     },
     "trade_log": [
@@ -383,11 +391,11 @@
       100000.0,
       100000.0,
       100000.0,
-      100000.0,
+      99994.804578,
       100192.725419,
       100390.646261,
       100588.567103,
-      100588.567103,
+      100484.163859,
       100484.163859,
       100484.163859,
       100484.163859
@@ -395,13 +403,15 @@
     "equity_len": 11,
     "scalars": {
       "Trades": 1,
+      "avg_recovery_days": 1.0,
       "avg_trade_duration": 6.0,
       "calmar_ratio": 129.386805,
       "initial_capital": 100000.0,
       "max_drawdown": 0.001038,
+      "max_recovery_days": 1,
       "pnl_percent": 0.004842,
       "profit_factor": null,
-      "sharpe_ratio": 4.31542,
+      "sharpe_ratio": 4.272823,
       "win_rate": 1.0
     },
     "trade_log": [
@@ -432,22 +442,24 @@
       100000.0,
       100000.0,
       100000.0,
-      100000.0,
+      99960.736938,
       100057.872933,
       100155.008928,
       100252.144923,
-      100349.280919
+      100287.759284
     ],
     "equity_len": 8,
     "scalars": {
       "Trades": 1,
+      "avg_recovery_days": 1.0,
       "avg_trade_duration": 6.0,
-      "calmar_ratio": null,
+      "calmar_ratio": 315.019452,
       "initial_capital": 100000.0,
-      "max_drawdown": 0.0,
-      "pnl_percent": 0.003493,
+      "max_drawdown": 0.000393,
+      "max_recovery_days": 1,
+      "pnl_percent": 0.002878,
       "profit_factor": null,
-      "sharpe_ratio": 9.947971,
+      "sharpe_ratio": 6.081039,
       "win_rate": 1.0
     },
     "trade_log": [
