@@ -816,6 +816,10 @@ The internal `Trade` counter column is always dropped.
 
 **Tests**: `tests/test_ml_export.py` — 8 tests: empty results (returns 0), row count, `is_win` presence, Strategy/Portfolio injection, readable Parquet, `Trade` column dropped, CSV fallback on ImportError, config default False.
 
+## Delisting Liquidation (include_delisted)
+
+With `include_delisted: True`, `run_portfolio_simulation` liquidates a held long **or short** in a delisted symbol **inside the daily loop**, at the top of the first loop date on/after its delisting date (`_liquidate_delisted` -> `_close_delisted`), before that bar's equity/sizing. Exit price: `delisting_price_assumption` `"zero"` -> 0.0, `"last_close"` -> last non-NaN Close on/before the delisting date. Cash is credited (futures: P&L realised, margin released; shorts: covered at the assumption price, `reserved_short_collateral` released), so later sizing uses real equity and the slot/cash is redeployable (#431, subsumes #149). Trades log `ExitReason: "Delisting"`, `ExitDate` = the delisting date. The old post-loop equity-curve patch (`_delisting_corrections`) is gone; a post-loop safety net remains only for a position whose delisting date falls after the last loop date. A short in a delisted symbol under `"zero"` books the full short gain. `survivorship_stats` keys/semantics are unchanged. Tests: `tests/test_survivorship.py::TestDelistingInLoop431`.
+
 ## Common Pitfalls
 - `get_bars_for_period('14d', TIMEFRAME, MULTIPLIER)` — always use this for indicator periods, not raw integers, so strategies work across timeframes
 - Stop-loss config is a dict `{"type": "none"}` or `{"type": "percentage", "value": 0.05}` — not a float

@@ -1,3 +1,4 @@
+import logging
 import random as _random
 
 import pandas as pd
@@ -7,6 +8,8 @@ from .simulations import calculate_advanced_metrics
 from helpers.position_sizing import calculate_position_size, check_portfolio_heat
 from helpers import instruments as _inst
 from helpers import intrabar as _intrabar
+
+logger = logging.getLogger(__name__)
 
 
 def _hold_duration_days(entry_dt, exit_dt):
@@ -567,7 +570,106 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
         prior = df.loc[:at_date, 'Close'].dropna()
         return prior.iloc[-1] if len(prior) else None
 
+    # --- SURVIVORSHIP BIAS: DELISTING LIQUIDATION (issue #431) ---
+    # Held positions in a delisted symbol are liquidated INSIDE the daily loop, on
+    # the first loop date on/after the delisting date, so cash is credited and the
+    # slot freed before any later sizing / heat decision (no phantom equity).
+    _delist_on = bool(delisting_dates) and CONFIG.get("include_delisted", False)
+    _delist_assumption = CONFIG.get("delisting_price_assumption", "last_close")
+    _delist_ts = ({sym: pd.Timestamp(d) for sym, d in delisting_dates.items()}
+                  if _delist_on else {})
+    _delist_stats = {"n": 0, "loss": 0.0}
+
+    def _delist_exit_price(symbol, fallback_price, delisting_ts):
+        if _delist_assumption == "zero":
+            return 0.0
+        # "last_close": last available Close on/before the delisting date
+        sym_df = portfolio_data.get(symbol)
+        if sym_df is not None and not sym_df.empty:
+            prior = sym_df.loc[sym_df.index <= delisting_ts, 'Close'].dropna()
+            if not prior.empty:
+                return float(prior.iloc[-1])
+        return fallback_price
+
+    def _close_delisted(symbol, pos, delisting_ts, side="long"):
+        """Force-close a held long (or short) in a delisted symbol at the
+        configured assumption price. Credits cash, releases reserved
+        margin/collateral, logs the 'Delisting' trade. Returns the exit price."""
+        nonlocal cash, reserved_margin, reserved_short_collateral, trade_counter
+        exit_price = _delist_exit_price(symbol, pos['entry_price'], delisting_ts)
+        _dl_inst = instruments[symbol]
+        commission = _inst.commission(_dl_inst, pos['shares'])
+        _pos_value = _inst.notional(_dl_inst, pos['shares'], pos['entry_price'])
+        if side == "short":
+            # Symmetric cover at the assumption price (no slippage — no market).
+            gross_pnl = pos['shares'] * (pos['entry_price'] - exit_price) * _dl_inst.point_value
+            net_pnl = gross_pnl - (2 * commission) - pos.get('total_borrow_cost', 0.0)
+            cash += gross_pnl - commission
+            if _dl_inst.margin_mode == _inst.INITIAL_MARGIN:
+                reserved_margin -= pos.get('margin', 0.0)
+            reserved_short_collateral = max(reserved_short_collateral - pos.get('collateral', 0.0), 0.0)
+            _ir = pos.get('initial_risk')
+            _initial_risk_per_share = _ir if (_ir and _ir > 0) else 0.0
+            _r_multiple = (net_pnl / (_ir * pos['shares'] * _dl_inst.point_value)
+                           if _ir and _ir > 0 and pos['shares'] > 0 else None)
+            _pos_value = pos.get('notional', _pos_value)
+            _pct = net_pnl / _pos_value if _pos_value > 0 else 0
+        else:
+            if _dl_inst.margin_mode == _inst.INITIAL_MARGIN:
+                # Futures: realise P&L (via $/point) into cash and release reserved
+                # margin — cash never held the notional, so crediting proceeds would
+                # inject phantom capital.
+                gross_pnl = (exit_price - pos['entry_price']) * pos['shares'] * _dl_inst.point_value
+                cash += gross_pnl - commission
+                reserved_margin -= pos.get('margin', 0.0)
+                net_pnl = gross_pnl - (2 * commission)
+            else:
+                net_pnl = ((exit_price - pos['entry_price']) * pos['shares']) - (2 * commission)
+                # Realised proceeds return to cash (delisting is a real liquidation).
+                cash += (pos['shares'] * exit_price) - commission
+            _initial_sl = pos.get('initial_stop_loss_level')
+            if pd.notna(_initial_sl) and _initial_sl > 0 and _initial_sl < pos['entry_price']:
+                _initial_risk_per_share = pos['entry_price'] - _initial_sl
+            else:
+                _initial_risk_per_share = pos['entry_price'] * 0.01
+            _r_multiple = (net_pnl / (_initial_risk_per_share * pos['shares'] * _dl_inst.point_value)
+                           if _initial_risk_per_share > 0 and pos['shares'] > 0 else None)
+            _pct = net_pnl / _pos_value if _pos_value > 0 else -1.0
+
+        trade_counter += 1
+        trade_log.append({
+            'Symbol': symbol, 'Trade': f"{'Short' if side == 'short' else 'Long'} {trade_counter}",
+            'EntryDate': pos['entry_date'].isoformat(), 'EntryPrice': pos['entry_price'],
+            'ExitDate': delisting_ts.isoformat(), 'ExitPrice': exit_price,
+            'Profit': net_pnl, 'ProfitPct': _pct,
+            'Shares': pos['shares'], 'is_win': 1 if net_pnl > 0 else 0,
+            'HoldDuration': _hold_duration_days(pos['entry_date'], delisting_ts),
+            'MAE_pct': 0.0, 'MFE_pct': 0.0, 'ExitReason': "Delisting",
+            'InitialRisk': _initial_risk_per_share, 'RMultiple': _r_multiple,
+            **pos.get('features', {}),
+        })
+        _delist_stats["n"] += 1
+        _delist_stats["loss"] += net_pnl
+        return exit_price
+
+    def _liquidate_delisted(date):
+        """Close every held position whose delisting date is on/before `date`."""
+        for symbol, pos in list(positions.items()):
+            dts = _delist_ts.get(symbol)
+            if dts is None or date < dts or dts < pos['entry_date']:
+                continue  # not yet delisted / delisted before entry (normal handling)
+            _close_delisted(symbol, pos, dts, "long")
+            del positions[symbol]
+        for symbol, spos in list(short_positions.items()):
+            dts = _delist_ts.get(symbol)
+            if dts is None or date < dts or dts < spos['entry_date']:
+                continue
+            _close_delisted(symbol, spos, dts, "short")
+            del short_positions[symbol]
+
     for date in portfolio_timeline.index:
+        if _delist_on:
+            _liquidate_delisted(date)
         # --- EQUITY CALCULATION ---
         current_market_value = 0.0
         for symbol, pos in positions.items():
@@ -1882,83 +1984,36 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
 
     exclude_open = CONFIG.get('exclude_open_positions', False)
 
-    # --- SURVIVORSHIP BIAS: FORCE-CLOSE DELISTED OPEN POSITIONS ---
-    # This MUST run before the End-of-Backtest mark-to-market block below.
-    # Otherwise, a still-open position in a delisted symbol would either be
-    # marked-to-market at its last bar (exclude_open=False) or dropped entirely
-    # (exclude_open=True) — in both cases the delisting loss would be silently
-    # ignored, defeating the purpose of survivorship handling.
+    # --- SURVIVORSHIP BIAS: DELISTING SAFETY NET ---
+    # Delisted positions are normally liquidated inside the daily loop (#431). Only
+    # a position whose delisting date falls AFTER the last loop date is still open
+    # here; force-close it (must precede the End-of-Backtest mark-to-market below,
+    # else the delisting loss would be silently ignored) and patch the final
+    # equity point, which the loop snapshotted at mark-to-market.
     survivorship_stats = {}
-    # Each entry: (symbol, delisting_ts, shares, exit_price) — used to correct the
-    # equity curve, whose daily-loop values still mark the position to market.
-    _delisting_corrections = []
     if delisting_dates and CONFIG.get("include_delisted", False):
-        _price_assumption = CONFIG.get("delisting_price_assumption", "last_close")
-        _positions_delisted = 0
-        _total_delisting_loss = 0.0
-        for symbol in list(positions.keys()):
-            if symbol not in delisting_dates:
+        _last_loop_date = all_dates[-1]
+        for symbol, pos in list(positions.items()) + list(short_positions.items()):
+            dts = _delist_ts.get(symbol)
+            if dts is None or dts < pos['entry_date']:
                 continue
-            pos = positions[symbol]
-            delisting_ts = pd.Timestamp(delisting_dates[symbol])
-            entry_ts = pos['entry_date']
-            if delisting_ts < entry_ts:
-                continue  # delisted before we entered — leave for normal handling
-
-            # Determine exit price under the configured assumption.
-            if _price_assumption == "zero":
-                exit_price = 0.0
-            else:  # "last_close": last available Close on/before the delisting date
-                exit_price = pos['entry_price']  # fallback
-                sym_df = portfolio_data.get(symbol)
-                if sym_df is not None and not sym_df.empty:
-                    prior = sym_df.loc[sym_df.index <= delisting_ts, 'Close'].dropna()
-                    if not prior.empty:
-                        exit_price = float(prior.iloc[-1])
-
-            _dl_inst = instruments[symbol]
-            commission = _inst.commission(_dl_inst, pos['shares'])
-            if _dl_inst.margin_mode == _inst.INITIAL_MARGIN:
-                # Futures: realise P&L (via $/point) into cash and release reserved
-                # margin — cash never held the notional, so crediting proceeds would
-                # inject phantom capital.
-                gross_pnl = (exit_price - pos['entry_price']) * pos['shares'] * _dl_inst.point_value
-                cash += gross_pnl - commission
-                reserved_margin -= pos.get('margin', 0.0)
-                net_pnl = gross_pnl - (2 * commission)
+            _is_short = symbol in short_positions
+            logger.info("Delisting of %s (%s) falls after the last loop date; "
+                        "closing via post-loop safety net", symbol, dts.date())
+            exit_price = _close_delisted(symbol, pos, dts, "short" if _is_short else "long")
+            _mtm = _mtm_close(portfolio_data[symbol], _last_loop_date)
+            if _mtm is not None and pd.notna(portfolio_timeline.loc[_last_loop_date]):
+                _sign = -1 if _is_short else 1
+                portfolio_timeline.loc[_last_loop_date] += (
+                    _sign * pos['shares'] * (exit_price - _mtm) * instruments[symbol].point_value)
+            if _is_short:
+                del short_positions[symbol]
             else:
-                net_pnl = ((exit_price - pos['entry_price']) * pos['shares']) - (2 * commission)
-                # Realised proceeds return to cash (delisting is a real liquidation).
-                cash += (pos['shares'] * exit_price) - commission
+                del positions[symbol]
 
-            _initial_sl = pos.get('initial_stop_loss_level')
-            if pd.notna(_initial_sl) and _initial_sl > 0 and _initial_sl < pos['entry_price']:
-                _initial_risk_per_share = pos['entry_price'] - _initial_sl
-            else:
-                _initial_risk_per_share = pos['entry_price'] * 0.01
-            _r_multiple = (net_pnl / (_initial_risk_per_share * pos['shares'] * _dl_inst.point_value)
-                           if _initial_risk_per_share > 0 and pos['shares'] > 0 else None)
-
-            trade_counter += 1
-            _pos_value = _inst.notional(_dl_inst, pos['shares'], pos['entry_price'])
-            trade_log.append({
-                'Symbol': symbol, 'Trade': f"Long {trade_counter}",
-                'EntryDate': pos['entry_date'].isoformat(), 'EntryPrice': pos['entry_price'],
-                'ExitDate': delisting_ts.isoformat(), 'ExitPrice': exit_price,
-                'Profit': net_pnl, 'ProfitPct': net_pnl / _pos_value if _pos_value > 0 else -1.0,
-                'Shares': pos['shares'], 'is_win': 1 if net_pnl > 0 else 0,
-                'HoldDuration': _hold_duration_days(pos['entry_date'], delisting_ts),
-                'MAE_pct': 0.0, 'MFE_pct': 0.0, 'ExitReason': "Delisting",
-                'InitialRisk': _initial_risk_per_share, 'RMultiple': _r_multiple,
-                **pos.get('features', {}),
-            })
-            _delisting_corrections.append((symbol, delisting_ts, pos['shares'], exit_price))
-            _positions_delisted += 1
-            _total_delisting_loss += net_pnl
-            del positions[symbol]  # exclude from EoB mark-to-market / drop logic
-
+        _total_delisting_loss = _delist_stats["loss"]
         survivorship_stats = {
-            "positions_delisted": _positions_delisted,
+            "positions_delisted": _delist_stats["n"],
             "total_delisting_loss": _total_delisting_loss,
             "delisting_loss_pct": (_total_delisting_loss / initial_capital
                                    if initial_capital > 0 else 0.0),
@@ -2043,37 +2098,6 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
 
     pnl_list = [t['Profit'] for t in trade_log]
     if not pnl_list: return None
-
-    # --- SURVIVORSHIP BIAS: CORRECT EQUITY CURVE FOR DELISTED POSITIONS ---
-    # The daily loop marked each now-delisted position to market for every bar
-    # of the hold, including bars on/after the delisting date. From the delisting
-    # date forward the position is no longer held — its value is the realised
-    # proceeds (shares * exit_price), which were added to cash above. So for each
-    # date >= delisting we replace the marked-to-market contribution
-    # (shares * Close[date]) with the frozen realised value (shares * exit_price).
-    # This avoids double-counting the loss and keeps Sharpe/drawdown/CAGR correct.
-    if _delisting_corrections:
-        for symbol, delisting_ts, shares, exit_price in _delisting_corrections:
-            sym_df = portfolio_data.get(symbol)
-            if sym_df is None:
-                continue
-            mask = portfolio_timeline.index >= delisting_ts
-            for dt in portfolio_timeline.index[mask]:
-                if pd.isna(portfolio_timeline.loc[dt]):
-                    continue
-                # What the daily loop added for this symbol on this date — must
-                # use the SAME valuation as the loop (issue #320), otherwise this
-                # correction skips exactly the missing/NaN bars the loop now
-                # values at the last non-NaN close, leaving phantom MTM in the
-                # post-delisting equity curve.
-                mtm_close = _mtm_close(sym_df, dt)
-                if mtm_close is None:
-                    continue
-                # x point_value: the daily loop's contribution was $/point-scaled
-                # (unrealized_pnl for futures, market value with pv=1 for equities),
-                # so the replacement delta must scale the same way.
-                portfolio_timeline.loc[dt] += (shares * (exit_price - mtm_close)
-                                               * instruments[symbol].point_value)
 
     duration_list = [t['HoldDuration'] for t in trade_log]
     if exclude_open:
