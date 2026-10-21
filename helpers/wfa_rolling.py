@@ -17,7 +17,8 @@ Public API
 ----------
 get_fold_dates(actual_start, actual_end, k)                             -> list[tuple[str, str]]
 evaluate_rolling_wfa(trade_log, fold_dates, initial_capital,
-                     min_fold_trades=5)                                 -> dict
+                     min_fold_trades=5, equity_curve=None,
+                     actual_start=None)                                 -> dict
 """
 
 from __future__ import annotations
@@ -74,6 +75,8 @@ def evaluate_rolling_wfa(
     fold_dates:      list[tuple[str, str]],
     initial_capital: float,
     min_fold_trades: int = 5,
+    equity_curve:    "pd.Series | None" = None,
+    actual_start:    "str | None" = None,
 ) -> dict:
     """Evaluate rolling multi-fold WFA on a completed trade log.
 
@@ -91,6 +94,11 @@ def evaluate_rolling_wfa(
     fold_dates       : output of :func:`get_fold_dates`.
     initial_capital  : starting equity used to normalise P&L.
     min_fold_trades  : minimum OOS trades to score a fold (default 5).
+    equity_curve     : optional ``portfolio_timeline`` Series; when given, each
+                       fold's IS/OOS returns are window equity returns.
+    actual_start     : IS window start (defaults to the first fold's start).
+                       IS window = ``(actual_start, oos_start)``, OOS window =
+                       ``(oos_start, oos_end)``.
 
     Returns
     -------
@@ -101,6 +109,7 @@ def evaluate_rolling_wfa(
 
     pass_count   = 0
     scored_count = 0
+    is_start     = actual_start or fold_dates[0][0]
 
     for oos_start, oos_end in fold_dates:
         # Convert fold boundary strings to pd.Timestamp for datetime handling
@@ -127,7 +136,12 @@ def evaluate_rolling_wfa(
             continue  # insufficient data — skip this fold
 
         scored_count += 1
-        fold_result = _evaluate_wfa(is_trades, oos_trades, initial_capital)
+        fold_result = _evaluate_wfa(
+            is_trades, oos_trades, initial_capital,
+            equity_curve=equity_curve,
+            is_window=(is_start, oos_start),
+            oos_window=(oos_start, oos_end),
+        )
         if fold_result.get("wfa_verdict") == "Pass":
             pass_count += 1
 

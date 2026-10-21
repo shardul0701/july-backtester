@@ -168,3 +168,30 @@ class TestEvaluateRollingWfa:
         trades = _make_trades("2010-01-01", "2020-01-01", n=50)
         result = evaluate_rolling_wfa(trades, [], 100_000, min_fold_trades=5)
         assert result["wfa_rolling_verdict"] == "N/A"
+
+
+# ---------------------------------------------------------------------------
+# #427 — rolling folds measure window equity returns, not initial-capital pnl
+# ---------------------------------------------------------------------------
+
+from tests.test_wfa import _compounding_fixture
+
+
+class TestRollingCompoundingNormalisation:
+    def _verdict(self, is_rate, oos_rate, split="2012-01-01", **kw):
+        trades, curve, cap, start, _, end = _compounding_fixture(
+            is_rate, oos_rate, split=split)
+        folds = get_fold_dates(start, end, 5)
+        return evaluate_rolling_wfa(trades, folds, cap, 5, equity_curve=curve,
+                                    actual_start=start, **kw)["wfa_rolling_verdict"]
+
+    def test_constant_rate_passes(self):
+        assert self._verdict(0.10, 0.10).startswith("Pass")
+
+    def test_collapsed_edge_fails(self):
+        assert self._verdict(0.10, 0.0).startswith("Fail")
+
+    def test_legacy_call_without_curve_still_works(self):
+        trades, _, cap, start, _, end = _compounding_fixture(0.10, 0.10)
+        folds = get_fold_dates(start, end, 5)
+        assert evaluate_rolling_wfa(trades, folds, cap, 5)["wfa_rolling_verdict"].startswith("Pass")

@@ -353,7 +353,12 @@ def run_single_simulation(args):
             if wfa_split_date and result.get('trade_log'):
                 from helpers.wfa import split_trades as _split_trades, evaluate_wfa as _evaluate_wfa
                 _is, _oos = _split_trades(result['trade_log'], wfa_split_date)
-                result.update(_evaluate_wfa(_is, _oos, result['initial_capital']))
+                result.update(_evaluate_wfa(
+                    _is, _oos, result['initial_capital'],
+                    equity_curve=result.get('portfolio_timeline'),
+                    is_window=(spy_actual_start, wfa_split_date),
+                    oos_window=(wfa_split_date, spy_actual_end),
+                ))
             else:
                 result.update({'oos_pnl_pct': None, 'wfa_verdict': 'N/A'})
 
@@ -368,7 +373,9 @@ def run_single_simulation(args):
                 _min_fold = CONFIG.get("wfa_min_fold_trades", 5)
                 _fold_dates = _get_fold_dates(spy_actual_start, spy_actual_end, int(_wfa_folds))
                 result.update(_eval_rolling_wfa(
-                    result['trade_log'], _fold_dates, result['initial_capital'], _min_fold
+                    result['trade_log'], _fold_dates, result['initial_capital'], _min_fold,
+                    equity_curve=result.get('portfolio_timeline'),
+                    actual_start=spy_actual_start,
                 ))
             else:
                 result.update({'wfa_rolling_verdict': 'N/A'})
