@@ -10,7 +10,7 @@ Python backtesting engine for US equities. Tests 20+ technical strategies across
 ## Entry Points
 - `main.py` — runs all entries in `portfolios`; a single-ticker basket like `"My Symbols": ["AAPL"]` replaces the old single-asset mode
 - `main.py --name "run-name"` — optional prefix for report folder and S3 path
-- `main.py --verbose` — print two additional tables beneath the default Core Performance table: Extended Metrics (RS(avg/min/last), MaxRcvry, AvgRcvry, Calmar, PF, WinRate, Trades, Expct(R), SQN) and Robustness (OOS P&L, WFA Verdict, RollWFA, Corr, MC, MC Score). Default output shows Core Performance only.
+- `main.py --verbose` — print two additional tables beneath the default Core Performance table: Extended Metrics (RS(avg/min/last), MaxRcvry, AvgRcvry, Calmar, PF, WinRate, Trades, Expct(R), SQN) and Robustness (OOS P&L, WFA Verdict, RollWFA, Corr, MC, MC Score). Default output shows Core Performance only. `--verbose` / `--no-verbose` override the `verbose_output` config key at runtime; with neither flag the config value is used (`resolve_verbose` in `helpers/cli_config.py`).
 
 ## Versioning
 
@@ -128,7 +128,7 @@ Both failures are **silent**: `gh` exits 0 and prints a URL. Nothing tells you t
 "wfa_folds": None                # None = rolling WFA disabled; int >= 2 = number of folds
 "wfa_min_fold_trades": 5         # min OOS trades per fold to score it (rolling WFA only)
 "export_ml_features": False      # True = write ml_features.parquet after the run (requires pyarrow)
-"verbose_output": False          # True = print Extended Metrics + Robustness tables; --verbose overrides at runtime
+"verbose_output": False          # True = print Extended Metrics + Robustness tables; --verbose / --no-verbose override at runtime
 "noise_injection_pct": 0.0       # 0.0 = disabled (default, stress testing is opt-in). Set to e.g. 0.01 for ±1% stress test.
 "risk_free_rate": 0.05           # annual, used in Sharpe calculation (default 5% — US T-bill proxy)
 "sensitivity_sweep_enabled": False  # opt-in parameter fragility sweep

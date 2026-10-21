@@ -652,7 +652,7 @@ def _portfolio_data_mb(portfolio_data) -> float | None:
 
 def main():
     # --- ARGUMENT PARSING (full parser, applied before any CONFIG reads) ---
-    from helpers.cli_config import build_parser, apply_overrides, print_help_config
+    from helpers.cli_config import build_parser, apply_overrides, print_help_config, resolve_verbose
     parser = build_parser()
     args = parser.parse_args()
 
@@ -732,7 +732,7 @@ def main():
     # --- END S2 ---
 
     # --- FOLDER SETUP ---
-    CONFIG["verbose_output"] = args.verbose
+    CONFIG["verbose_output"] = resolve_verbose(args, CONFIG)
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     run_folder_name = f"{args.name}_{timestamp}" if args.name else timestamp
     start_time = time.monotonic()

@@ -105,8 +105,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Validate config and print summary without fetching data or running simulations.",
     )
     parser.add_argument(
-        "--verbose", action="store_true",
-        help="Show all columns in the summary table (default: compact view).",
+        "--verbose", dest="verbose", action="store_true", default=None,
+        help="Show all columns in the summary table (overrides config verbose_output).",
+    )
+    parser.add_argument(
+        "--no-verbose", dest="verbose", action="store_false", default=None,
+        help="Force the compact summary table (overrides config verbose_output=True).",
     )
     parser.add_argument("--init", action="store_true", help=argparse.SUPPRESS)
 
@@ -320,6 +324,13 @@ _DIRECT_KEYS = [
     "noise_injection_pct", "rolling_sharpe_window",
     "export_ml_features", "upload_to_s3", "max_workers",
 ]
+
+
+def resolve_verbose(args: argparse.Namespace, config_dict: dict) -> bool:
+    """CLI --verbose / --no-verbose wins; otherwise fall back to config verbose_output."""
+    if args.verbose is not None:
+        return bool(args.verbose)
+    return bool(config_dict.get("verbose_output", False))
 
 
 def apply_overrides(config_dict: dict, args: argparse.Namespace) -> dict:
