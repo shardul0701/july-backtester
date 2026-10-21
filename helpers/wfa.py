@@ -274,8 +274,9 @@ def evaluate_wfa(
     2. **Severe degradation**: OOS annualised return degrades by more than 75 %
        relative to IS annualised return (only checked when IS annualised > 0).
 
-    "N/A" is returned when OOS has fewer than ``_MIN_OOS_TRADES`` trades
-    (insufficient data to judge).
+    "N/A" is returned when either side has fewer than ``_MIN_OOS_TRADES``
+    trades: a verdict needs a real in-sample history to compare against (an
+    empty IS would otherwise skip both rules and auto-pass).
 
     Returns
     -------
@@ -288,8 +289,8 @@ def evaluate_wfa(
 
     oos_pnl_pct = _total_pnl_pct(oos_trades, initial_capital, oos_base, equity_curve, oos_window)
 
-    # Not enough OOS trades to issue a meaningful verdict
-    if not oos_trades or len(oos_trades) < _MIN_OOS_TRADES:
+    # Not enough OOS or IS trades to issue a meaningful verdict
+    if len(oos_trades) < _MIN_OOS_TRADES or len(is_trades) < _MIN_OOS_TRADES:
         return {"oos_pnl_pct": oos_pnl_pct, "wfa_verdict": "N/A"}
 
     is_pnl_pct = _total_pnl_pct(is_trades, initial_capital, is_base, equity_curve, is_window)
