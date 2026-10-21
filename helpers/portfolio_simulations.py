@@ -1017,16 +1017,20 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                 # trades -- dispatching a method is not the same as feeding it.
                 if _s_eq_sizing_method == "kelly":
                     _s_sizing_kwargs_base.update(_kelly_stats(trade_log))
-                # Portfolio-heat risk fraction, by the LONG path's rule so the
-                # gate admits the same position in either direction: the real
-                # stop fraction for the two methods whose long sizing carries
-                # stop_distance_pct (risk_parity with a resolvable stop,
-                # risk_pct_capped), the target_risk_per_trade proxy otherwise.
-                # Before this the equity short always used the proxy and the
-                # futures short always used the real stop -- opposite
-                # asymmetries, both measured by adversarial QA on #392
-                # (risk_parity 5% stop, 0.3% heat cap: LONG rejected, SHORT
-                # admitted 80 shares; futures fixed: LONG 200, SHORT rejected).
+                # EQUITY short portfolio-heat risk fraction, by the LONG path's
+                # rule so the gate admits the same position in either
+                # direction: the real stop fraction for the two methods whose
+                # long sizing carries stop_distance_pct (risk_parity with a
+                # resolvable stop, risk_pct_capped), the target_risk_per_trade
+                # proxy otherwise. Before this the equity short always used the
+                # proxy (adversarial QA on #392: risk_parity 5% stop, 0.3% heat
+                # cap -> LONG rejected, SHORT admitted 80 shares).
+                #
+                # NOT used by the futures short, which keeps the real stop risk
+                # #331 chose on purpose. The futures LONG uses the proxy, so the
+                # two futures legs still differ under a binding heat cap -- the
+                # long is the wrong side, and fixing it moves long numbers:
+                # tracked separately (see the futures heat gate below).
                 _s_heat_frac = (
                     _s_ir / ep
                     if (_s_eq_sizing_method in ("risk_parity", "risk_pct_capped")
@@ -1143,6 +1147,26 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                                   / _s_per_contract_margin
                                   if _s_per_contract_margin > 0 else 0.0)
 
+                    # Portfolio-heat gate (#324 QA / issue #331), BEFORE the
+                    # free-margin clamp and round_units, where the long leg
+                    # checks it -- gating the clamped count instead admitted a
+                    # short whose unclamped size the long rejected (vol_parity,
+                    # ATR 0.2: LONG None / SHORT 2000 even at heat 1.0;
+                    # adversarial QA round 2 on #392). Risk is the REAL stop
+                    # risk when the stop is known, as #331 chose: futures set
+                    # their stop before sizing, and the target_risk proxy
+                    # understates it (two 5%-stop MES shorts = 10% real risk were
+                    # both admitted under a 6% cap when the proxy was used).
+                    def _fs_risk(n):
+                        if _s_ir and _s_ir > 0:
+                            return _s_ir * inst_se.point_value * n
+                        return (_inst.notional(inst_se, n, _s_entry_fill)
+                                * CONFIG.get("target_risk_per_trade", 0.02))
+                    if not check_portfolio_heat({**positions, **short_positions},
+                                                _fs_risk(shares), total_equity,
+                                                CONFIG.get("max_portfolio_heat", 1.0)):
+                        continue
+
                     # Free-margin clamp. The old branch applied this up front via
                     # `alloc = min(total_equity * allocation_pct, _free)`; the
                     # sizing methods do not all target a notional, so it is a
@@ -1157,17 +1181,9 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     shares = _inst.round_units(inst_se, shares)
                     if shares < 1:
                         continue
-                    # Portfolio-heat gate (#324 QA / issue #331). The equity short
-                    # branch below gained this in #312; the futures branch did not,
-                    # so a futures short was admitted regardless of book heat AND
-                    # registered no 'risk', contributing 0 to every later entry's
-                    # gate. Risk fraction: _s_heat_frac, the long path's rule.
-                    _fs_new_risk = (_inst.notional(inst_se, shares, _s_entry_fill)
-                                    * _s_heat_frac)
-                    _fs_max_heat = CONFIG.get("max_portfolio_heat", 1.0)
-                    if not check_portfolio_heat({**positions, **short_positions},
-                                                _fs_new_risk, total_equity, _fs_max_heat):
-                        continue
+                    # Registered for later entries' gates from the FINAL count
+                    # (#317), as the long path does.
+                    _fs_new_risk = _fs_risk(shares)
                     _s_margin = _inst.margin_required(inst_se, shares, _s_entry_fill)
                     commission = _inst.commission(inst_se, shares)
                     if _s_margin + commission > cash - reserved_margin:
@@ -1254,6 +1270,24 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                             and inst_se.point_value != 1.0):
                         shares = shares / inst_se.point_value
 
+                    # Portfolio heat gate (mirror of the long path), with the
+                    # long path's risk fraction (_s_heat_frac above), at the
+                    # long's position: BEFORE the cash clamp and ADV cap. It sat
+                    # after the cash clamp, so a method sizing past cash had its
+                    # long rejected on the unclamped count and its short admitted
+                    # on the clamped one (vol_parity: LONG None / SHORT 1000;
+                    # adversarial QA round 2 on #392). The pre-clamp
+                    # over-statement is tracked for both legs as #317.
+                    _s_stop_dist = _s_heat_frac
+                    _s_new_risk = _inst.notional(inst_se, shares, _s_entry_fill) * _s_stop_dist
+                    _s_max_heat = CONFIG.get("max_portfolio_heat", 1.0)
+                    # Gate against BOTH open longs and open shorts, and register
+                    # this short's own risk below so subsequent entries see it —
+                    # otherwise a shorts-only book never accumulates heat (#312 QA).
+                    if not check_portfolio_heat({**positions, **short_positions},
+                                                _s_new_risk, total_equity, _s_max_heat):
+                        continue
+
                     # The cash clamp the hardcoded `min(..., cash)` used to
                     # provide. Kept as a clamp rather than folded into the
                     # allocation, because the sizing methods do not all target a
@@ -1268,19 +1302,6 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     if shares <= 0:
                         continue
 
-                    # Portfolio heat gate (mirror of the long path), with the
-                    # long path's risk fraction (_s_heat_frac above). NOTE: like
-                    # the long side, this uses the pre-ADV-cap `shares` — the
-                    # pre-clamp over-statement is tracked for both sites as #317.
-                    _s_stop_dist = _s_heat_frac
-                    _s_new_risk = _inst.notional(inst_se, shares, _s_entry_fill) * _s_stop_dist
-                    _s_max_heat = CONFIG.get("max_portfolio_heat", 1.0)
-                    # Gate against BOTH open longs and open shorts, and register
-                    # this short's own risk below so subsequent entries see it —
-                    # otherwise a shorts-only book never accumulates heat (#312 QA).
-                    if not check_portfolio_heat({**positions, **short_positions},
-                                                _s_new_risk, total_equity, _s_max_heat):
-                        continue
 
                     # ADV liquidity cap (mirror of the long path).
                     _s_max_pct_adv = CONFIG.get('max_pct_adv') or 0

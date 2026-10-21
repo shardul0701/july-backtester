@@ -727,10 +727,13 @@ class TestShortSideHonoursTheSizingMethod:
         # real 5% stop: LONG rejected, SHORT admitted 80 shares
         ("LNG", "risk_parity", 0.003),
         ("LNG", "risk_pct_capped", 0.003),
-        # futures short used the real stop where the long used the proxy:
-        # LONG 200, SHORT rejected
-        ("MESM6", "fixed", 0.005),
-        ("MESM6", "kelly", 0.005),
+        # Futures: the short uses the REAL stop risk (#331), the long the
+        # target_risk proxy -- LONG 200 admitted, SHORT rejected. The long is
+        # the wrong side; fixing it moves long numbers, so it is #467.
+        pytest.param("MESM6", "fixed", 0.005, marks=pytest.mark.xfail(
+            strict=True, reason="#467: futures long heat uses the proxy")),
+        pytest.param("MESM6", "kelly", 0.005, marks=pytest.mark.xfail(
+            strict=True, reason="#467: futures long heat uses the proxy")),
     ])
     def test_heat_gate_admits_the_same_position_either_way(self, sym, method, heat):
         pct5 = {"type": "percentage", "value": 0.05}
@@ -740,6 +743,51 @@ class TestShortSideHonoursTheSizingMethod:
         assert (L is None) == (S is None), (method, heat, L, S)
         if L is not None:
             assert S == pytest.approx(L, rel=0.01)
+
+    @pytest.mark.parametrize("sym,atr,heat", [
+        ("LNG", 1.0, 0.03),     # cash clamp binds
+        ("MESM6", 0.2, 1.0),    # free-margin clamp binds; diverged at heat 1.0
+    ])
+    def test_heat_gate_runs_before_the_clamp_on_both_legs(self, sym, atr, heat):
+        """The long gates heat on the UNCLAMPED count, then clamps to cash /
+        margin. The shorts gated after clamping, so a method sizing past cash
+        was rejected long and admitted short: LONG None / SHORT 1000 (equity),
+        LONG None / SHORT 2000 (futures). Adversarial QA round 2 on #392."""
+        cfg = {"max_portfolio_heat": heat, "target_risk_per_trade": 0.02}
+        none = {"type": "none"}
+        L, _ = self._one_leg(sym, 1, "vol_parity", none, cfg, atr=atr)
+        S, _ = self._one_leg(sym, -2, "vol_parity", none, cfg, atr=atr)
+        assert L == S, (L, S)
+
+    def test_futures_short_registers_real_stop_risk(self):
+        """Two 5%-stop MES shorts at 200 contracts risk 5% of equity each. A 6%
+        cap must admit one. Registering the target_risk proxy instead (an
+        intermediate draft of #392's symmetry fix) admitted both -- 10% real
+        risk under a 6% cap."""
+        from unittest.mock import patch
+        import helpers.portfolio_simulations as ps
+        idx = pd.bdate_range("2024-01-02", periods=6)
+        data, sigs = {}, {}
+        for sym in ("MESM6", "MESZ6"):
+            df = pd.DataFrame({"Open": 100.0, "High": 101.0, "Low": 99.0,
+                               "Close": 100.0, "Volume": 1_000_000}, index=idx)
+            df["ATR_14"], df["ATR_14_pct"], df["RSI_14"] = 1.0, 0.01, 50.0
+            df["SMA_200"] = df["Close"]
+            sig = pd.Series(0, index=idx); sig.iloc[0] = -2; sig.iloc[4] = -1
+            data[sym], sigs[sym] = df, sig
+        cfg = {"position_sizing_method": "fixed", "target_risk_per_trade": 0.02,
+               "max_portfolio_heat": 0.06, "max_pct_adv": 0.0,
+               "slippage_pct": 0.0, "execution_time": "open",
+               "instruments": {"default_asset_class": "equity",
+                               "futures_initial_margin_pct": 0.10,
+                               "futures_commission_per_contract": 0.0,
+                               "futures_slippage_ticks": 0.0, "overrides": {}}}
+        with patch.dict(ps.CONFIG, cfg):
+            res = ps.run_portfolio_simulation(
+                data, sigs, 100_000.0, 0.10, None, None, None,
+                {"type": "percentage", "value": 0.05})
+        opened = [(t["Symbol"], t["Shares"]) for t in res["trade_log"]]
+        assert opened == [("MESM6", 200.0)], opened
 
     def test_fixed_contracts_no_longer_diverges_33x(self):
         """The widest of the five, and the one the banner originally excluded
