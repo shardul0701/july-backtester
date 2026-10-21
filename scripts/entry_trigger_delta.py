@@ -227,7 +227,7 @@ def main():
       + names([r for r in rows if r[2] == r[3]], lambda r: f"{r[0]} [{r[1]}]"))
     w("not exercised (0 trades in both modes, excluded from counts): "
       + names(idle, lambda x: f"{x[0]} [{x[1]}]"))
-    w("simulation errors (excluded, listed): "
+    w("errors, signal or simulation (excluded, listed): "
       + names(errors, lambda x: f"{x[0]} [{x[1]}] {x[2]}"))
     n_fail = sum(len(v) for v in sig_fail.values())
     w(f"signal-stage symbol failures: {n_fail} across {len(sig_fail)} strategies"

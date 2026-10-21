@@ -2,17 +2,21 @@
 
 This compares the number of trades each registered strategy makes under `entry_trigger="level"` and under `"edge"`. Everything else is held fixed: the same data and the same signals, computed once per strategy and reused for both modes. The universe is 30 large-cap US equities from 2018-01-01 to 2026-06-30, with $100k capital, 10% allocation and a 5% percentage stop. The report's `config:` line lists every other setting that moves the numbers.
 
-Generated 2026-10-21 on engine commit `08e285ac` (#405). The report below is the script's exact `--out` file, with nothing pasted by hand.
+Generated 2026-10-21 on engine commit `08e285ac` (#405). The report below is the script's exact `--out` file, with nothing pasted by hand, apart from one census label renamed afterwards to match a later script change (`simulation errors` → `errors, signal or simulation`). No number changed.
 
 ## What a public checkout can reproduce
 
-Run `python scripts/entry_trigger_delta.py --hide-private --out <file>` from a public clone with the price corpus. That reproduces **the 38 public rows and the "public only" total: 55,335 → 39,285, −29.0%**. In an independent re-run on a different data path, @shardul0701 got 55,291 → 39,242, also −29.0%.
+The **38 public rows and the "public only" total (55,335 → 39,285, −29.0%)** are computed only from code in the public repo. The prices are not public, though. `--corpus` defaults to `parquet_data/data`, the licensed per-symbol parquet corpus, which is a private submodule and isn't in a public clone. Without it, the script loads 0/30 symbols.
+
+So the exact row values need that corpus. A different data source gives approximately the same answer: @shardul0701 re-ran it on the `data_gate` corpus plus overlay and got 55,291 → 39,242, also −29.0%, with 14 of the 28 rows he could match exactly and the largest difference 53 trades.
+
+To regenerate from a full checkout, run `python scripts/entry_trigger_delta.py --hide-private --out <file>`.
 
 The "all" total also includes 99 strategies from the private submodule, which isn't available in a public checkout. Those strategies appear here only as aggregate counts and are never named. `--hide-private` enforces that, and `tests/test_entry_trigger_delta_script.py` checks that strategies are tagged public or private by their source file.
 
 ## Reading it
 
-- **Every public strategy trades less under edge: 38 of 38 fewer, 0 unchanged.** The size of the drop tracks how the strategy's signal is built. State-shaped signals move a lot: the crossover and confluence family drops 45–65%, and Bollinger fade drops 45–47%. Pulse-like and calendar signals barely move: `Weekend Hold` −1.1%, `SMA 200 Trend Filter` −2.1%, `OBV Trend` −7.4%. So the effect is a gradient, not a split into "affected" and "unaffected" strategies.
+- **Every public strategy trades less under edge: 38 of 38 fewer, 0 unchanged.** The size of the drop tracks how the strategy's signal is built. State-shaped signals move a lot: the EMA/SMA crossovers and the unfiltered MA Confluence variants drop 45–65% (the regime-filtered and medium-exit confluence variants drop 15% and 29%), and Bollinger fade drops 45–47%. Pulse-like and calendar signals barely move: `Weekend Hold` −1.1%, `SMA 200 Trend Filter` −2.1%, `OBV Trend` −7.4%. So the effect is a gradient, not a split into "affected" and "unaffected" strategies.
 - **The 19 unchanged strategies are all private.** No public strategy is unchanged, so this report makes no claim about signal shape that a public reader can't check.
 - **Edge can add trades as well as remove them.** One private strategy trades *more* under edge: +21 trades, +1.7%. That's the capacity re-plan effect noted in `config.py`: skipping a late entry frees capital for another symbol. It is real but rare on this book.
 - **Strategies that never traded are excluded.** "Not exercised" strategies (0 trades in both modes) are left out of the counts, because 0 = 0 says nothing about the semantics. Errors are listed rather than dropped. A symbol that fails at the signal stage is missing from both modes' books, never from just one.
@@ -73,6 +77,6 @@ TOTAL (private only)                                          117910   96781  -2
 
 unchanged (level == edge, > 0 trades): 19 private (not named)
 not exercised (0 trades in both modes, excluded from counts): 6 private (not named)
-simulation errors (excluded, listed): 1 private (not named)
+errors, signal or simulation (excluded, listed): 1 private (not named)
 signal-stage symbol failures: 30 across 1 strategies
 ```
