@@ -144,6 +144,7 @@ KNOWN_KEYS: set[str] = {
     "intrabar_resolution",
     "stop_gap_fill",
     "stop_gap_fill_armed_trail",
+    "entry_bar_stop_check",
     "intrabar_timeframe",
     "intrabar_multiplier",
     "intrabar_parquet_source",

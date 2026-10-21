@@ -407,6 +407,11 @@ CONFIG = {
     # Sleeve A parity: an ARMED trailing_atr trail fills at the exact trail level
     # (gap or not). Set "open" to apply stop_gap_fill to armed trails too.
     "stop_gap_fill_armed_trail": "level",
+    # Fill-bar stop check (issue #426). Under execution_time="open" the entry fills at
+    # the bar Open, so that bar's Low (High for shorts) is live against the initial
+    # stop: a breach closes the trade on the fill bar. False = legacy (first stop
+    # check on the NEXT bar). No effect under execution_time="close".
+    "entry_bar_stop_check": True,
     # Finer-resolution timeframe fetched per symbol when intrabar_resolution is on.
     "intrabar_timeframe": "MIN",     # "MIN" | "H"
     "intrabar_multiplier": 1,        # e.g. 5 for 5-minute sub-bars
