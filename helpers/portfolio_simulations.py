@@ -377,19 +377,40 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
     # high-variance one). Revisit only alongside a decision about what a
     # missing ADV should mean -- see the discussion on #269.
     def _daily_adv(volume_series, at_date, symbol):
-        """Trailing ~20-trading-day average DAILY volume as of `at_date`."""
-        adv_series = _adv_cache.get(symbol)
-        if adv_series is None:
+        """Trailing ~20-trading-day average DAILY volume known at order time.
+
+        Timing (issue #436): under ``execution_time="open"`` the order fills at
+        the bar's open, but ``volume_series`` at ``at_date`` holds that bar's
+        FULL-session volume, which is not known yet. The rolling mean is
+        therefore shifted one bar so the value returned for ``at_date`` covers
+        bars strictly BEFORE it. Under ``"close"`` the fill is the bar's last
+        print, so the same-bar value is used unchanged.
+
+        First bar of a series: the shifted value is NaN (no prior bar). Both
+        consumers skip their block on NaN, which would silently remove the cap
+        and impact for that fill, so in that case (and only that case) we fall
+        back to the same-bar value -- a deliberately accepted one-bar
+        look-ahead per symbol, preferred over an uncapped fill.
+        """
+        cached = _adv_cache.get(symbol)
+        if cached is None:
             window_bars, bars_per_day = _adv_params(symbol)
-            adv_series = _adv_cache[symbol] = (
+            same_bar = (
                 volume_series.rolling(
                     window=window_bars, min_periods=1
                 ).mean()
                 * bars_per_day
             )
+            cached = _adv_cache[symbol] = (same_bar, same_bar.shift(1))
+        same_bar, prior_bar = cached
         # NaN propagates through the multiply, so a missing/NaN bar still
         # yields NaN here exactly as the per-call version did.
-        return adv_series.get(at_date, np.nan)
+        if execution_time != "open":
+            return same_bar.get(at_date, np.nan)
+        val = prior_bar.get(at_date, np.nan)
+        if pd.isna(val) and at_date in same_bar.index and same_bar.index.get_loc(at_date) == 0:
+            return same_bar.get(at_date, np.nan)
+        return val
 
     short_positions: dict = {}
 
