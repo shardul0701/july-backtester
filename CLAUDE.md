@@ -119,6 +119,8 @@ Both failures are **silent**: `gh` exits 0 and prints a URL. Nothing tells you t
 "slippage_pct": 0.0005
 "commission_per_share": 0.002
 "min_trades_for_mc": 50
+"min_bars_required": 200        # min bars INSIDE start_date..end_date; plain lists drop shorter symbols, pit:/rule:/include_delisted keep them (#433)
+"pit_warmup_days": 400           # calendar days fetched before start_date so indicators are warm; 0 = off (#433)
 "num_mc_simulations": 1000
 "max_workers": None              # cap the simulation pool (--workers N); each worker copies portfolio_data, so wide universes may need 1-2 (#414)
 "wfa_split_ratio": 0.80          # 0.80 = 80% IS / 20% OOS; None or 0 = disabled
@@ -918,3 +920,10 @@ In `helpers/summary.py::generate_per_portfolio_summary()`, Step 4b's `save_only_
 - `main.py` sorts trades by `ExitDate` before MC and scoring (end-of-backtest/delisting closes are appended after the loop). Extra result keys: `mc_edge_pvalue`, `mc_closed_trade_dd`.
 - Functions accept an optional numpy `rng` (Generator) for deterministic seeding.
 - Tests: `tests/test_mc_scoring.py`.
+
+## Short-Lived Names & Warm-Up (#433)
+
+- **Warm-up**: portfolio symbols are fetched from `start_date - pit_warmup_days` (default 400, `0` disables) for **every** portfolio type. Features (`RSI_14`, `SMA200_dist_pct`, ...) and strategy signals are computed on the full frame; `run_single_simulation` then trims each frame and its signal Series to `>= start_date` (`_trim_to_start`) just before `run_portfolio_simulation`, so no entry and no equity-timeline point precedes `start_date`. Benchmarks, `Actual Data Period` and WFA dates still come from the comparison tickers fetched at `start_date`. The data cache is keyed by requested start, so warm-up fetches use a different cache key than pre-#433 entries.
+- **Bar filter**: `min_bars_required` counts bars inside the window only. Plain list/JSON/Norgate universes drop short symbols as before. `pit:`/`rule:` universes and `include_delisted=True` **keep** them (indicator-less bars yield no signals) and log an INFO count.
+- **`output/runs/<run_id>/skipped_symbols.csv`**: columns `portfolio, symbol, bars, reason, action`; `reason` is `ended_before_end_date` (likely delisted), `started_after_start_date` (late listing), both joined by `;`, or `fewer_than_min_bars`; `action` is `skipped` or `kept`.
+- Tests: `tests/test_short_lived_names.py`.
