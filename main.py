@@ -12,7 +12,7 @@ from services import get_data_service
 from helpers.indicators import calculate_sma, calculate_rsi, calculate_atr
 from helpers.registry import get_active_strategies
 from helpers.portfolio_simulations import run_portfolio_simulation
-from helpers.summary import generate_portfolio_summary_report, generate_per_portfolio_summary, generate_sensitivity_report
+from helpers.summary import generate_portfolio_summary_report, generate_per_portfolio_summary, generate_sensitivity_report, safe_path_component
 from helpers.llm_verdict import generate_llm_verdict
 from helpers.sensitivity import build_param_grid, is_sweep_enabled, label_for_params
 from helpers.correlation import run_correlation_analysis, DEFAULT_THRESHOLD
@@ -1141,7 +1141,7 @@ def main():
     
     for p_name, p_results in results_by_portfolio.items():
         # --- Strategy Correlation Analysis (run first so matrix is available for summary) ---
-        portfolio_name_safe = p_name.replace(" ", "_")
+        portfolio_name_safe = safe_path_component(p_name)
         corr_csv_path = os.path.join(
             "output", "runs", run_folder_name,
             f"{portfolio_name_safe}_strategy_correlation.csv"

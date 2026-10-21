@@ -29,6 +29,18 @@ def _safe_strategy_name(strategy_name):
     )
     return sanitize_symbol_for_filename(cosmetic)
 
+
+def safe_path_component(name):
+    """A portfolio or symbol name made safe for use in an output path.
+
+    Same idea as :func:`_safe_strategy_name` for the other two components of an
+    output path: keep the historical space-to-underscore transform so existing
+    legal folder names do not churn, then run the shared sanitizer. A portfolio
+    key like ``"Nasdaq: PIT"`` or an index asset like ``I:SPX`` otherwise lands
+    a ``:`` in the path, which Windows rejects the same way it rejects ``>``.
+    """
+    return sanitize_symbol_for_filename(str(name).replace(" ", "_"))
+
 # Default drawdown filter shared by all four summary functions, so the value
 # cannot drift between copies again (issue #319 was one copy defaulting to
 # -9999.0). 1.0 = allow up to 100% max drawdown. max_drawdown is a positive
@@ -158,8 +170,8 @@ def save_trades_to_csv(result, local_folder, run_id):
     
     # Sanitize names for filenames/paths
     strategy_name_safe = _safe_strategy_name(result['Strategy'])
-    portfolio_name_safe = result.get('Portfolio', 'Portfolio').replace(" ", "_")
-    symbol = result.get('Asset', portfolio_name_safe)
+    portfolio_name_safe = safe_path_component(result.get('Portfolio', 'Portfolio'))
+    symbol = safe_path_component(result.get('Asset', portfolio_name_safe))
 
     filename = f"{symbol}_{strategy_name_safe}_trade_log.csv"
     local_filepath = os.path.join(local_folder, filename)
@@ -644,7 +656,7 @@ def generate_per_portfolio_summary(portfolio_results, portfolio_name, benchmark_
             print("\n  Run with --verbose for extended metrics and robustness scores.")
 
     # --- Step 4a: Export analyzer-compatible CSVs ---
-    portfolio_name_safe = portfolio_name.replace(" ", "_")
+    portfolio_name_safe = safe_path_component(portfolio_name)
     analyzer_csv_folder = os.path.join("output", "runs", run_id, "analyzer_csvs", portfolio_name_safe)
 
     # Column mapping: backtester trade_log keys -> trade_analyzer expected columns
