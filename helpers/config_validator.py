@@ -142,6 +142,8 @@ KNOWN_KEYS: set[str] = {
     "instruments",
     # Sub-bar (intraday) resolution
     "intrabar_resolution",
+    "stop_gap_fill",
+    "stop_gap_fill_armed_trail",
     "intrabar_timeframe",
     "intrabar_multiplier",
     "intrabar_parquet_source",

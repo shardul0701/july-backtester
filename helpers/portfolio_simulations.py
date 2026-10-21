@@ -108,7 +108,38 @@ def _update_trailing_atr_stop(pos, sym_df, date, stop_config, side="long"):
         pos['stop_loss_level'] = candidate if pd.isna(prev) else min(prev, candidate)
 
 
-def _prearm_decision(high, low, stop_level, target, window_bars, side="long"):
+def _coarse_stop_fill(stop_level, bar_open, side="long", gap_mode="open"):
+    """Fill price for a coarse-bar stop hit (issue #425).
+
+    ``gap_mode="open"``: a bar that OPENS beyond the stop (gap-through) fills at
+    the worse open, not the unreachable stop level -- ``min(Open, stop)`` long,
+    ``max(Open, stop)`` short. A bar that opens inside the stop and trades
+    through it still fills at the stop. NaN/missing Open falls back to the stop.
+    ``gap_mode="level"`` always returns the stop level (legacy behaviour).
+    """
+    if gap_mode != "open" or bar_open is None or pd.isna(bar_open):
+        return stop_level
+    return min(bar_open, stop_level) if side == "long" else max(bar_open, stop_level)
+
+
+def _stop_gap_mode(stop_config, pos):
+    """Resolve the gap-fill mode for a position's stop hit.
+
+    ``CONFIG["stop_gap_fill"]`` ("open" default | "level") is the global switch.
+    Sleeve A parity exception: once a ``trailing_atr`` trail has ARMED, the
+    reference fills at the exact trail level, so that case stays "level" unless
+    ``stop_gap_fill_armed_trail`` is explicitly set to "open".
+    """
+    if str(CONFIG.get("stop_gap_fill", "open")).lower() != "open":
+        return "level"
+    if (stop_config.get("type") == "trailing_atr" and pos.get('trail_armed', False)
+            and str(CONFIG.get("stop_gap_fill_armed_trail", "level")).lower() != "open"):
+        return "level"
+    return "open"
+
+
+def _prearm_decision(high, low, stop_level, target, window_bars, side="long",
+                     bar_open=None, gap_mode="level"):
     """Outcome of ONE pre-arm bar for a ``trailing_atr`` position.
 
     Returns ``("stop", fill)`` | ``("arm", None)`` | ``("hold", None)``:
@@ -119,7 +150,9 @@ def _prearm_decision(high, low, stop_level, target, window_bars, side="long"):
       engine's prior behaviour),
     - only the stop → ``("stop", stop_level)`` (reference parity: the leg1 loop
       never gap-refines a plain stop-only hit, same convention as the armed
-      leg2 trail — only the both-hit race above consults finer data),
+      leg2 trail — only the both-hit race above consults finer data); with
+      ``gap_mode="open"`` and ``bar_open`` supplied, a gap-through fills at the
+      worse open (issue #425),
     - only the target → ``("arm", None)`` (caller arms + seeds the trail),
     - neither → ``("hold", None)``.
 
@@ -142,9 +175,9 @@ def _prearm_decision(high, low, stop_level, target, window_bars, side="long"):
             return ("arm", None)
         if which == "stop":
             return ("stop", fill)
-        return ("stop", stop_level)   # no finer coverage -> conservative stop-first
+        return ("stop", _coarse_stop_fill(stop_level, bar_open, side, gap_mode))   # no finer coverage -> conservative stop-first
     if hit_s:
-        return ("stop", stop_level)
+        return ("stop", _coarse_stop_fill(stop_level, bar_open, side, gap_mode))
     if hit_t:
         return ("arm", None)
     return ("hold", None)
@@ -567,7 +600,9 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                                                    next_trading_dates[symbol].get(date))
                     _decision, _fill = _prearm_decision(
                         current_high, current_low, pos['stop_loss_level'], pos['trail_target'],
-                        _wbars, side="long")
+                        _wbars, side="long",
+                        bar_open=portfolio_data[symbol].loc[date].get('Open'),
+                        gap_mode=_stop_gap_mode(stop_config, pos))
                     if _decision == "stop":
                         raw_exit_price = _fill
                         exit_date = date
@@ -576,7 +611,10 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     # calls _update_trailing_atr_stop, which arms + seeds off THIS same
                     # bar's High when the target was reached (idempotent on "hold").
                 elif pd.notna(current_low) and current_low <= pos['stop_loss_level']:
-                    raw_exit_price = pos['stop_loss_level']
+                    # Gap-through: a bar opening below the stop fills at the open (#425).
+                    raw_exit_price = _coarse_stop_fill(
+                        pos['stop_loss_level'], portfolio_data[symbol].loc[date].get('Open'),
+                        "long", _stop_gap_mode(stop_config, pos))
                     exit_date = date
                     exit_reason = f"Stop Loss ({stop_config['type']})"
                     # Sub-bar resolution: refine the fill from finer-resolution bars
@@ -802,14 +840,18 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                                                    next_trading_dates[symbol].get(date))
                     _decision, _fill = _prearm_decision(
                         cur_high, cur_low, spos['stop_loss_level'], spos['trail_target'],
-                        _wbars, side="short")
+                        _wbars, side="short", bar_open=row.get('Open'),
+                        gap_mode=_stop_gap_mode(stop_config, spos))
                     if _decision == "stop":
                         cover_raw = _fill
                         cover_reason = f"Stop Loss ({stop_config['type']})"
                     # "arm" / "hold": leave cover_raw NaN — the trail-update below arms
                     # + seeds off THIS same bar's Low when the target was reached.
                 elif pd.notna(cur_high) and cur_high >= spos['stop_loss_level']:
-                    cover_raw = spos['stop_loss_level']
+                    # Gap-through: a bar opening above the stop covers at the open (#425).
+                    cover_raw = _coarse_stop_fill(
+                        spos['stop_loss_level'], row.get('Open'),
+                        "short", _stop_gap_mode(stop_config, spos))
                     cover_reason = f"Stop Loss ({stop_config['type']})"
                     # See mirrored long-side comment: skip gap-refinement once the ATR
                     # trail has armed, matching the reference's exact-level trail fill.
