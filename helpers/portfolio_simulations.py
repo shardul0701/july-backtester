@@ -170,6 +170,28 @@ def _walk_back(prev_dates, date, n):
     return date
 
 
+def _kelly_stats(trade_log):
+    """Rolling ``win_rate`` / ``avg_win`` / ``avg_loss`` for kelly sizing.
+
+    Empty until 10 trades have completed and both a win and a loss exist, in
+    which case ``_kelly_criterion`` falls back to fixed allocation. One builder
+    for all three sizing call sites: the short legs used to supply none of these
+    keys, so past ten trades a long sized off the strategy's record while a
+    short on the same bar stayed pinned at the fallback (#386, @shardul0701).
+    """
+    if len(trade_log) < 10:
+        return {}
+    wins = [t for t in trade_log if t.get("is_win") == 1 and t.get("ProfitPct") is not None]
+    losses = [t for t in trade_log if t.get("is_win") == 0 and t.get("ProfitPct") is not None]
+    if not (wins and losses):
+        return {}
+    return {
+        "win_rate": len(wins) / len(trade_log),
+        "avg_win": sum(t["ProfitPct"] for t in wins) / len(wins),
+        "avg_loss": sum(abs(t["ProfitPct"]) for t in losses) / len(losses),
+    }
+
+
 def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocation_pct, spy_df, vix_df, tnx_df, stop_config, size_mults=None, delisting_dates=None, intrabar_data=None):
     """
     Runs a portfolio simulation with integrated stop-loss handling and logs
@@ -984,6 +1006,12 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     "point_value": inst_se.point_value,
                     "margined": inst_se.margin_mode == _inst.INITIAL_MARGIN,
                 }
+                # kelly's inputs, from the same builder the long path uses. The
+                # method was DISPATCHED on both short legs but never SUPPLIED,
+                # so it degraded to fixed allocation on every short past ten
+                # trades -- dispatching a method is not the same as feeding it.
+                if _s_eq_sizing_method == "kelly":
+                    _s_sizing_kwargs_base.update(_kelly_stats(trade_log))
                 # NOTE: no `stop_distance_pct` here. It would be DEAD --
                 # `_risk_parity` prefers `stop_distance_points` when both are
                 # given (#384), and the condition under which a fraction could
@@ -1033,11 +1061,12 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     # exactly, so a comparative test that happened to pick
                     # that distance passes on the bug.
                     #
-                    # kelly agrees on both legs but by DEGRADING, not by
-                    # working: neither leg supplies win_rate/avg_win/avg_loss
-                    # on a short, so _kelly_criterion falls back to
-                    # _fixed_allocation either way. Do not read that
-                    # agreement as evidence the dispatch is sound.
+                    # kelly looked like it agreed on both legs, but only by
+                    # DEGRADING: the short legs never supplied win_rate /
+                    # avg_win / avg_loss, so past ten trades the long sized
+                    # off the record and the short stayed at the fixed
+                    # fallback. Both short legs now read _kelly_stats(),
+                    # carried in _s_sizing_kwargs_base.
                     #
                     # (@shardul0701 on #392, who also traced the coverage gap
                     # to his own narrowing of the #372 banner: it was scoped
@@ -1067,6 +1096,8 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         # apply the contract cap to equities at that point.
                         margined=(inst_se.margin_mode
                                   == _inst.INITIAL_MARGIN),
+                        **{k: v for k, v in _s_sizing_kwargs_base.items()
+                           if k in ("win_rate", "avg_win", "avg_loss")},
                     )
 
                     # Unit-vs-dollar conversion, mirroring the long path's gate.
@@ -1433,13 +1464,8 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
 
                 # For kelly: compute rolling stats from completed trades so sizing
                 # actually adapts to the strategy's live performance.
-                if sizing_method == "kelly" and len(trade_log) >= 10:
-                    _wins = [t for t in trade_log if t.get("is_win") == 1 and t.get("ProfitPct") is not None]
-                    _losses = [t for t in trade_log if t.get("is_win") == 0 and t.get("ProfitPct") is not None]
-                    if _wins and _losses:
-                        sizing_kwargs["win_rate"] = len(_wins) / len(trade_log)
-                        sizing_kwargs["avg_win"] = sum(t["ProfitPct"] for t in _wins) / len(_wins)
-                        sizing_kwargs["avg_loss"] = sum(abs(t["ProfitPct"]) for t in _losses) / len(_losses)
+                if sizing_method == "kelly":
+                    sizing_kwargs.update(_kelly_stats(trade_log))
 
                 # Slice to current date to prevent look-ahead bias: vol_parity and
                 # risk_parity use .iloc[-1] on the passed DataFrame, so passing the

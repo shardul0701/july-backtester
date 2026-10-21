@@ -589,17 +589,84 @@ class TestShortSideHonoursTheSizingMethod:
         """The acceptance criterion: same method, same count, modulo the
         slippage sign that separates a buy fill from a sell fill.
 
-        `kelly` is deliberately absent. It agrees on both legs — but by
-        DEGRADING, not by working: the short path never supplies
-        win_rate/avg_win/avg_loss, so `_kelly_criterion` falls back to
-        `_fixed_allocation` on both sides. Including it here would add a green
-        row that is evidence of nothing. (@shardul0701 on #392.)
+        `kelly` is deliberately absent: `_book` completes no trades before the
+        compared entry, so kelly falls back to fixed allocation on both legs and
+        a row here would be evidence of nothing. It has its own test with ten
+        trades of history, `test_kelly_short_leg_reads_the_trade_record`.
+        (@shardul0701 on #392.)
         """
         out = self._book(method, instrument=instrument)
         if out.get("LNG") is None or out.get("SRT") is None:
             pytest.skip("no trade produced")
         assert out["SRT"] == pytest.approx(out["LNG"], rel=0.01), (
             method, instrument, out)
+
+    @staticmethod
+    def _kelly_book(instrument="equity", n_hist=12):
+        """A history symbol completes ``n_hist`` round trips (60% winners, +3%
+        / -2%), THEN the long and short legs enter on the same bar -- so both
+        legs size with a trade_log past kelly's 10-trade threshold. The
+        `_book` frame produces no history, which is why kelly agreed there."""
+        from unittest.mock import patch
+        import helpers.portfolio_simulations as ps
+        lng, srt = TestShortSideHonoursTheSizingMethod.SYMS[instrument]
+        dates = pd.bdate_range("2024-01-02", periods=3 * n_hist + 4)
+        his_px, his_sig = [], []
+        for i in range(n_hist):
+            up = (i % 5) not in (1, 3)              # 3 of every 5 win
+            his_px += [100.0, 100.0, 103.0 if up else 98.0]
+            his_sig += [1, -1, 0]
+        his_px += [100.0] * 4
+        his_sig += [0] * 4
+        his = pd.DataFrame({"Open": his_px, "High": [p * 1.001 for p in his_px],
+                            "Low": [p * 0.999 for p in his_px], "Close": his_px,
+                            "Volume": [1_000_000] * len(dates)}, index=dates)
+        his["ATR_14"], his["ATR_14_pct"], his["RSI_14"] = 1.0, 0.01, 50.0
+        his["SMA_200"] = his["Close"]
+        flat = his.copy()
+        for c in ("Open", "Close"):
+            flat[c] = 100.0
+        flat["High"], flat["Low"] = 101.0, 99.0
+        k = 3 * n_hist + 1                           # entry signal bar
+        sig_l = pd.Series(0, index=dates); sig_l.iloc[k] = 1
+        sig_s = pd.Series(0, index=dates); sig_s.iloc[k] = -2
+        base = {"position_sizing_method": "kelly", "kelly_fraction": 0.25,
+                "max_portfolio_heat": 1.0, "max_pct_adv": 0.0}
+        if instrument == "futures":
+            base["instruments"] = {
+                "default_asset_class": "equity",
+                "futures_initial_margin_pct": 0.10,
+                "futures_commission_per_contract": 0.0,
+                "futures_slippage_ticks": 0.0, "overrides": {}}
+        with patch.dict(ps.CONFIG, base):
+            res = ps.run_portfolio_simulation(
+                portfolio_data={"HIS": his, lng: flat, srt: flat.copy()},
+                signals={"HIS": pd.Series(his_sig, index=dates),
+                         lng: sig_l, srt: sig_s},
+                initial_capital=100_000.0, allocation_pct=0.10,
+                spy_df=None, vix_df=None, tnx_df=None,
+                stop_config={"type": "none"})
+        log = res["trade_log"]
+        by_sym = {t["Symbol"]: float(t["Shares"]) for t in log}
+        return len([t for t in log if t["Symbol"] == "HIS"]), \
+            by_sym.get(lng), by_sym.get(srt)
+
+    @pytest.mark.parametrize("instrument", ["equity", "futures"])
+    def test_kelly_short_leg_reads_the_trade_record(self, instrument):
+        """@shardul0701 on #392: kelly was dispatched on both short legs but
+        never SUPPLIED win_rate / avg_win / avg_loss, so past ten trades the
+        long sized off the record and the short stayed pinned at the fixed
+        fallback. Two assertions, because agreement alone is what hid it:
+        the legs agree, AND the long is not the fallback size (so the stats
+        actually reached the sizer and the agreement is not both degrading)."""
+        n_his, lng, srt = self._kelly_book(instrument)
+        assert n_his >= 10, n_his
+        assert lng is not None and srt is not None, (lng, srt)
+        assert srt == pytest.approx(lng, rel=0.01), (instrument, lng, srt)
+        # Fixed fallback is allocation_pct of equity; kelly here is ~8%.
+        fallback = self._book("fixed", instrument=instrument)["LNG"]
+        assert lng < fallback * 0.95, (
+            f"long sized {lng} vs fixed {fallback}: kelly stats never applied")
 
     def test_fixed_contracts_no_longer_diverges_33x(self):
         """The widest of the five, and the one the banner originally excluded
