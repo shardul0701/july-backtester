@@ -139,6 +139,7 @@ Both failures are **silent**: `gh` exits 0 and prints a URL. Nothing tells you t
 "volume_impact_coeff": 0.0       # square-root market impact coefficient; 0.0 = disabled
 "stop_gap_fill": "open"          # "open" = stop gapped through fills at the bar Open (min/max with stop); "level" = legacy fill at stop level (#425)
 "stop_gap_fill_armed_trail": "level"  # "open" also applies gap fills to an ARMED trailing_atr trail (default keeps Sleeve A exact-level parity)
+"entry_bar_stop_check": True  # execution_time="open": a fill-bar Low (High for shorts) breaching the initial stop closes the trade on the fill bar; False = legacy next-bar check (#426)
 ```
 
 ## Architecture Notes

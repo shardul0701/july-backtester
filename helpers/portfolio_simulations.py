@@ -1231,6 +1231,17 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         del short_positions[symbol]
                     else:
                         _update_trailing_atr_stop(_spos0, df, date, stop_config, side="short")
+                # --- FILL-BAR STOP CHECK (mirror of the long side, issue #426) ---
+                elif (execution_time == 'open' and CONFIG.get("entry_bar_stop_check", True)
+                        and pd.notna(short_positions[symbol].get('stop_loss_level'))):
+                    _spos0 = short_positions[symbol]
+                    _hi0 = df.loc[date].get('High')
+                    if pd.notna(_hi0) and _hi0 >= _spos0['stop_loss_level']:
+                        _cov0 = _coarse_stop_fill(
+                            _spos0['stop_loss_level'], df.loc[date].get('Open'),
+                            "short", _stop_gap_mode(stop_config, _spos0))
+                        _close_short_now(symbol, _spos0, date, _cov0, f"Stop Loss ({stop_config['type']})")
+                        del short_positions[symbol]
 
         # --- POSITION ENTRY LOGIC ---
         if _priority == "signal_date":
@@ -1792,6 +1803,22 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                             # THIS bar's High when the target was already reached (no-op
                             # otherwise), matching the reference's same-bar arm.
                             _update_trailing_atr_stop(_pos0, df, date, stop_config, side="long")
+                    # --- FILL-BAR STOP CHECK (execution_time="open", issue #426) ---
+                    # An open fill leaves the rest of the bar (its Low) live against the
+                    # initial stop, but the management loop only re-checks from the NEXT
+                    # date, so a same-bar breach was ignored. A resting stop would have
+                    # filled; close now. Not applied under "close" (the fill is the bar's
+                    # last print). The trailing_atr + intrabar path above owns its case.
+                    elif (execution_time == 'open' and CONFIG.get("entry_bar_stop_check", True)
+                            and pd.notna(positions[symbol].get('stop_loss_level'))):
+                        _pos0 = positions[symbol]
+                        _lo0 = df.loc[date].get('Low')
+                        if pd.notna(_lo0) and _lo0 <= _pos0['stop_loss_level']:
+                            _fill0 = _coarse_stop_fill(
+                                _pos0['stop_loss_level'], df.loc[date].get('Open'),
+                                "long", _stop_gap_mode(stop_config, _pos0))
+                            _close_long_now(symbol, _pos0, date, _fill0, f"Stop Loss ({stop_config['type']})")
+                            del positions[symbol]
 
     exclude_open = CONFIG.get('exclude_open_positions', False)
 
