@@ -836,6 +836,8 @@ Fixed in two parts:
 
 **Direction of the old error:** understated ADV made the cap bind *earlier* and impact charge *more*, so affected runs looked worse than reality, never better.
 
+**ADV timing (#436):** under `execution_time="open"` `_daily_adv` returns the ADV as of the PRIOR bar (the fill bar's full-session volume is not known at the open); under `"close"` it is same-bar. A symbol's first bar (no prior bar) falls back to the same-bar value so the cap is never silently skipped.
+
 `trading_hours_per_day <= 0` now raises on intraday timeframes instead of silently producing a zero ADV that rejected every trade.
 
 D/W/M resolve to exactly `1.0`, so the window stays 20 and the rescale is `×1.0` — byte-for-byte no-op, golden master unaffected.
