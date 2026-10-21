@@ -103,6 +103,7 @@ Both failures are **silent**: `gh` exits 0 and prints a URL. Nothing tells you t
 "data_provider": "polygon"         # or "norgate", "yahoo", "csv"
 "csv_data_dir": "csv_data"         # only used when data_provider = "csv"
 "polygon_api_secret_name": "POLYGON_API_KEY"  # AWS secret name OR .env key
+"polygon_max_retries": 5           # retries on HTTP 429/5xx w/ backoff + Retry-After; 0 = off
 "start_date": "2004-01-01"
 "initial_capital": 100000.0
 "timeframe": "D"                   # D, H, MIN, W, M
