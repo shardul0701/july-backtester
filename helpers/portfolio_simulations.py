@@ -253,10 +253,12 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
     # 26/27 at 0.01, with the strategy and the data held constant.
     # "edge" enters only on the transition INTO the entry state, which is how the
     # live SignalDeck scanner triggers (`last == 1 and prev != 1`).
-    # Default stays "level": flipping it would move every strategy in the repo
-    # and void tests/test_engine_characterization.py, so it is opt-in per run.
-    # Fallback matches the shipped default (#401): a config missing the key must
-    # not silently get the behaviour the default was flipped away from.
+    # Default is "edge" since #401: under "level" a hold-state signal stopped out
+    # on bar N re-enters on N (or N+1) because the series still reads 1, booking
+    # trades the strategy never signalled. "level" remains available per run.
+    # The golden master pins both (scenario hold_state_stop). The fallback
+    # matches the shipped default so a config missing the key does not silently
+    # get the behaviour the default was flipped away from.
     _entry_trigger = str(CONFIG.get("entry_trigger", "edge")).lower()
     _edge_masks = _build_entry_edge_masks(signals) if _entry_trigger == "edge" else None
 
@@ -1222,8 +1224,13 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
             # stack on top of the open short — a hedged double position the
             # strategy never intended. A flip is still expressible as a two-bar
             # sequence: -1 on one bar covers the short, then 1 on a later bar
-            # enters the long (same-bar stop/margin/PIT covers also free the
-            # symbol before this loop, so a 1 that bar can enter).
+            # enters the long. A stop or margin exit earlier in this bar also
+            # frees the symbol before this loop; whether a 1 on that bar can then
+            # enter is decided by entry_trigger (#401): under the default "edge"
+            # only a genuine transition into 1 does (e.g. -2 -> 1 after a short
+            # stop), so a hold-state series that still reads 1 does not re-buy
+            # the bar it was stopped out of. (A PIT cover cannot reach here: the
+            # membership / force-exit check just below refuses the entry.)
             if symbol in positions or symbol in short_positions: continue
             if (not _pit_flag(symbol, date, '_pit_member', True)
                     or _pit_flag(symbol, date, '_pit_force_exit', False)):

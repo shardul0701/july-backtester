@@ -8,8 +8,9 @@ entry-eligible, and which bar actually gets taken becomes a function of how much
 cash happens to be free.
 
 ``entry_trigger: "edge"`` restricts entry to the transition INTO the entry state,
-matching how the live scanner triggers. Default stays "level" so no existing
-result moves.
+matching how the live scanner triggers. It is the default since #401: under
+"level" a hold-state signal re-enters on the bar after (or the bar of) a stop-out,
+booking trades the strategy never signalled. "level" stays available per run.
 
 Covers the two pure helpers and all four engine wiring sites (long/short entry
 gate, long/short priority sort key) in helpers/portfolio_simulations.py.
@@ -143,19 +144,18 @@ _STARVED_SIGS = {
 }
 
 
+class TestDefaultIsEdge:
+    """Flipped by #401. Both the shipped value and the engine's fallback for a
+    config missing the key must be "edge". The fallback is pinned by behaviour
+    (see ``TestEdgeModeDisablesStopReEntry``), not by grepping the source."""
+
+    def test_shipped_config_is_edge(self):
+        # Index, not .get(): a .get with an "edge" default would pass on a
+        # config.py that dropped the key entirely.
+        assert str(CONFIG["entry_trigger"]).lower() == "edge"
+
+
 class TestLevelModeIsUnchanged:
-    def test_default_config_is_edge(self):
-        """Flipped by #401. Both the shipped value AND the code fallback must be
-        'edge' -- a config missing the key must not get the old behaviour back."""
-        assert str(CONFIG.get("entry_trigger", "edge")).lower() == "edge"
-        import inspect
-
-        from helpers import portfolio_simulations as ps
-        src = inspect.getsource(ps.run_portfolio_simulation)
-        assert 'CONFIG.get("entry_trigger", "edge")' in src, (
-            "engine fallback still defaults to level; it must track the shipped default"
-        )
-
     def test_uncontested_entry_is_identical_in_both_modes(self):
         """With cash free on the breakout bar the two modes must agree exactly.
 
@@ -287,6 +287,8 @@ class TestEdgeModeDisablesStopReEntry:
         sigs = {"X": pd.Series([1.0] * (len(self.CLOSES) - 1) + [-1.0],
                                index=idx, dtype=float)}
         with patch.dict(CONFIG, {"entry_trigger": mode}):
+            if mode is None:
+                del CONFIG["entry_trigger"]
             res = run_portfolio_simulation(
                 {"X": frame}, sigs, 100_000.0, 0.95,
                 None, None, None, self.STOP,
@@ -300,6 +302,14 @@ class TestEdgeModeDisablesStopReEntry:
 
     def test_edge_mode_stops_out_and_stays_out(self):
         log = self._run_stop("edge")
+        assert len(log) == 1
+        assert "Stop Loss" in str(log.iloc[0]["ExitReason"])
+
+    def test_a_config_missing_the_key_behaves_as_edge(self):
+        """The engine fallback (#401). A config written before the key existed
+        must get the shipped default, not the semantics it was flipped away
+        from -- this fails if the fallback reverts to "level"."""
+        log = self._run_stop(None)
         assert len(log) == 1
         assert "Stop Loss" in str(log.iloc[0]["ExitReason"])
 
