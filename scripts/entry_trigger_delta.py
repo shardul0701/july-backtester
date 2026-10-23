@@ -25,6 +25,8 @@ defaults to ``<repo>/custom_strategies/private`` when it holds strategies.
 Write the report with ``--out`` rather than pasting terminal output.
 """
 import argparse
+import contextlib
+import logging
 import os
 import sys
 import warnings
@@ -65,13 +67,33 @@ def load_strats(private_dir):
     # filter says -- the delta is a property of the library, not of one run.
     _orig = C.CONFIG.get("strategies", "all")
     C.CONFIG["strategies"] = "all"
-    from helpers.registry import get_active_strategies, load_strategies
-    strats = get_active_strategies(os.path.join(ROOT, "custom_strategies"))
-    if private_dir and os.path.isdir(private_dir):
-        load_strategies(private_dir)
+    try:
+        from helpers.registry import get_active_strategies, load_strategies
         strats = get_active_strategies(os.path.join(ROOT, "custom_strategies"))
-    C.CONFIG["strategies"] = _orig
-    return strats
+        if private_dir and os.path.isdir(private_dir):
+            load_strategies(private_dir)
+            strats = get_active_strategies(os.path.join(ROOT, "custom_strategies"))
+        return strats
+    finally:
+        C.CONFIG["strategies"] = _orig
+
+
+@contextlib.contextmanager
+def _hide_plugin_output(enabled):
+    """Keep plugin diagnostics out of a public report, restoring logging after."""
+    if not enabled:
+        yield
+        return
+    previous = logging.root.manager.disable
+    try:
+        # Existing log handlers may retain the original stderr stream, so
+        # redirection alone cannot contain their private strategy identifiers.
+        logging.disable(max(previous, logging.CRITICAL))
+        with open(os.devnull, "w") as sink, contextlib.redirect_stdout(sink), \
+                contextlib.redirect_stderr(sink):
+            yield
+    finally:
+        logging.disable(previous)
 
 
 def is_private(meta, private_dirs):
@@ -131,19 +153,13 @@ def main():
                     help="list private strategies only as aggregate counts, never "
                          "by name (use this for anything committed to the public repo)")
     args = ap.parse_args()
-    if args.hide_private:
-        # Two more ways a private name reaches the terminal: the registry's
-        # import-failure warning carries the module path, and a strategy may
-        # print. Silence the first; the second is swallowed per call below.
-        import logging
-        logging.getLogger("helpers.registry").setLevel(logging.ERROR)
-
     data = {s: d for s in SYMS if (d := load(args.corpus, s)) is not None}
     spy = load(args.corpus, "SPY")
     vix = load(args.corpus, "$VIX")
     if vix is None:
         vix = load(args.corpus, "VIX")
-    strats = load_strats(args.private_dir)
+    with _hide_plugin_output(args.hide_private):
+        strats = load_strats(args.private_dir)
     # The registry ALWAYS loads custom_strategies/private when it exists, so it
     # is private whatever --private-dir says.
     private_dirs = [os.path.join(ROOT, "custom_strategies", "private"), args.private_dir]
@@ -156,12 +172,7 @@ def main():
         # or a `2>&1` capture leaks them.
         print(f"  [{i}/{len(strats)}]" + ("" if args.hide_private else f" {name}"),
               file=sys.stderr, flush=True)
-        if args.hide_private:
-            import contextlib
-            import io
-            with contextlib.redirect_stdout(io.StringIO()):
-                sigs, failed = signals_for(meta, data, spy, vix)
-        else:
+        with _hide_plugin_output(args.hide_private):
             sigs, failed = signals_for(meta, data, spy, vix)
         if failed:
             sig_fail[name] = failed
@@ -172,7 +183,8 @@ def main():
         counts = {}
         for mode in ("level", "edge"):
             try:
-                counts[mode] = count_trades(mode, data, sigs, spy, vix)
+                with _hide_plugin_output(args.hide_private):
+                    counts[mode] = count_trades(mode, data, sigs, spy, vix)
             except Exception as e:  # noqa: BLE001 -- listed below, not dropped
                 counts[mode] = f"{type(e).__name__}: {e}"[:80]
         a, b = counts["level"], counts["edge"]
