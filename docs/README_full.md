@@ -93,7 +93,7 @@ You should see `(venv)` appear at the start of your terminal prompt. Every time 
 pip install -r requirements.txt
 ```
 
-This installs: `pandas`, `numpy`, `tqdm`, `boto3` (S3 uploads only), `requests`, `python-dotenv`, `pandas-ta`, `orjson`, `pyarrow`.
+This installs: `pandas`, `numpy`, `tqdm`, `boto3` (S3 uploads only), `requests`, `python-dotenv`, `ft-pandas-ta` (the freqtrade fork of pandas-ta; imports as `pandas_ta`), `orjson`, `pyarrow`, `yfinance`, `matplotlib`, `seaborn`.
 
 ---
 

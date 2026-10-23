@@ -1,17 +1,25 @@
 # tests/test_gap_proximity_harness.py
 """Tests for the #298 research harness scripts.
 
-PR #298 added 408 lines across four scripts with **zero tests**. These cover the
-two that are unit-testable:
+PR #298 added nine research scripts. This file covers two of them:
 
 * ``scripts/gap_proximity_scan.py`` - ``qualifying`` / ``read_ohlcv`` / ``resolve``
 * ``scripts/make_tearsheet.py``     - ``load_equity`` / ``stats`` / ``annual``
 
-``check_annual.py`` and ``check_leverage.py`` are deliberately NOT covered: both
-are top-level scripts with no functions and hardcoded Windows paths into one
-contributor's ``output/runs/2026-08-06_10-35-14`` directory. They execute on
-import, so they cannot be imported without side effects, let alone asserted on.
-Testing them requires refactoring them into functions first.
+``check_annual.py`` and ``check_leverage.py`` are covered in
+``tests/test_run_diagnostics.py`` (#298 shipped that file too). Both are
+functions behind a ``__main__`` guard: ``check_annual.py`` takes a run directory,
+``check_leverage.py`` a trade-log CSV plus ``--initial-capital``.
+
+NOT covered anywhere: ``dead_money_entry.py``, ``dead_money_normalised.py`` and
+the three ``vol_*.py`` scripts.
+
+CORRECTED: an earlier version of this docstring said ``check_annual.py`` and
+``check_leverage.py`` were "deliberately NOT covered" (no functions, hardcoded
+Windows paths, executed on import) and that #298 shipped with zero tests. Both
+were true of an earlier revision of #298 and false of what merged. Left as a
+note rather than deleted, because a test file that describes coverage it does
+not have is worse than one that says nothing.
 
 The tests are written as invariants where the script's own docstrings make a
 claim - the trailing average excluding the current bar, Sharpe being an excess
