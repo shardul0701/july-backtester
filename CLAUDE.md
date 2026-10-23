@@ -119,6 +119,7 @@ Both failures are **silent**: `gh` exits 0 and prints a URL. Nothing tells you t
 "commission_per_share": 0.002
 "min_trades_for_mc": 50
 "num_mc_simulations": 1000
+"max_workers": None              # cap the simulation pool (--workers N); each worker copies portfolio_data, so wide universes may need 1-2 (#414)
 "wfa_split_ratio": 0.80          # 0.80 = 80% IS / 20% OOS; None or 0 = disabled
 "wfa_folds": None                # None = rolling WFA disabled; int >= 2 = number of folds
 "wfa_min_fold_trades": 5         # min OOS trades per fold to score it (rolling WFA only)
@@ -131,6 +132,7 @@ Both failures are **silent**: `gh` exits 0 and prints a URL. Nothing tells you t
 "sensitivity_sweep_steps": 2     # 2 steps each side → 5 values per param
 "sensitivity_sweep_min_val": 2   # floor for generated values (prevents SMA period = 0)
 "rolling_sharpe_window": 126     # rolling Sharpe window in trading days; 0 or None = disable
+"entry_trigger": "edge"          # "edge" (default, #401) = enter only on the transition INTO the entry value; "level" = any bar reading it
 "htb_rate_annual": 0.02          # annual hard-to-borrow rate debited daily on short positions
 "mc_sampling": "iid"             # "iid" = independent; "block" = block-bootstrap; "auto" = block for concentrated_futures profile else iid
 "mc_block_size": None            # block size for block-bootstrap; None = auto floor(sqrt(N))
@@ -216,6 +218,35 @@ A stock-selection strategy holding SPY is partly holding the benchmark it's meas
 It is curated, not exhaustive — a new or obscure ETF can pass. **`etf_report(universe)`** returns `{etfs, n_etfs, n_total, pct}` so that gap is visible rather than assumed away.
 
 **Tests:** `tests/test_rule_based_universe.py` — 31 tests on a synthetic corpus (no submodule dependency): security identity incl. share-class-vs-delisting (`BRK-A` vs `BRK-199001`), the 1970 trap, mixed tz-aware/naive files, each screen, ticker-reuse resolution, and survivorship present-then-absent.
+
+## `pit:` + parquet resolves to SECURITY IDs (#407)
+
+`pit:` membership is expressed in **bare tickers**. The Norgate parquet corpus keys delisted securities as `TICKER-YYYYMM`, so a bare ticker is **not an identifier there**. Before this fix the membership year was discarded before `services/parquet_service.py::_find_parquet(symbol, parquet_dir)` — which takes no date — was called, with two silent failure modes:
+
+| Mode | Count | What happened |
+|---|---|---|
+| **Masking** | ~84 names | An exact bare `CB.parquet` wins the resolver's first branch, so the delisted `CB-201601` (Chubb Corp, the actual 2004–2015 member) is never considered and the run gets ACE Ltd's history instead. Verified: 0 of 2,769 identical days, 0.71 return correlation, 2008 −13.0% vs −4.1%. |
+| **Collision** | 46 names | No bare file + several dated files → `_find_parquet` returns the `"_multi_"` sentinel → `get_price_data` logs an error and returns `None` → the member is dropped from the run. |
+
+Both drop or swap **dead companies** — precisely what a point-in-time universe exists to include — so a `pit:` + parquet run carried survivorship bias while claiming to be free of it. `rule:` universes were never affected because they already resolve to security IDs before the loader.
+
+**The fix is at the universe layer, not the loader.** `services/parquet_service.py` is correct as it stands (post-#396): it refuses to guess and warns when a live file masks delisted history. This change gives it something unambiguous to resolve. **Do not "fix" the loader.**
+
+- **Only when `config["data_provider"] == "parquet"`.** `CB-201601` is meaningless to Yahoo/Polygon/CSV; every other provider keeps bare tickers, byte-identical to before. (Five of the eight committed `pit:` runs used Yahoo.)
+- **Both entry points, same namespace.** `build_membership_schedule()` (the per-bar mask) and `tickers_union_for_period()` (the symbol list that gets fetched) must agree — the union is derived *from* the schedule so they agree by construction. A schedule of security IDs masked against a union of bare tickers would mask everything out on every bar and report zero trades with no error.
+- **Resolution order (revised after the #407 review against the real corpus).** Under parquet the schedule keeps the roster's **raw** ticker (only stripped/upper-cased — no alias, no dot→dash), and `resolve_security_id` tries, in order:
+  0. **`PIT_PARQUET_SECURITY_OVERRIDES`** — explicit, dated `roster ticker → security ID` windows (bankruptcy suffixes like `SHLD → SHLDQ-202210`, renames like `LB → BBWI`, and rosters that use a *current* ticker for an earlier period). Validated against the span index: an override whose target has no bars near the date **fails**, it never falls through to a guess.
+  1. **The raw roster ticker**, its own spelling first, then the other share-class punctuation (`BRK.B` ↔ `BRK-B`; the corpus files are `BRK.B.parquet`). Covering-span rule, then the **ticker-tenure tie-break**: `TICKER-YYYYMM` means "held this ticker until YYYYMM", so among several covering candidates the date's owner is the one with the **earliest tenure end at or after it** (live bare file = open-ended). Needed for CB: live `CB.parquet` carries ACE from 1993 and overlaps `CB-201601` (Chubb) for 23 years.
+  2. **`PIT_TICKER_NORMALISATION`'s alias only if (1) failed**, preferring the target's **live bare file** — Norgate back-fills a renamed security's history under today's ticker, so `SYMC` lives in `GEN.parquet`. Aliasing *first* (the original #407 order) sent it through the tenure rule to `GEN-201212`, GenOn — a silent wrong-company swap (7 such names found in review).
+  Every lookup also accepts a **single** candidate within `PIT_RESOLUTION_LAG_DAYS` (10) of its bars: index dates lag first/last trades by up to a week (HES, RTN, NBL, AMCR, KHC, CTRX). Overrides get 31 days.
+- **Wrong-company swaps don't abort, so they were audited, not assumed away.** On both rosters 2004→2026-09-28: every one of 1,109 resolutions has median dollar volume ≥ $3M/day over its membership (index-member scale), and 0 of 25 tenure tie-breaks pick a security trading < 10% of a covering alternative. The audit found 6 swaps the review had not (`LB`→a $0.4M/day stock instead of L Brands, `ES`→EnergySolutions, `SAF`, `IVGN`, `BBT`, `CECO`) — all now overrides. Re-run that audit after any corpus or roster change.
+- **YAML booleans.** Rosters are read with `load_roster_yaml()` (both `point_in_time` and `pit_universe`), never `yaml.safe_load`: an unquoted `- ON` in the NQ100 2023-25 files parsed as `True` → ticker `TRUE`, so ON Semiconductor resolved to TrueCar. This affected **every provider**, not just parquet.
+- **Unresolvable members ABORT the run** — `PitResolutionError`, raised **once** with **every** offender across the whole schedule (an operator fixing 46 collisions must not need 46 runs). The message names each bare ticker, its membership date, and the candidate security IDs with their spans, and points at the remedy: request the security ID directly. `main.py` re-raises it rather than `continue`-ing, because skipping the portfolio is "drop the member" wearing a different hat.
+- **There is no opt-out flag, by owner decision (2026-09-30).** It would be set once and forgotten, and this failure silently reintroduces survivorship bias. If `pit:` + parquet is unusable until the corpus gaps are closed, that is the honest state and the run should say so. Note this includes roster names absent from the corpus entirely: zero candidates is zero survivors, so the run aborts rather than quietly shrinking the universe.
+- **Forced-exit spells come from the resolved schedule under parquet.** `build_membership_schedule` returns a `SecuritySchedule` (a plain list subclass carrying `roster_tickers`), and `main.py` builds spells with `security_intervals(schedule, end)` — same semantics as `pit_enforcement.membership_intervals()`, keyed by **security**. Roster-ticker keys are wrong here: `IR` is Ingersoll-Rand plc (→ `TT`) until 2020 and the new Ingersoll Rand after, so roster-keyed spells would hand one company's membership to another. Other providers keep `membership_intervals()`.
+- **What still aborts (owner decision above):** three historical gaps remain — `ATGE` (S&P 2009-12), `LMCK` (NQ100 2004-14), and `DISCK` (NQ100 2004-05). J.C. Penney resolves to the corpus's full-history bankruptcy security, `CPPRQ-202102`. `pit:sp500` and `pit:nq100` resolve completely from **2015-01-02**; earlier starts abort when they encounter one of the remaining gaps.
+
+**Tests:** `tests/test_pit_407_review.py` — 19 tests pinning each review finding (dot-named share classes from either spelling, raw-before-alias, overrides win but are validated, lag window incl. two-candidate abort, unquoted `ON`, security-keyed spells). `tests/test_pit_security_resolution_158.py` — 35 tests on a synthetic corpus + YAML in `tmp_path`: the CB masking case (fails on `main`, which returns `{"CB"}`), the AGN collision case both sides of the hand-over, abort-naming-every-offender, all four non-parquet providers unchanged, schedule/union namespace agreement, share classes, and live-only tickers.
 
 ## Adding a Strategy (Plugin System)
 
@@ -311,6 +342,7 @@ output/
 The engine is instrument-aware: **`helpers/instruments.py`** resolves a per-symbol `Instrument` (`resolve_instrument(symbol, config)`) carrying `point_value` ($/point), `tick_size`, `margin_mode`, `commission_model`/value, `slippage_model`/value, `integer_units`, `borrow_applies`, `calendar`. **Equities are the default and reproduce the pre-#229 arithmetic byte-for-byte** (point_value=1, `cash_full` margin, per-share commission, %-slippage). Futures opt in via a contract-month ticker (e.g. `ESM6`) or `config["instruments"]["overrides"]`.
 
 - **Cost/accounting helpers** in `instruments.py` (`commission`, `apply_slippage`, `round_units`, `market_value`, `margin_required`, `unrealized_pnl`, `borrow_cost_per_bar`, `stop_level`, `atr_stop_level`, `atr_stop_distance_pct`) replace the formerly hard-coded sites in `portfolio_simulations.py`.
+- **Cash-bound equity entries:** after the commission-inclusive cash clamp, fractional long shares are rounded down by representable steps if floating-point recomputation puts cost above cash. A fully affordable entry is retained without overdrawing the account.
 - **Futures execution:** margin accounting (entry reserves initial margin, not full notional; equity = cash + unrealized P&L; `reserved_margin` tracks buying power), integer contracts, `$/point` P&L, point-capped stop `{"type":"points","value":N}`, no borrow on futures shorts.
 - **Margin-based futures sizing (#238):** for margined instruments (`margin_mode == INITIAL_MARGIN`) contract count derives from `margin_required()`, not target-notional / `point_value` (which increasingly floored to 0 contracts as price appreciated, silently under-sizing/skipping late trades). The gate is `margin_mode`-first (checked before `point_value != 1.0`), so a futures instrument with `point_value == 1.0` still sizes on margin. Equity sizing (`CASH_FULL`) is unchanged. Applies to both long and short entry paths.
 - **Stop anchoring (#238):** `percentage`/`points` stop levels anchor to the **raw pre-slippage entry price for margined futures only** — `_stop_anchor = raw_entry_price if inst.margin_mode == INITIAL_MARGIN else entry_price`. Equities (`CASH_FULL`) keep the pre-PR slipped-fill anchor **byte-for-byte** (golden master unchanged). *Caveat:* the `trailing_atr` stop path anchors its initial stop/target/breakeven-floor to `raw_entry_price` **unconditionally** (not yet `margin_mode`-gated) — harmless today (trailing_atr is a futures-only mechanic with no equity consumer and no golden-master coverage), tracked as a follow-up. So "equities restore pre-PR behavior" holds for `percentage`/`points` stops, not `trailing_atr`.
@@ -457,7 +489,7 @@ A separate integrity guard *does* invalidate: a cache file whose index is not a 
 - **`helpers/correlation.py`** — pure, stateless module. Public entry point: `run_correlation_analysis(strategy_results, output_path, threshold=0.85)`.
 - **Pipeline placement**: called in `main.py` inside the per-portfolio reporting loop, immediately after `generate_per_portfolio_summary`. Runs once per portfolio.
 - **Input**: list of simulation result dicts (each with `"Strategy"` and `"trade_log"` keys). Trades are grouped by `ExitDate` and profits summed to build a daily P&L series per strategy.
-- **Output CSV path**: `output/runs/<run_id>/<Portfolio_safe_name>_strategy_correlation.csv` — next to `overall_portfolio_summary.csv`, one file per portfolio.
+- **Output CSV path**: `output/runs/<run_id>/<Portfolio_safe_name>_strategy_correlation.csv` (`<Portfolio_safe_name>` = `helpers.summary.safe_path_component(portfolio)`, the same sanitizer the summary CSV paths use, #403) — next to `overall_portfolio_summary.csv`, one file per portfolio.
 - **Threshold**: default `0.85` (absolute Pearson). Pairs with `|r| > 0.85` are logged as `[WARNING]` lines via `logger.warning`.
 - **Skipped silently** when fewer than 2 strategies have non-empty trade logs (returns empty DataFrame + empty list, no CSV written).
 - **Tests**: `tests/test_correlation.py` — covers `_build_daily_pnl_series`, `build_daily_pnl_matrix`, `compute_correlation_matrix`, `find_high_correlation_pairs`, and `run_correlation_analysis` (with `tmp_path` file I/O). No network, no randomness.
@@ -612,12 +644,12 @@ A short, wide banner figure (`figsize=(10, 3), dpi=150`) that shows the full dra
 | `1` | Enter long |
 | `0` | No change |
 | `-1` | Exit long **or** cover short |
-| `-2` | Enter short |
+| `-2` | Enter short (on a bar already short: hold — `-2` never covers). Also exits a long. `1` does NOT cover a short, so a short→long flip needs a `-1` bar first |
 
 - **Borrow cost**: `htb_rate_annual` (config, default `0.02`) converted to a daily compound rate `(1 + annual)^(1/252) - 1` and debited from cash each day a short is held. Set to `0.0` to disable.
 - **Three new blocks in the daily loop** (all additive — no long-path code changed):
   1. **Borrow cost debit**: iterates `short_positions`, subtracts `notional × htb_rate_daily` from cash and accumulates `spos['total_borrow_cost']`.
-  2. **Short cover**: on signal `< 0` for a held short, fills at Open/Close + slippage, deducts commission both sides, nets `total_borrow_cost` out of profit, logs to `trade_log`.
+  2. **Short cover**: on a negative signal other than `-2` for a held short, fills at Open/Close + slippage, deducts commission both sides, nets `total_borrow_cost` out of profit, logs to `trade_log`.
   3. **Short entry**: on signal `== -2`, skips if `symbol in positions or symbol in short_positions`, allocates `min(total_equity × allocation_pct, cash)`, receives proceeds into cash.
 - **Short trades in `trade_log`**: `Trade: "Short N"`, `ExitReason: "Short Cover"`. `RMultiple` is `None` for shorts (initial risk undefined without a stop).
 - **Equity MTM for shorts**: `current_market_value += (shares × entry_price) − (shares × current_close)` — profit when price falls.

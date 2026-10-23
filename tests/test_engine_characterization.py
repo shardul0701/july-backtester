@@ -44,7 +44,11 @@ Regression map — scenario -> engine behaviour proven unchanged
                        Futures on purpose: on an equity that conversion is a
                        no-op, so an equity scenario cannot fail on it (#384)
 
-Coverage note (#384): before those last three, this fixture pinned exactly TWO of
+  hold_state_stop      #401: a forward-filled 1 stopped out does NOT re-enter (edge)
+  hold_state_stop_level  ...and DOES under entry_trigger="level" (the twin)
+  hold_state_short     a held -2 is one short to the -1 cover, not a cover per bar
+
+Coverage note (#384): before the three sizing cases, this fixture pinned exactly TWO of
 the six position_sizing_method values — `fixed` via _BASE_CFG and `risk_parity`
 via one override. It was therefore structurally unable to fail a change to the
 other four, which makes "the golden master is byte-identical" a valid necessary
@@ -270,13 +274,53 @@ def _scenario(name):
                                  "overrides": {}}},
                 {"type": "percentage", "value": 0.05}, {})
 
+    if name == "hold_state_stop":
+        # #401 / review of #373. Every OTHER scenario in this file builds its
+        # signal with _sig(df, {i: v}) -- an isolated pulse on a zero series --
+        # and 0 -> 1 is a transition under BOTH entry_trigger semantics. So the
+        # fixture was structurally blind to level-vs-edge: injecting
+        # entry_trigger into _BASE_CFG changed nothing, and a config key that is
+        # silently IGNORED produces the identical "10 passed".
+        #
+        # This is the missing coverage: same bars as long_pct_stop, same 5% stop,
+        # signal forward-filled instead of pulsed. Under "level" the stop closes
+        # the position and the still-held 1 re-enters; under "edge" it does not.
+        # entry_trigger is set EXPLICITLY (it was inherited from the local
+        # config.py, so a user running "level" locally failed the golden
+        # master), and hold_state_stop_level is the twin: the two together pin
+        # the semantics in both directions. The shipped default is pinned
+        # separately by test_entry_trigger.TestDefaultIsEdge.
+        df = _df([100, 101, 102, 101, 100, 94, 95, 96, 97, 98])
+        sig = pd.Series(0, index=df.index, dtype=int)
+        sig.iloc[1:] = 1                                  # enter and STAY 1
+        return ({"BBB": df}, {"BBB": sig}, {"entry_trigger": "edge"},
+                {"type": "percentage", "value": 0.05}, {})
+
+    if name == "hold_state_stop_level":
+        df = _df([100, 101, 102, 101, 100, 94, 95, 96, 97, 98])
+        sig = pd.Series(0, index=df.index, dtype=int)
+        sig.iloc[1:] = 1
+        return ({"BBB": df}, {"BBB": sig}, {"entry_trigger": "level"},
+                {"type": "percentage", "value": 0.05}, {})
+
+    if name == "hold_state_short":
+        # #405 QA: -2 held on every bar of a short. The cover test treated -2
+        # as a cover, so level churned a round trip per bar and edge went flat
+        # after one bar. Pins one short held to the -1 cover.
+        df = _df([100, 99, 98, 97, 96, 95, 96, 97, 98, 99])
+        sig = pd.Series(0, index=df.index, dtype=int)
+        sig.iloc[1:8] = -2
+        sig.iloc[8] = -1
+        return {"SSS": df}, {"SSS": sig}, {}, {"type": "none"}, {}
+
     raise ValueError(name)
 
 
 SCENARIOS = [
     "long_basic", "long_pct_stop", "long_atr_stop", "short_borrow",
     "vol_impact", "risk_parity_stop", "exclude_open", "multi_symbol",
-    "trailing_atr_equity",
+    "trailing_atr_equity", "hold_state_stop", "hold_state_stop_level",
+    "hold_state_short",
     # #384 -- the two methods the fixture was structurally unable to fail on.
     "risk_pct_capped_heat", "risk_pct_capped_cap", "fixed_contracts_futures",
 ]
