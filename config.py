@@ -338,8 +338,8 @@ CONFIG = {
 
     # Fraction of CURRENT equity to risk per trade, measured through the
     # actual stop distance. Unlike target_risk_per_trade (used by vol_parity /
-    # risk_parity, which derive their own distance), this one is delivered
-    # exactly whenever it is reachable -- see the ceiling below.
+    # risk_parity, which derive their own distance), this budget is subject to
+    # the ceiling and fill-price/stop-anchor drift described below.
     "risk_pct_per_trade": 0.01,
 
     # Hard ceiling on the CONTRACT count. Applies to MARGINED instruments
@@ -351,7 +351,7 @@ CONFIG = {
 
     # Notional ceiling for risk_pct_capped on UNMARGINED instruments
     # (equities), as a fraction of equity. 1.0 = no leverage. None = disabled.
-    # 0.0 is NOT "disabled" and is rejected -- use None.
+    # 0.0 warns and takes no position; it does not abort the run. Use None to disable.
     #
     # This is deliberately NOT allocation_per_trade. Required notional is
     # risk_pct_per_trade / stop_frac of equity, so an allocation ceiling of
@@ -363,7 +363,7 @@ CONFIG = {
     # cash <= equity, so the pre-existing cash clamp is at least as tight. What
     # it changes is WHEN -- it clamps before the portfolio heat check, so heat
     # sees the position that will actually be held. It binds on size below 1.0,
-    # or once short proceeds push cash above equity.
+    # or when unrealized short losses leave cash above equity.
     "risk_pct_capped_max_notional_pct": 1.0,
 
     # NOTE: setting max_portfolio_heat == risk_pct_per_trade takes ZERO trades

@@ -339,8 +339,8 @@ def _risk_pct_capped(equity: float, config: dict, price: float | None = None,
     nearly the same number. What the ceiling changes is *when*: it clamps
     BEFORE the portfolio heat check, so heat evaluates the position that will
     actually be held rather than an unclamped one the cash clamp would shrink
-    afterwards. It can change the held size once short proceeds push cash above
-    equity, and below 1.0 it binds directly. (@shardul0701 on #390 — two
+    afterwards. It can change the held size when unrealized short losses leave
+    cash above equity, and below 1.0 it binds directly. (@shardul0701 on #390 — two
     comments claimed it bound on size at the default and were wrong.)
 
     ``None`` disables it. ``0.0`` does NOT — it is a ceiling of zero and takes
