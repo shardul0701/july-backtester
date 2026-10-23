@@ -336,6 +336,41 @@ class TestRiskParitySizesOffTheSignalBarStop:
 
     CFG = {"type": "signal_bar", "buffer": 0.0}
 
+    @pytest.mark.parametrize("price", [20.08, 100.4, 1004., 5020.])
+    @pytest.mark.parametrize("execution_time", ["open", "close"])
+    def test_cash_bound_entry_is_not_lost_to_rounding(
+            self, monkeypatch, price, execution_time):
+        """The real stop can request more notional than a cash book can buy.
+
+        An affordable fraction must still trade when the recomputed cost rounds
+        a few ULPs above cash; the $20.08 case previously dropped the entry.
+        """
+        from config import CONFIG
+
+        dates = pd.bdate_range("2024-01-02", periods=6)
+        df = _frame([(d, price, price * 1.001, price * .999, price)
+                     for d in dates])
+        df.loc[dates[1], "Low"] = price * .98505
+        sig = pd.Series([0, 1, 0, 0, -1, 0], index=dates)
+        for key, value in {
+                "execution_time": execution_time,
+                "position_sizing_method": "risk_parity",
+                "target_risk_per_trade": .02,
+                "max_portfolio_heat": 1., "max_pct_adv": 0.,
+                "volume_impact_coeff": 0., "slippage_pct": .0005,
+                "commission_per_share": .002,
+        }.items():
+            monkeypatch.setitem(CONFIG, key, value)
+        result = run_portfolio_simulation(
+            {"TEST": df}, {"TEST": sig}, 100_000., .10,
+            None, None, None, self.CFG)
+        assert result is not None, "a fully affordable fractional entry vanished"
+        trade, = result["trade_log"]
+        expected = 100_000. / (price * 1.0005 + .002)
+        assert trade["Shares"] == pytest.approx(expected, rel=1e-12)
+        entry_cost = trade["Shares"] * trade["EntryPrice"] + trade["Shares"] * .002
+        assert entry_cost <= 100_000.
+
     @staticmethod
     def _sized(stop_config, sizing_method, lead_low=None):
         from unittest.mock import patch
@@ -379,8 +414,7 @@ class TestRiskParitySizesOffTheSignalBarStop:
         of 10%, over-sizing by more than 3x.
         """
         out = self._sized(self.CFG, "risk_parity")
-        if out is None:
-            pytest.skip("no trade produced")
+        assert out is not None, "the sizing regression must produce a trade"
         shares, risk_per_share = out
         dollars = shares * risk_per_share
         assert dollars == pytest.approx(2_000.0, rel=0.30), (
@@ -392,8 +426,7 @@ class TestRiskParitySizesOffTheSignalBarStop:
         """The stop level itself is unchanged by this fix; asserted so a
         regression in the stop path cannot be mistaken for a sizing win."""
         out = self._sized(self.CFG, "risk_parity")
-        if out is None:
-            pytest.skip("no trade produced")
+        assert out is not None, "the sizing regression must produce a trade"
         _, risk_per_share = out
         assert risk_per_share == pytest.approx(10.0, rel=0.05), risk_per_share
 
@@ -411,8 +444,7 @@ class TestRiskParitySizesOffTheSignalBarStop:
         """
         cfg = {"type": "signal_bar", "buffer": 0.0, "bars_back": 1}
         out = self._sized(cfg, "risk_parity", lead_low=80)
-        if out is None:
-            pytest.skip("no trade produced")
+        assert out is not None, "the sizing regression must produce a trade"
         shares, risk_per_share = out
         assert risk_per_share == pytest.approx(20.05, rel=0.02), risk_per_share
         assert shares == pytest.approx(99.95, rel=0.02), shares
@@ -425,8 +457,7 @@ class TestRiskParitySizesOffTheSignalBarStop:
         """
         cfg = {"type": "signal_bar", "buffer": 0.05}
         out = self._sized(cfg, "risk_parity")
-        if out is None:
-            pytest.skip("no trade produced")
+        assert out is not None, "the sizing regression must produce a trade"
         shares, risk_per_share = out
         assert risk_per_share == pytest.approx(14.55, rel=0.02), risk_per_share
         assert shares == pytest.approx(137.86, rel=0.02), shares
@@ -435,8 +466,7 @@ class TestRiskParitySizesOffTheSignalBarStop:
         """The no-regression half: `fixed` never consulted stop_distance_pct,
         so it must not move."""
         out = self._sized(self.CFG, "fixed")
-        if out is None:
-            pytest.skip("no trade produced")
+        assert out is not None, "the sizing regression must produce a trade"
         shares, _ = out
         assert shares == pytest.approx(500.0, rel=0.02), shares
 

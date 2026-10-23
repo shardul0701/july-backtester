@@ -1621,6 +1621,13 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         if shares <= 0: continue  # Cannot afford even a fraction of a share
                         # Recalculate final total cost with the affordable share size
                         total_cost = (shares * entry_price) + (shares * CONFIG['commission_per_share'])
+                        # Division followed by separate notional/fee products can
+                        # round a fully affordable trade a few ULPs above cash.
+                        # Step down to a representable size that really fits,
+                        # rather than rejecting the entire entry or overdrawing.
+                        while total_cost > cash:
+                            shares = float(np.nextafter(shares, 0.0))
+                            total_cost = (shares * entry_price) + (shares * CONFIG['commission_per_share'])
                     can_afford = cash >= total_cost and shares > 0.001
 
                 # Final check: Ensure we can afford the trade and it's a meaningful size
