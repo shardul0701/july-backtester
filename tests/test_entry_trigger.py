@@ -126,7 +126,10 @@ def _frame(px=100.0, n=7):
     )
 
 
-def _run(portfolio_data, signals, mode, allocation_pct=0.99):
+def _run(portfolio_data, signals, mode, allocation_pct=1.0):
+    # Exhaust buying power in the starvation scenarios. At 0.99 the remaining
+    # cash can fund a small second position; those scenarios only looked
+    # starved while the affordability round-trip incorrectly rejected it.
     with patch.dict(CONFIG, {"entry_trigger": mode}):
         res = run_portfolio_simulation(
             portfolio_data, signals, 100_000.0, allocation_pct,
@@ -231,28 +234,28 @@ class TestEdgeModeReallocatesCapitalRatherThanOnlySkippingEntries:
     def _ccc_shares(self, mode):
         log = _run(self.DATA, self.SIGS, mode)
         row = log[log["Symbol"] == "CCC"]
-        assert len(row) == 1, "CCC should trade exactly once in %s mode" % mode
+        if row.empty:
+            return 0.0
+        assert len(row) == 1, "CCC should trade at most once in %s mode" % mode
         return float(row.iloc[0]["Shares"])
 
     def test_level_mode_lets_a_hold_bar_take_a_breakouts_allocation(self):
-        """CCC still enters -- there is no position-count cap and equities are
-        fractional, so the residual cash always funds *something*. What it
-        cannot fund is a real position: BBB's hold bar took the allocation and
-        CCC is left with the rounding."""
+        """BBB's hold bar consumes the released cash before CCC's breakout.
+
+        Any rounding residual is too small to fund the minimum share count.
+        """
         log = _run(self.DATA, self.SIGS, "level")
-        assert sorted(log["Symbol"]) == ["AAA", "BBB", "CCC"]
-        assert self._ccc_shares("level") < 10.0
+        assert sorted(log["Symbol"]) == ["AAA", "BBB"]
+        assert self._ccc_shares("level") == 0.0
 
     def test_edge_mode_gives_that_allocation_back_to_the_breakout(self):
-        """Same bar, same signal, ~105x the position. `test_uncontested_entry_
-        is_identical_in_both_modes` says edge only ever subtracts -- that holds
-        per symbol in isolation, not per book."""
+        """A fresh breakout gets the position when the hold bar is refused."""
         log = _run(self.DATA, self.SIGS, "edge")
         assert sorted(log["Symbol"]) == ["AAA", "CCC"]
         assert self._ccc_shares("edge") > 900.0
 
-    def test_the_reallocation_is_two_orders_of_magnitude(self):
-        assert self._ccc_shares("edge") / self._ccc_shares("level") > 50.0
+    def test_the_reallocation_restores_a_full_position(self):
+        assert self._ccc_shares("edge") - self._ccc_shares("level") > 900.0
 
 
 def _frame_px(closes):
