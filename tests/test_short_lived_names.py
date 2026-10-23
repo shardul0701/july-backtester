@@ -105,12 +105,18 @@ def run_main(monkeypatch, tmp_path):
 
 def _simulate(patched):
     """Run the captured tasks through the real worker code; return result dicts."""
+    from unittest.mock import patch
+
     cap = _FakePool.captured
     old = main_mod.CONFIG
     main_mod.CONFIG = patched
     try:
-        main_mod.init_worker(*cap["initargs"])
-        return [main_mod.run_single_simulation(t) for t in cap["tasks"]]
+        # The parent harness replaces main.CONFIG with a separate dictionary.
+        # Real spawned workers share config.CONFIG with the engine/helpers;
+        # apply the captured runtime values there for this in-process replay.
+        with patch.dict("config.CONFIG", patched, clear=True):
+            main_mod.init_worker(*cap["initargs"])
+            return [main_mod.run_single_simulation(t) for t in cap["tasks"]]
     finally:
         main_mod.CONFIG = old
 
@@ -150,7 +156,7 @@ class TestShortLivedUniverses:
 
     def test_include_delisted_keeps_and_trades_short_symbol(self, run_main):
         _, run_dir, patched = run_main({"P": ["LONG", "DEAD"]}, include_delisted=True,
-                                       delisted_symbols_file=None)
+                                       delisted_symbols_file=None, entry_trigger="level")
         assert set(_FakePool.captured["initargs"][3]) == {"LONG", "DEAD"}
         df = pd.read_csv(os.path.join(run_dir, "skipped_symbols.csv"))
         assert df.iloc[0]["action"] == "kept"
@@ -190,7 +196,10 @@ class TestWarmup:
         assert [s for sym, s, e in calls if sym == "LONG"] == [START]
 
     def test_no_trade_or_equity_point_before_start(self, run_main):
-        _, _, patched = run_main({"P": ["LONG"]}, pit_warmup_days=100)
+        # AlwaysLong is already held before the window. Level mode isolates the
+        # history/execution boundary; edge mode's intentional refusal is below.
+        _, _, patched = run_main({"P": ["LONG"]}, pit_warmup_days=100,
+                                 entry_trigger="level")
         frame = _FakePool.captured["initargs"][3]["LONG"]
         assert frame.index.min() < pd.Timestamp(START, tz="UTC")   # warm-up WAS fetched
         res = _simulate(patched)[0]
@@ -199,3 +208,10 @@ class TestWarmup:
         assert first_entry >= floor
         tl = res["portfolio_timeline"]
         assert len(tl) and pd.Timestamp(tl.index.min()).tz_localize(None) >= floor
+
+    def test_edge_mode_does_not_reenter_a_pre_window_hold(self, run_main):
+        _, _, patched = run_main({"P": ["LONG"]}, pit_warmup_days=100,
+                                 entry_trigger="edge")
+        result = _simulate(patched)[0]
+        assert result["status"] == "no_trades"
+        assert result["trade_log"] == []
