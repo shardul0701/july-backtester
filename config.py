@@ -207,10 +207,57 @@ CONFIG = {
     # Controls the order in which symbols are evaluated for entry when multiple
     # signals fire on the same bar and capital can only fill a subset.
     # "alphabetical" (default) — A→Z, reproducible and Alpaca-replicable
-    # "signal_date"            — earlier-signalling symbols get priority
-    # "random_seed"            — shuffle with a fixed seed (sensitivity testing)
+    # "signal_date"            — earlier-signalling symbols get priority. On
+    #                            daily bars every same-bar signal shares one
+    #                            signal_date, so ties fall through to the symbol:
+    #                            it is effectively ALPHABETICAL on same-bar ties.
+    # "random_seed"            — a different shuffle every bar, seeded from
+    #                            (entry_random_seed, date): reproducible for a
+    #                            given seed; run several seeds for a sensitivity
+    #                            distribution (#412)
     "entry_priority": "alphabetical",
     "entry_random_seed": 42,
+
+    # Whether a bar qualifies as an ENTRY at all.
+    # "edge" (default)  — enter only on the transition INTO the entry state,
+    #                     matching how the live scanner triggers
+    #                     (`last == 1 and prev != 1`).
+    # "level"           — enter on any bar whose signal reads the entry value.
+    #                     Strategies emitting a forward-filled state series make
+    #                     every hold bar entry-eligible under this mode.
+    #
+    # DEFAULT FLIPPED TO "edge" (#401). Under "level" a forward-filled state
+    # series re-enters on the SAME BAR a stop closed the position — measured
+    # 2 trades where the strategy emitted one decision — and WHICH bar gets
+    # taken becomes a function of book size. 29 of 50 functions in
+    # helpers/indicators.py forward-fill, so the default library is hold-state
+    # and was exposed by default. This key is read ONCE PER RUN, so opting
+    # individual strategies in was never expressible; the only two options were
+    # "everyone" or "nobody", and "nobody" meant stable-but-wrong numbers.
+    #
+    # TWO CONSEQUENCES OF "edge" BEYOND THE LATE-ENTRY FIX, both intended:
+    #   * A STOPPED-OUT POSITION DOES NOT RE-ENTER while the state signal is
+    #     still held. Level mode re-enters on the next bar (the series still
+    #     reads 1); edge mode waits for a transition that will not come until
+    #     the strategy actually re-signals. A live scanner triggering on
+    #     `last == 1 and prev != 1` behaves the same way, which is the point —
+    #     but on a stopped strategy this moves results more than the capacity
+    #     path this option was written for.
+    #   * ON A CONTESTED BOOK IT RE-PLANS, IT DOES NOT ONLY SUBTRACT. Skipping
+    #     a late entry frees the capital that entry would have consumed, and
+    #     that capital goes to whatever else is competing on the bar — so a
+    #     surviving trade can change SIZE, and a symbol can end up with MORE
+    #     trades than level mode gave it. On the docs/ENTRY_TRIGGER_DELTA.md
+    #     book (30 large caps, 2018-2026) that happened for 1 strategy of 130
+    #     (+1.7%); totals fell 21%. Net subtraction, but not strictly a filter.
+    #
+    # ONLY an exact "level" selects level (case/whitespace ignored); any other
+    # value runs as "edge" -- None silently (it means unset), a typo with a
+    # config_validator warning.
+    # A held -2 (hold-state SHORT) holds the short: -2 is not a cover signal.
+    # Asymmetry to know: -2 exits a long, but 1 does not cover a short, so a
+    # direct -2 -> 1 stays short; a flip needs a -1 bar in between.
+    "entry_trigger": "edge",
 
     # ============================================================
     # SECTION 21: VERBOSE SUMMARY TABLE
@@ -291,8 +338,8 @@ CONFIG = {
 
     # Fraction of CURRENT equity to risk per trade, measured through the
     # actual stop distance. Unlike target_risk_per_trade (used by vol_parity /
-    # risk_parity, which derive their own distance), this one is delivered
-    # exactly whenever it is reachable -- see the ceiling below.
+    # risk_parity, which derive their own distance), this budget is subject to
+    # the ceiling and fill-price/stop-anchor drift described below.
     "risk_pct_per_trade": 0.01,
 
     # Hard ceiling on the CONTRACT count. Applies to MARGINED instruments
@@ -304,7 +351,7 @@ CONFIG = {
 
     # Notional ceiling for risk_pct_capped on UNMARGINED instruments
     # (equities), as a fraction of equity. 1.0 = no leverage. None = disabled.
-    # 0.0 is NOT "disabled" and is rejected -- use None.
+    # 0.0 warns and takes no position; it does not abort the run. Use None to disable.
     #
     # This is deliberately NOT allocation_per_trade. Required notional is
     # risk_pct_per_trade / stop_frac of equity, so an allocation ceiling of
@@ -316,7 +363,7 @@ CONFIG = {
     # cash <= equity, so the pre-existing cash clamp is at least as tight. What
     # it changes is WHEN -- it clamps before the portfolio heat check, so heat
     # sees the position that will actually be held. It binds on size below 1.0,
-    # or once short proceeds push cash above equity.
+    # or when unrealized short losses leave cash above equity.
     "risk_pct_capped_max_notional_pct": 1.0,
 
     # NOTE: setting max_portfolio_heat == risk_pct_per_trade takes ZERO trades
@@ -458,4 +505,15 @@ CONFIG = {
     # deliberately NO absolute-dollar cap default — a dollar cap is scale-dependent
     # and silently changes behaviour when initial_capital changes.
     "max_position_pct": 1.0,
+
+    # ============================================================
+    # SECTION 31: SIMULATION WORKERS (#414)
+    # ============================================================
+    # Upper bound on the simulation pool. Every worker receives its own copy of
+    # the portfolio's price data, so peak memory is roughly
+    # (workers + 1) x portfolio_data: on a wide universe (e.g. rule:us_liquid_500,
+    # 2004-2026) four workers can exhaust a 16 GB machine. None (default) keeps
+    # min(cpu_count(), number of tasks); 1 runs every task serially in one
+    # invocation, keeping the combined summary. CLI: --workers N.
+    "max_workers": None,
 }

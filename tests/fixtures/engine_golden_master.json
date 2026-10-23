@@ -258,6 +258,168 @@
       }
     ]
   },
+  "hold_state_short": {
+    "equity_curve": [
+      100000.0,
+      100000.0,
+      100095.856009,
+      100196.91664,
+      100297.977271,
+      100399.037903,
+      100297.977271,
+      100196.91664,
+      100095.856009,
+      100090.701917
+    ],
+    "equity_len": 10,
+    "scalars": {
+      "Trades": 1,
+      "avg_trade_duration": 9.0,
+      "calmar_ratio": 9.951207,
+      "initial_capital": 100000.0,
+      "max_drawdown": 0.003071,
+      "pnl_percent": 0.000907,
+      "profit_factor": null,
+      "sharpe_ratio": -1.578112,
+      "win_rate": 1.0
+    },
+    "trade_log": [
+      {
+        "EntryDate": "2023-01-03T00:00:00",
+        "EntryPrice": 98.9505,
+        "ExitDate": "2023-01-12T00:00:00",
+        "ExitPrice": 98.049,
+        "ExitReason": "Short Cover",
+        "HoldDuration": 9,
+        "InitialRisk": 0.0,
+        "MAE_pct": 0.010505,
+        "MFE_pct": 0.049525,
+        "PosSizeMult": 1.0,
+        "Profit": 90.701917,
+        "ProfitPct": 0.00907,
+        "RMultiple": null,
+        "Shares": 101.060631,
+        "Symbol": "SSS",
+        "Trade": "Short 1",
+        "VolumeImpact_bps": 0.0,
+        "is_win": 1
+      }
+    ]
+  },
+  "hold_state_stop": {
+    "equity_curve": [
+      100000.0,
+      100000.0,
+      100093.764999,
+      99994.804578,
+      99895.844157,
+      99302.081632,
+      99494.854158,
+      99494.854158,
+      99494.854158,
+      99494.854158
+    ],
+    "equity_len": 10,
+    "scalars": {
+      "Trades": 1,
+      "avg_trade_duration": 6.0,
+      "calmar_ratio": -19.568877,
+      "initial_capital": 100000.0,
+      "max_drawdown": 0.007909,
+      "pnl_percent": -0.005051,
+      "profit_factor": 0.0,
+      "sharpe_ratio": -5.41352,
+      "win_rate": 0.0
+    },
+    "trade_log": [
+      {
+        "EntryDate": "2023-01-03T00:00:00",
+        "EntryPrice": 101.0505,
+        "ExitDate": "2023-01-09T00:00:00",
+        "ExitPrice": 95.949976,
+        "ExitReason": "Stop Loss (percentage)",
+        "HoldDuration": 6,
+        "InitialRisk": 5.052525,
+        "MAE_pct": -0.079074,
+        "MFE_pct": 0.01949,
+        "PosSizeMult": 1.0,
+        "Profit": -505.145842,
+        "ProfitPct": -0.050515,
+        "RMultiple": -1.010292,
+        "Shares": 98.960421,
+        "Symbol": "BBB",
+        "Trade": "Long 1",
+        "VolumeImpact_bps": 0.0,
+        "is_win": 0
+      }
+    ]
+  },
+  "hold_state_stop_level": {
+    "equity_curve": [
+      100000.0,
+      100000.0,
+      100093.764999,
+      99994.804578,
+      99895.844157,
+      99302.081632,
+      99595.268079,
+      99700.855797,
+      99806.443516,
+      99912.031234
+    ],
+    "equity_len": 10,
+    "scalars": {
+      "Trades": 2,
+      "avg_trade_duration": 5.0,
+      "calmar_ratio": -3.641183,
+      "initial_capital": 100000.0,
+      "max_drawdown": 0.007909,
+      "pnl_percent": -0.00088,
+      "profit_factor": 0.815194,
+      "sharpe_ratio": -1.829641,
+      "win_rate": 0.5
+    },
+    "trade_log": [
+      {
+        "EntryDate": "2023-01-03T00:00:00",
+        "EntryPrice": 101.0505,
+        "ExitDate": "2023-01-09T00:00:00",
+        "ExitPrice": 95.949976,
+        "ExitReason": "Stop Loss (percentage)",
+        "HoldDuration": 6,
+        "InitialRisk": 5.052525,
+        "MAE_pct": -0.079074,
+        "MFE_pct": 0.01949,
+        "PosSizeMult": 1.0,
+        "Profit": -505.145842,
+        "ProfitPct": -0.050515,
+        "RMultiple": -1.010292,
+        "Shares": 98.960421,
+        "Symbol": "BBB",
+        "Trade": "Long 1",
+        "VolumeImpact_bps": 0.0,
+        "is_win": 0
+      },
+      {
+        "EntryDate": "2023-01-09T00:00:00",
+        "EntryPrice": 94.047,
+        "ExitDate": "2023-01-13T00:00:00",
+        "ExitPrice": 97.951,
+        "ExitReason": "End of Backtest",
+        "HoldDuration": 4,
+        "InitialRisk": 4.70235,
+        "MAE_pct": -0.010495,
+        "MFE_pct": 0.052452,
+        "Profit": 411.792102,
+        "ProfitPct": 0.041469,
+        "RMultiple": 0.829373,
+        "Shares": 105.587719,
+        "Symbol": "BBB",
+        "Trade": "Long 2",
+        "is_win": 1
+      }
+    ]
+  },
   "kelly_short_with_history": {
     "equity_curve": [
       100000.0,

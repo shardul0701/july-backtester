@@ -6,6 +6,50 @@ from config import CONFIG
 import numpy as np
 from helpers.aws_utils import upload_file_to_s3
 from helpers.correlation import compute_avg_correlations, DEFAULT_THRESHOLD
+from helpers.filename_utils import sanitize_symbol_for_filename
+
+
+def _safe_strategy_name(strategy_name):
+    """Strategy name made safe for use in an output filename.
+
+    Applies the historical cosmetic transforms (spaces to underscores, remove
+    parentheses) so existing
+    legal filenames are unchanged, then runs the result through the
+    shared ``sanitize_symbol_for_filename`` so ANY Windows-illegal character is
+    handled — not just the ``/ ( ) : space`` this site used to strip by hand.
+
+    A strategy named ``EMA_PB-A3_ADX>20`` previously kept its ``>`` and produced
+    a filename Windows cannot write, which aborted ``git checkout`` for every
+    Windows contributor once the file was committed. The shared sanitizer maps
+    ``>``/``<`` to distinct ``_gt_``/``_lt_`` tokens, so comparison-sweep variants
+    stay distinct instead of colliding.
+
+    A Windows reserved device name gains a leading ``_`` (``CON`` -> ``_CON``).
+    Sanitize with the extension attached: a dot at the end of a strategy stem
+    is legal inside ``RSI_2..csv`` and must survive, or ``RSI 2.`` overwrites
+    ``RSI 2``. All callers append an extension or a suffix plus extension.
+    """
+    cosmetic = (
+        str(strategy_name)
+        .replace('/', '_').replace(' ', '_').replace('(', '').replace(')', '').replace(':', '')
+    )
+    if not cosmetic:
+        return sanitize_symbol_for_filename(cosmetic)
+    return sanitize_symbol_for_filename(cosmetic + ".csv").removesuffix(".csv")
+
+
+def safe_path_component(name):
+    """A portfolio or symbol name made safe for use in an output path.
+
+    Same idea as :func:`_safe_strategy_name` for the other two components of an
+    output path: keep the historical space-to-underscore transform so existing
+    legal folder names do not churn, then run the shared sanitizer. A portfolio
+    key like ``"Nasdaq: PIT"`` or an index asset like ``I:SPX`` otherwise lands
+    a ``:`` in the path, which Windows rejects the same way it rejects ``>``.
+    Reserved device names gain a leading underscore. Spaces become underscores
+    and trailing dots are stripped because these components can be directories.
+    """
+    return sanitize_symbol_for_filename(str(name).replace(" ", "_"))
 
 # Default drawdown filter shared by all four summary functions, so the value
 # cannot drift between copies again (issue #319 was one copy defaulting to
@@ -135,9 +179,9 @@ def save_trades_to_csv(result, local_folder, run_id):
         return
     
     # Sanitize names for filenames/paths
-    strategy_name_safe = result['Strategy'].replace('/', '_').replace(' ', '_').replace('(', '').replace(')', '').replace(':', '')
-    portfolio_name_safe = result.get('Portfolio', 'Portfolio').replace(" ", "_")
-    symbol = result.get('Asset', portfolio_name_safe)
+    strategy_name_safe = _safe_strategy_name(result['Strategy'])
+    portfolio_name_safe = safe_path_component(result.get('Portfolio', 'Portfolio'))
+    symbol = safe_path_component(result.get('Asset', portfolio_name_safe))
 
     filename = f"{symbol}_{strategy_name_safe}_trade_log.csv"
     local_filepath = os.path.join(local_folder, filename)
@@ -622,7 +666,7 @@ def generate_per_portfolio_summary(portfolio_results, portfolio_name, benchmark_
             print("\n  Run with --verbose for extended metrics and robustness scores.")
 
     # --- Step 4a: Export analyzer-compatible CSVs ---
-    portfolio_name_safe = portfolio_name.replace(" ", "_")
+    portfolio_name_safe = safe_path_component(portfolio_name)
     analyzer_csv_folder = os.path.join("output", "runs", run_id, "analyzer_csvs", portfolio_name_safe)
 
     # Column mapping: backtester trade_log keys -> trade_analyzer expected columns
@@ -646,7 +690,7 @@ def generate_per_portfolio_summary(portfolio_results, portfolio_name, benchmark_
     for result in portfolio_results:
         if not result.get('trade_log') or len(result['trade_log']) == 0:
             continue
-        strategy_name_safe = result['Strategy'].replace('/', '_').replace(' ', '_').replace('(', '').replace(')', '').replace(':', '')
+        strategy_name_safe = _safe_strategy_name(result['Strategy'])
         raw_df = pd.DataFrame(result['trade_log'])
         mapped_df = raw_df.rename(columns=COLUMN_MAP)
         # Convert fractional values to percentages for the analyzer

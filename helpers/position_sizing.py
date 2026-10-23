@@ -341,8 +341,8 @@ def _risk_pct_capped(equity: float, config: dict, price: float | None = None,
     nearly the same number. What the ceiling changes is *when*: it clamps
     BEFORE the portfolio heat check, so heat evaluates the position that will
     actually be held rather than an unclamped one the cash clamp would shrink
-    afterwards. It can change the held size once short proceeds push cash above
-    equity, and below 1.0 it binds directly. (@shardul0701 on #390 — two
+    afterwards. It can change the held size when unrealized short losses leave
+    cash above equity, and below 1.0 it binds directly. (@shardul0701 on #390 — two
     comments claimed it bound on size at the default and were wrong.)
 
     ``None`` disables it. ``0.0`` does NOT — it is a ceiling of zero and takes
@@ -403,9 +403,9 @@ def _fixed_contracts(config: dict) -> float:
     """
     A constant contract count on every trade, forever -- never equity-scaled.
 
-    Already a unit count rather than a dollar-notional target, so callers must
-    NOT put it through the point_value / margin conversion that turns the other
-    methods' dollar answers into contracts.
+    Already an instrument-unit count, so callers must NOT apply the notional /
+    margin conversion used for the equity-equivalent share counts returned by
+    the other methods.
     """
     return float(config.get("fixed_contracts_per_trade", 1))
 
