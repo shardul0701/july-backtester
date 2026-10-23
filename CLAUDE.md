@@ -650,8 +650,8 @@ A short, wide banner figure (`figsize=(10, 3), dpi=150`) that shows the full dra
 - **Short handling in the daily loop:**
   1. **Borrow cost debit**: iterates `short_positions`, subtracts `notional × htb_rate_daily` from cash and accumulates `spos['total_borrow_cost']`.
   2. **Short cover**: on a negative signal other than `-2` for a held short, fills at Open/Close + slippage, deducts commission both sides, nets `total_borrow_cost` out of profit, logs to `trade_log`.
-  3. **Short entry**: on signal `== -2`, skips if `symbol in positions or symbol in short_positions`, sizes via `calculate_position_size` with the configured `position_sizing_method` and `size_mults` exactly as the long leg does (#386; clamped to cash), charges entry commission; short proceeds and the liability offset each other in cash accounting.
-- **Short trades in `trade_log`**: `Trade: "Short N"`, `ExitReason: "Short Cover"`. `RMultiple` is `None` for shorts (initial risk undefined without a stop).
+  3. **Short entry**: on signal `== -2`, skips if `symbol in positions or symbol in short_positions`, sizes via `calculate_position_size` with the configured `position_sizing_method` and `size_mults` exactly as the long leg does (#386; subject to cash or margin limits), charges entry commission; short proceeds and the liability offset each other in cash accounting.
+- **Short trades in `trade_log`**: `Trade: "Short N"`, `ExitReason: "Short Cover"`. `RMultiple` uses the initial stop risk when available and is `None` otherwise.
 - **Equity MTM for shorts**: `current_market_value += (shares × entry_price) − (shares × current_close)` — profit when price falls.
 - **Backward compatibility**: all existing 1/0/−1 strategies skip all three new blocks entirely (`short_positions` is always empty for them).
 - **Tests**: `tests/test_short_selling.py` — 7 tests covering config defaults, daily-rate arithmetic, 30-day cost estimate, and no-regression empty-shorts loop.
