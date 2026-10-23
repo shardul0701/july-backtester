@@ -401,9 +401,9 @@ def _fixed_contracts(config: dict) -> float:
     """
     A constant contract count on every trade, forever -- never equity-scaled.
 
-    Already a unit count rather than a dollar-notional target, so callers must
-    NOT put it through the point_value / margin conversion that turns the other
-    methods' dollar answers into contracts.
+    Already an instrument-unit count, so callers must NOT apply the notional /
+    margin conversion used for the equity-equivalent share counts returned by
+    the other methods.
     """
     return float(config.get("fixed_contracts_per_trade", 1))
 
