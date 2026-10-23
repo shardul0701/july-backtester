@@ -49,7 +49,7 @@ class TestSafeStrategyName:
         assert _safe_strategy_name(name) == expected
 
     def test_legal_names_unchanged_from_prior_behaviour(self):
-        # The historical cosmetic transforms (drop spaces/parens) are preserved,
+        # The historical space-to-underscore and parenthesis-removal rules stay,
         # so already-legal strategy filenames do not churn.
         assert _safe_strategy_name("SMA Crossover (20/50)") == "SMA_Crossover_20_50"
         assert _safe_strategy_name("MACD Crossover") == "MACD_Crossover"

@@ -12,7 +12,8 @@ from helpers.filename_utils import sanitize_symbol_for_filename
 def _safe_strategy_name(strategy_name):
     """Strategy name made safe for use in an output filename.
 
-    Applies the historical cosmetic transforms (drop spaces/parens) so existing
+    Applies the historical cosmetic transforms (spaces to underscores, remove
+    parentheses) so existing
     legal filenames are unchanged, then runs the result through the
     shared ``sanitize_symbol_for_filename`` so ANY Windows-illegal character is
     handled — not just the ``/ ( ) : space`` this site used to strip by hand.
@@ -45,8 +46,8 @@ def safe_path_component(name):
     legal folder names do not churn, then run the shared sanitizer. A portfolio
     key like ``"Nasdaq: PIT"`` or an index asset like ``I:SPX`` otherwise lands
     a ``:`` in the path, which Windows rejects the same way it rejects ``>``.
-    Reserved device names gain a leading underscore; trailing dots/spaces are
-    stripped here because these components can be directory names.
+    Reserved device names gain a leading underscore. Spaces become underscores
+    and trailing dots are stripped because these components can be directories.
     """
     return sanitize_symbol_for_filename(str(name).replace(" ", "_"))
 
