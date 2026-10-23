@@ -1521,16 +1521,18 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                 shares = shares * _size_mult
 
                 # risk_pct_capped and fixed_contracts already answer in UNITS
-                # (contracts/shares); the other four answer in dollars. Only the
-                # dollar answers get the conversion below -- putting a contract
-                # count through margin_required() or point_value re-scales a
+                # (contracts/shares); the other four return equity-equivalent
+                # share counts at entry_price. Only those counts get converted
+                # below -- putting an instrument-unit count through margin or
+                # point_value conversion re-scales a
                 # number that is already in the right units. This method check is
                 # the one piece of the old three-way dispatch that is load-bearing
                 # rather than duplication, so it survives #384 as an explicit gate.
                 if sizing_method in ("risk_pct_capped", "fixed_contracts"):
                     pass
-                # Futures size in contracts: the sizing methods return a dollar-notional
-                # based size; dividing out $/point converts it to contracts (pv=1 for equities).
+                # Convert equity-equivalent shares to futures contracts: use
+                # their dollar target for margined instruments, otherwise
+                # normalize by point_value (pv=1 for ordinary equities).
                 elif inst.margin_mode == _inst.INITIAL_MARGIN:
                     # Margined (leveraged) futures: the sizing target is a dollar
                     # amount of equity to commit. Converting it via point_value
