@@ -1062,7 +1062,12 @@ class TestReadPathListIsDerived:
                          # joined the set in #355: the merged provider now
                          # imports filename_candidates, so the derivation sees
                          # it. Its arrival here IS the fix being real.
-                         "src/data/unified_market_data_provider.py"]:
+                         "src/data/unified_market_data_provider.py",
+                         # #403: the first WRITE-side importer. The derivation
+                         # is by import, so it is scanned like the readers; it
+                         # passes because it never probes a sanitized name for
+                         # existence, it only writes one.
+                         "helpers/summary.py"]:
             assert expected.replace("/", os.sep) in derived, \
                 f"{expected} vanished from the derived read-path set"
 
@@ -1105,7 +1110,7 @@ class TestReadPathListIsDerived:
             "import os\ndef f():\n    return os.getcwd()\n", encoding="utf-8")
         assert _derive_read_paths(root=str(tmp_path)) == []
 
-    def test_coverage_is_the_six_known_read_paths(self):
+    def test_coverage_is_the_known_sanitizer_importers(self):
         """A deliberate TRIPWIRE on the number, not a spec.
 
         Raised 5 -> 6 in #355, deliberately: the merged provider now imports
@@ -1121,7 +1126,15 @@ class TestReadPathListIsDerived:
         This is the case the tripwire is FOR: it fired, and the reason was
         checked rather than assumed.
 
-        I published "234 modules" on this PR; the real coverage is 5, and 234
+        Raised 4 -> 5 in #403: helpers/summary.py now sanitizes the strategy,
+        portfolio and symbol components of the output CSV paths it writes. It is
+        a writer, not a reader, so "read path" is the wrong word for it; it is
+        in the set because the derivation keys on the import, and the contract
+        scan in TestNoReadPathBuildsItsOwnFilename passes it because it never
+        tests a sanitized name for existence. The tripwire fired in CI on the
+        PR, which is what it is for.
+
+        On #355 I published "234 modules"; the real coverage then was 5, and 234
         came from a walk over a polluted working tree. This exists so a change
         in coverage is noticed rather than assumed.
 
@@ -1132,9 +1145,9 @@ class TestReadPathListIsDerived:
         below rather than a bare assert.
         """
         found = _derive_read_paths()
-        assert len(found) == 4, (
+        assert len(found) == 5, (
             f"read-path coverage changed: {len(found)} modules now import a "
-            f"filename helper, not 4.\n{found}\n\n"
+            f"filename helper, not 5.\n{found}\n\n"
             f"THIS IS A TRIPWIRE, NOT A FAILURE. If you legitimately added a "
             f"read path, raise this number DELIBERATELY and add the module to "
             f"the floor list in TestReadPathListIsDerived — do not bump it "

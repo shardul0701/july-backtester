@@ -203,6 +203,31 @@ def _walk_back(prev_dates, date, n):
     return date
 
 
+def _kelly_stats(trade_log):
+    """Rolling ``win_rate`` / ``avg_win`` / ``avg_loss`` for kelly sizing.
+
+    Empty until 10 trades have completed and both a win and a loss exist, in
+    which case ``_kelly_criterion`` falls back to fixed allocation. One builder
+    for all three sizing call sites: the short legs used to supply none of these
+    keys, so past ten trades a long sized off the strategy's record while a
+    short on the same bar stayed pinned at the fallback (#386, @shardul0701).
+
+    Known gap, tracked as #466: under execution_time="open" the log already
+    holds trades that stopped out later in the bar being filled at its open.
+    """
+    if len(trade_log) < 10:
+        return {}
+    wins = [t for t in trade_log if t.get("is_win") == 1 and t.get("ProfitPct") is not None]
+    losses = [t for t in trade_log if t.get("is_win") == 0 and t.get("ProfitPct") is not None]
+    if not (wins and losses):
+        return {}
+    return {
+        "win_rate": len(wins) / len(trade_log),
+        "avg_win": sum(t["ProfitPct"] for t in wins) / len(wins),
+        "avg_loss": sum(abs(t["ProfitPct"]) for t in losses) / len(losses),
+    }
+
+
 def _build_entry_edge_masks(signals):
     """
     Precompute, per symbol, the bars on which a signal series TRANSITIONS INTO
@@ -236,9 +261,9 @@ def _is_entry_bar(signals, edge_masks, symbol, sig_date, entry_value):
     True when ``symbol`` may be ENTERED on ``sig_date`` for ``entry_value``
     (1 = long, -2 = short).
 
-    ``edge_masks`` is None in the default "level" mode, where this reduces to the
-    original equality test byte-for-byte. In "edge" mode the bar must ALSO be a
-    transition into the entry state.
+    ``edge_masks`` is None in "level" mode, where this reduces to the original
+    equality test byte-for-byte. In "edge" mode (the default since #401) the bar
+    must ALSO be a transition into the entry state.
     """
     if pd.isna(sig_date) or symbol not in signals:
         return False
@@ -277,11 +302,22 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
 
     execution_time = CONFIG.get("execution_time", "open").lower()
     htb_rate_annual = CONFIG.get("htb_rate_annual", 0.0)
+
+    # (The #372 banner that warned this book was sized by two different
+    # methods depending on direction lived here. #386 made the equity short
+    # leg honour position_sizing_method, so the gap it described is closed
+    # and the warning is gone with it -- along with the module-level
+    # _WARNED_SHORT_SIZING dedup set and the autouse fixture in
+    # tests/test_signal_bar_stop.py that reset it. A warning that outlives
+    # the gap it describes is worse than none: the next reader has to prove
+    # it is stale before ignoring it. The fixture was the piece most likely
+    # to be left behind -- it only reset module state, so with the set gone
+    # it would have gone silently green forever rather than failing.)
     # Sub-bar resolution: opt-in and requires finer-resolution data to be supplied.
     # Off / no data -> stop fills behave exactly as before (no-op).
     _intrabar_on = bool(CONFIG.get("intrabar_resolution", False)) and intrabar_data is not None
 
-    # --- ENTRY TRIGGER MODE: level (default) vs edge ---
+    # --- ENTRY TRIGGER MODE: edge (default) vs level ---
     # "level" enters on ANY bar whose signal reads the entry value. A strategy
     # that emits a forward-filled *state* series -- 1 on every bar of a hold, as
     # custom_strategies/bull_flag.py does via .replace(0, np.nan).ffill() --
@@ -292,10 +328,19 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
     # 26/27 at 0.01, with the strategy and the data held constant.
     # "edge" enters only on the transition INTO the entry state, which is how the
     # live SignalDeck scanner triggers (`last == 1 and prev != 1`).
-    # Default stays "level": flipping it would move every strategy in the repo
-    # and void tests/test_engine_characterization.py, so it is opt-in per run.
-    _entry_trigger = str(CONFIG.get("entry_trigger", "level")).lower()
-    _edge_masks = _build_entry_edge_masks(signals) if _entry_trigger == "edge" else None
+    # Default is "edge" since #401: under "level" a hold-state signal stopped out
+    # on bar N re-enters on N (or N+1) because the series still reads 1, booking
+    # trades the strategy never signalled. "level" remains available per run.
+    # The golden master pins both (scenario hold_state_stop). The fallback
+    # matches the shipped default so a config missing the key does not silently
+    # get the behaviour the default was flipped away from.
+    # Only an explicit "level" selects level; ANY other value -- a typo like
+    # "edges", None, "Edge " -- runs as edge. Inverted from the original test
+    # (`== "edge"`), under which every unrecognised value silently ran level,
+    # the very behaviour the flip removed, while config_validator told the user
+    # it had fallen back to edge (adversarial QA on #405).
+    _entry_trigger = str(CONFIG.get("entry_trigger", "edge")).strip().lower()
+    _edge_masks = None if _entry_trigger == "level" else _build_entry_edge_masks(signals)
 
     # Dynamic HTB rate compounding based on timeframe (fixes issue #55)
     bars_per_year = get_bars_per_year(CONFIG)
@@ -549,7 +594,8 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
             'EntryDate': spos['entry_date'].isoformat(), 'EntryPrice': spos['entry_price'],
             'ExitDate': exit_date.isoformat(), 'ExitPrice': cover_slip,
             'Profit': net_pnl, 'ProfitPct': net_pnl / spos['notional'] if spos['notional'] > 0 else 0,
-            'Shares': spos['shares'], 'is_win': 1 if net_pnl > 0 else 0,
+            'Shares': spos['shares'], 'PosSizeMult': spos.get('size_mult', 1.0),
+            'is_win': 1 if net_pnl > 0 else 0,
             'HoldDuration': _hold_duration_days(spos['entry_date'], exit_date),
             'MAE_pct': short_mae, 'MFE_pct': short_mfe,
             'ExitReason': cover_reason,
@@ -1036,11 +1082,18 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                             cover_raw = _mc_close
                             cover_reason = "Margin Call"
 
-            # STRATEGY cover (signal < 0 while short)
+            # STRATEGY cover: any negative signal EXCEPT -2, which is the
+            # short-entry value and, on a bar already short, means "hold". This
+            # covered on -2 too, so a hold-state short ([-2, -2, -2, ...], e.g.
+            # a short ORB) covered every bar: under "level" it churned a round
+            # trip per bar, and under the "edge" default (#401) the re-entry is
+            # refused, so the position went flat after ONE bar
+            # (adversarial QA on #405).
             if pd.isna(cover_raw):
                 sig_date = prev_trading_dates[symbol].get(date) if execution_time == 'open' else date
                 if (pd.notna(sig_date) and sig_date in signals[symbol].index
-                        and signals[symbol].loc[sig_date] < 0):
+                        and signals[symbol].loc[sig_date] < 0
+                        and signals[symbol].loc[sig_date] != -2):
                     cover_raw = row.get('Open' if execution_time == 'open' else 'Close')
                     cover_reason = "Short Cover"
 
@@ -1094,7 +1147,8 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                 'EntryDate': spos['entry_date'].isoformat(), 'EntryPrice': spos['entry_price'],
                 'ExitDate': date.isoformat(), 'ExitPrice': cover_slip,
                 'Profit': net_pnl, 'ProfitPct': net_pnl / spos['notional'] if spos['notional'] > 0 else 0,
-                'Shares': spos['shares'], 'is_win': 1 if net_pnl > 0 else 0,
+                'Shares': spos['shares'], 'PosSizeMult': spos.get('size_mult', 1.0),
+                'is_win': 1 if net_pnl > 0 else 0,
                 'HoldDuration': _hold_duration_days(spos['entry_date'], date),
                 'MAE_pct': short_mae, 'MFE_pct': short_mfe,
                 'ExitReason': cover_reason,
@@ -1236,6 +1290,61 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     except KeyError:
                         pass
 
+                # --- SHORT-SIDE SIZING INPUTS (#386) ---
+                # Resolved once, above the margin_mode split, so both legs read
+                # the same values. `_s_ir` (initial risk in POINTS) is already
+                # computed above: unlike the long path, the short path sets its
+                # stop BEFORE sizing, which is why it is handed the REALISED
+                # distance rather than predicting one. See #391.
+                _s_eq_sizing_method = CONFIG.get('position_sizing_method', 'fixed')
+                df_se = portfolio_data[symbol]
+                _s_sizing_kwargs_base = {
+                    "stop_distance_points": _s_ir,
+                    "point_value": inst_se.point_value,
+                    "margined": inst_se.margin_mode == _inst.INITIAL_MARGIN,
+                }
+                # kelly's inputs, from the same builder the long path uses. The
+                # method was DISPATCHED on both short legs but never SUPPLIED,
+                # so it degraded to fixed allocation on every short past ten
+                # trades -- dispatching a method is not the same as feeding it.
+                if _s_eq_sizing_method == "kelly":
+                    _s_sizing_kwargs_base.update(_kelly_stats(trade_log))
+                # EQUITY short portfolio-heat risk fraction, by the LONG path's
+                # rule so the gate admits the same position in either
+                # direction: the real stop fraction for the two methods whose
+                # long sizing carries stop_distance_pct (risk_parity with a
+                # resolvable stop, risk_pct_capped), the target_risk_per_trade
+                # proxy otherwise. Before this the equity short always used the
+                # proxy (adversarial QA on #392: risk_parity 5% stop, 0.3% heat
+                # cap -> LONG rejected, SHORT admitted 80 shares).
+                #
+                # NOT used by the futures short, which keeps the real stop risk
+                # #331 chose on purpose. The futures LONG uses the proxy, so the
+                # two futures legs still differ under a binding heat cap -- the
+                # long is the wrong side, and fixing it moves long numbers:
+                # tracked separately (see the futures heat gate below).
+                _s_heat_frac = (
+                    _s_ir / ep
+                    if (_s_eq_sizing_method in ("risk_parity", "risk_pct_capped")
+                        and _s_ir and _s_ir > 0 and ep and ep > 0)
+                    else CONFIG.get("target_risk_per_trade", 0.02))
+                # NOTE: no `stop_distance_pct` here. It would be DEAD --
+                # `_risk_parity` prefers `stop_distance_points` when both are
+                # given (#384), and the condition under which a fraction could
+                # be derived (`_s_ir > 0`) is exactly the condition under which
+                # points is usable, so the fraction could never be read. The
+                # first draft set it anyway; deleting it moved nothing, which is
+                # how I found out. Kept as a note because the long path DOES
+                # need its fraction, and the asymmetry looks like an omission.
+                # Per-signal size multiplier, resolved exactly as the long path
+                # does (search `_size_mult = 1.0` in the long entry block) -- same
+                # key, same NaN/<=0 guard.
+                _s_size_mult = 1.0
+                if size_mults is not None and symbol in size_mults:
+                    _sm_s = size_mults[symbol].get(sig_date, np.nan)
+                    if pd.notna(_sm_s) and _sm_s > 0:
+                        _s_size_mult = float(_sm_s)
+
                 if inst_se.margin_mode == _inst.INITIAL_MARGIN:
                     # Futures short: integer contracts, reserve initial margin, pay commission.
                     # Short-sale fill is unfavourable (lower), mirroring the long-side "buy"
@@ -1244,56 +1353,155 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     # only the realized fill used for margin/notional/P&L accounting.
                     _s_entry_fill = _inst.apply_slippage(inst_se, ep, "sell")
                     _free = cash - reserved_margin
-                    _s_sizing_method = CONFIG.get('position_sizing_method', 'fixed')
-                    if _s_sizing_method == "risk_pct_capped":
-                        # Mirror of the long-side risk_pct_capped branch. _s_ir
-                        # (initial risk in points) is already computed above,
-                        # before this dispatch -- unlike the long path, the
-                        # short path sets its stop before sizing.
+                    _s_sizing_method = _s_eq_sizing_method
+                    # ALL SIX methods, not the two-name list this used to
+                    # carry. The comment here said "same two methods the long
+                    # path dispatches" -- true when #384 wrote it, and false
+                    # by the end of that same PR, because #384 is what made
+                    # the long path unconditional. So the long leg called
+                    # this for six and the short leg for two, and
+                    # vol_parity / risk_parity / kelly fell to a
+                    # fixed-fractional-over-margin branch (now removed).
+                    #
+                    # The short leg was INERT, not merely different --
+                    # sweeping the axis each method keys off (MES):
+                    #
+                    #   vol_parity, ATR swept      risk_parity, stop swept
+                    #    ATR  LONG  SHORT           stop  LONG  SHORT
+                    #     1%   197     19             2%   198     19
+                    #     2%   198     19             5%    79     19
+                    #     4%   100     19            10%    39     19
+                    #     8%    50     19            20%    19     19  <- agree
+                    #
+                    # The long leg tracks its input; the short was pinned at
+                    # the 10% allocation. And at a 20% stop the two coincide
+                    # exactly, so a comparative test that happened to pick
+                    # that distance passes on the bug.
+                    #
+                    # kelly looked like it agreed on both legs, but only by
+                    # DEGRADING: the short legs never supplied win_rate /
+                    # avg_win / avg_loss, so past ten trades the long sized
+                    # off the record and the short stayed at the fixed
+                    # fallback. Both short legs now read _kelly_stats(),
+                    # carried in _s_sizing_kwargs_base.
+                    #
+                    # (@shardul0701 on #392, who also traced the coverage gap
+                    # to his own narrowing of the #372 banner: it was scoped
+                    # to `margin_mode != INITIAL_MARGIN` on evidence from
+                    # `fixed_contracts`, one of the two methods that DID
+                    # work here -- so futures were excluded from the only
+                    # surface naming the gap.)
+                    #
+                    # _s_ir (initial risk in POINTS) is computed above,
+                    # before this dispatch -- unlike the long path, the short
+                    # path sets its stop before sizing. See #391.
+                    shares = calculate_position_size(
+                        method=_s_sizing_method,
+                        equity=total_equity,
+                        price=_s_entry_fill,
+                        symbol_data=portfolio_data[symbol].loc[
+                            :(sig_date if pd.notna(sig_date) else date)],
+                        config=CONFIG,
+                        allocation_pct=allocation_pct,
+                        stop_distance_points=_s_ir,
+                        point_value=inst_se.point_value,
+                        # Always True here -- this block is inside the
+                        # INITIAL_MARGIN branch -- but written as the
+                        # expression rather than the literal so it stays
+                        # correct when #386 routes equity shorts through
+                        # the same call. A hardcoded True would silently
+                        # apply the contract cap to equities at that point.
+                        margined=(inst_se.margin_mode
+                                  == _inst.INITIAL_MARGIN),
+                        **{k: v for k, v in _s_sizing_kwargs_base.items()
+                           if k in ("win_rate", "avg_win", "avg_loss")},
+                    )
+                    # size_mults on the FUTURES short leg too (#386), at the
+                    # same point the long leg applies it: on the raw sized
+                    # answer, BEFORE unit conversion, the free-margin clamp and
+                    # the single round_units. The first version multiplied after
+                    # clamping and rounding, so floor(floor(x)*m) < floor(x*m)
+                    # and min(x, cap)*m < min(x*m, cap): vol_parity at mult 0.6
+                    # sized LONG 2 / SHORT 1 contracts (adversarial QA on #392).
+                    shares = shares * _s_size_mult
+
+                    # Unit-vs-dollar conversion, mirroring the long path's gate.
+                    # risk_pct_capped and fixed_contracts answer in CONTRACTS and
+                    # skip it; the other four answer in dollars and size off
+                    # margin capacity rather than full notional -- dividing the
+                    # target dollar amount by point_value treats it as unlevered
+                    # notional, which for a leveraged contract eventually floors
+                    # to 0 forever as price appreciates.
+                    _s_per_contract_margin = _inst.margin_required(inst_se, 1, ep)
+                    if _s_sizing_method not in ("risk_pct_capped",
+                                                "fixed_contracts"):
+                        shares = ((shares * _s_entry_fill)
+                                  / _s_per_contract_margin
+                                  if _s_per_contract_margin > 0 else 0.0)
+
+                    # Portfolio-heat gate (#324 QA / issue #331), BEFORE the
+                    # free-margin clamp and round_units, where the long leg
+                    # checks it -- gating the clamped count instead admitted a
+                    # short whose unclamped size the long rejected (vol_parity,
+                    # ATR 0.2: LONG None / SHORT 2000 even at heat 1.0;
+                    # adversarial QA round 2 on #392). Risk is the REAL stop
+                    # risk when the stop is known, as #331 chose: futures set
+                    # their stop before sizing, and the target_risk proxy
+                    # understates it (two 5%-stop MES shorts = 10% real risk were
+                    # both admitted under a 6% cap when the proxy was used).
+                    def _fs_risk(n):
                         if _s_ir and _s_ir > 0:
-                            _risk_budget = max(total_equity, 0.0) * CONFIG.get("risk_pct_per_trade", 0.01)
-                            _raw_contracts = np.floor(_risk_budget / (_s_ir * inst_se.point_value))
-                            _cap = CONFIG.get("max_contracts_cap", 20)
-                            shares = max(0.0, min(_raw_contracts, _cap))
-                        else:
-                            shares = 0.0
-                    elif _s_sizing_method == "fixed_contracts":
-                        # Mirror of the long-side fixed_contracts branch: a fixed
-                        # contract count every trade, never equity-scaled.
-                        shares = float(CONFIG.get("fixed_contracts_per_trade", 1))
-                    else:
-                        alloc = min(total_equity * allocation_pct, _free)
-                        if alloc <= 0:
+                            return _s_ir * inst_se.point_value * n
+                        return (_inst.notional(inst_se, n, _s_entry_fill)
+                                * CONFIG.get("target_risk_per_trade", 0.02))
+                    if not check_portfolio_heat({**positions, **short_positions},
+                                                _fs_risk(shares), total_equity,
+                                                CONFIG.get("max_portfolio_heat", 1.0)):
+                        continue
+
+                    # Free-margin clamp. The old branch applied this up front via
+                    # `alloc = min(total_equity * allocation_pct, _free)`; the
+                    # sizing methods do not all target a notional, so it is a
+                    # clamp here instead. Without it an over-large size falls to
+                    # the affordability check below and the trade is SKIPPED
+                    # rather than reduced, which is a different outcome.
+                    if _s_per_contract_margin > 0:
+                        _s_max_by_margin = _free / _s_per_contract_margin
+                        if _s_max_by_margin <= 0:
                             continue
-                        # Size off margin capacity, not full notional (mirror of the long-side
-                        # fix): dividing the target dollar amount by point_value treats it as
-                        # unlevered notional, which for a leveraged futures contract eventually
-                        # floors to 0 contracts forever as price appreciates.
-                        _s_per_contract_margin = _inst.margin_required(inst_se, 1, ep)
-                        shares = _inst.round_units(inst_se, alloc / _s_per_contract_margin) if _s_per_contract_margin > 0 else 0.0
+                        shares = min(shares, _s_max_by_margin)
+                    shares = _inst.round_units(inst_se, shares)
                     if shares < 1:
                         continue
-                    # Portfolio-heat gate (#324 QA / issue #331). The equity short
-                    # branch below gained this in #312; the futures branch did not,
-                    # so a futures short was admitted regardless of book heat AND
-                    # registered no 'risk', contributing 0 to every later entry's
-                    # gate. Prefer the real per-contract risk (_s_ir is the stop
-                    # distance in points) over the target_risk_per_trade proxy the
-                    # equity path must use, since futures set their stop before sizing.
-                    _fs_stop_dist_pts = _s_ir if (_s_ir and _s_ir > 0) else None
-                    if _fs_stop_dist_pts is not None:
-                        _fs_new_risk = _fs_stop_dist_pts * inst_se.point_value * shares
-                    else:
-                        _fs_new_risk = (_inst.notional(inst_se, shares, _s_entry_fill)
-                                        * CONFIG.get("target_risk_per_trade", 0.02))
-                    _fs_max_heat = CONFIG.get("max_portfolio_heat", 1.0)
-                    if not check_portfolio_heat({**positions, **short_positions},
-                                                _fs_new_risk, total_equity, _fs_max_heat):
-                        continue
+                    # Registered for later entries' gates from the FINAL count
+                    # (#317), as the long path does.
                     _s_margin = _inst.margin_required(inst_se, shares, _s_entry_fill)
                     commission = _inst.commission(inst_se, shares)
                     if _s_margin + commission > cash - reserved_margin:
-                        continue
+                        # Shrink to the largest count whose margin + commission
+                        # fit -- the same step as the long's affordability
+                        # check -- rather than skip.
+                        # The clamp above sizes to free margin with no room for
+                        # commission, so once the non-fixed methods could reach
+                        # it every margin-bound short was dropped whenever
+                        # commission > 0 (vol_parity, $2.50/contract: LONG 1800,
+                        # SHORT none; adversarial QA round 3 on #392).
+                        _s_per = (_inst.margin_required(inst_se, 1, _s_entry_fill)
+                                  + _inst.commission(inst_se, 1))
+                        shares = (_inst.round_units(
+                            inst_se, (cash - reserved_margin) / _s_per)
+                            if _s_per > 0 else 0.0)
+                        _s_margin = _inst.margin_required(inst_se, shares, _s_entry_fill)
+                        commission = _inst.commission(inst_se, shares)
+                        # Float overshoot of floor(free/per): one fewer, as the
+                        # long does, rather than skip.
+                        if _s_margin + commission > cash - reserved_margin and shares >= 1:
+                            shares -= 1
+                            _s_margin = _inst.margin_required(inst_se, shares, _s_entry_fill)
+                            commission = _inst.commission(inst_se, shares)
+                        if shares < 1 or _s_margin + commission > cash - reserved_margin:
+                            continue
+                    _fs_new_risk = _fs_risk(shares)
                     reserved_margin += _s_margin
                     cash -= commission
                     short_positions[symbol] = {
@@ -1305,6 +1513,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         'trail_anchor': _s_trail_anchor,
                         'trail_armed': False, 'initial_risk': _s_ir, 'features': _s_features,
                         'risk': _fs_new_risk,  # registered for the portfolio-heat pot (#324 QA)
+                        'size_mult': _s_size_mult,
                     }
                 else:
                     # Equity cash_full short. Mirror the long entry's four cost
@@ -1317,29 +1526,79 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     # computed from it above; the slipped/impacted price is only
                     # the realized fill used for notional / P&L accounting.
                     _s_entry_fill = _inst.apply_slippage(inst_se, ep, "sell")
-                    # Buying power: cash net of collateral held by open shorts (#430).
-                    # Size so the collateral this short needs also fits in it.
+                    # Equity buying power is cash net of existing short collateral.
+                    # The configured method chooses units below; the final clamp
+                    # accounts for this entry's collateral and commission.
                     _s_bp = cash - reserved_short_collateral
-                    alloc = min(total_equity * allocation_pct,
-                                _s_bp / _short_margin_req if _short_margin_req > 0 else _s_bp)
-                    # Dust guard: float residue after the last admissible short must
-                    # not open a ~zero-size position.
-                    if alloc <= 1e-9 * max(total_equity, 1.0):
+                    if _s_bp <= 1e-9 * max(total_equity, 1.0):
                         continue
-                    shares = alloc / _s_entry_fill
-                    if _short_margin_req > 0:
-                        # Collateral and entry commission consume the same buying
-                        # power; reserving all cash and then charging commission
-                        # otherwise leaves a negative available balance.
-                        shares = min(shares, _s_bp / (
-                            _s_entry_fill * _short_margin_req + _inst.commission(inst_se, 1.0)))
 
-                    # Portfolio heat gate (mirror of the long path). Fall back to
-                    # target_risk_per_trade for the stop-distance proxy like the
-                    # long fixed-sizing path. NOTE: like the long side, this uses
-                    # the pre-ADV-cap `shares` — the pre-clamp over-statement is
-                    # tracked for both sites as issue #317.
-                    _s_stop_dist = CONFIG.get("target_risk_per_trade", 0.02)
+                    # #386: honour position_sizing_method here. This branch
+                    # hardcoded `alloc / fill` -- fixed-fractional -- so
+                    # `calculate_position_size` had exactly one production call
+                    # site (the long path) and the two knobs INVERTED by
+                    # direction:
+                    #
+                    #     long :  allocation_per_trade INERT, method LIVE
+                    #     short:  allocation_per_trade LIVE,  method INERT
+                    #
+                    # Measured at $100k / $100 / 5% stop, every non-default
+                    # method collapsed to 0.10 x 100,000 on the short leg:
+                    #
+                    #     method             long      short
+                    #     fixed             99.95     100.05   <- control, agrees
+                    #     fixed_contracts    3.00     100.05   <- 33x
+                    #     risk_pct_capped   20.00     100.05
+                    #     vol_parity       999.48     100.05
+                    #     risk_parity      399.80     100.05
+                    #
+                    # `fixed` matching to the tick (the 0.10 is slippage sign)
+                    # is what shows the harness is symmetric by direction and
+                    # only the non-default methods diverged.
+                    _s_sizing_kwargs = dict(_s_sizing_kwargs_base)
+                    shares = calculate_position_size(
+                        method=_s_eq_sizing_method,
+                        equity=total_equity,
+                        price=_s_entry_fill,
+                        # Signal bar, not the fill bar -- same look-ahead rule as
+                        # the long path (#324 review).
+                        symbol_data=df_se.loc[
+                            :(sig_date if pd.notna(sig_date) else date)],
+                        config=CONFIG,
+                        allocation_pct=allocation_pct,
+                        **_s_sizing_kwargs,
+                    )
+
+                    # size_mults, which this leg also dropped. It is a public
+                    # parameter of run_portfolio_simulation and the long path
+                    # honours it at three sites; the short path honoured it at
+                    # none, so a 0.5x band scaled one leg of a long/short book
+                    # and not the other. Nothing in-repo passes it, so no test
+                    # caught it -- latent through main.py, live for anything
+                    # sizing off an ML probability band. Fixed here rather than
+                    # warned about, since a banner keyed on size_mults would
+                    # have to fire on `fixed` sizing (the default).
+                    shares = shares * _s_size_mult
+
+                    # Unit-count methods answer in contracts/shares already, so
+                    # they skip the point_value conversion -- the same gate the
+                    # long path carries (#384). Equities have point_value 1.0 so
+                    # this is identity today; it is here so the branch stays
+                    # correct if a non-unit-value CASH_FULL instrument appears.
+                    if (_s_eq_sizing_method not in
+                            ("risk_pct_capped", "fixed_contracts")
+                            and inst_se.point_value != 1.0):
+                        shares = shares / inst_se.point_value
+
+                    # Portfolio heat gate (mirror of the long path), with the
+                    # long path's risk fraction (_s_heat_frac above), at the
+                    # long's position: BEFORE the cash clamp and ADV cap. It sat
+                    # after the cash clamp, so a method sizing past cash had its
+                    # long rejected on the unclamped count and its short admitted
+                    # on the clamped one (vol_parity: LONG None / SHORT 1000;
+                    # adversarial QA round 2 on #392). The pre-clamp
+                    # over-statement is tracked for both legs as #317.
+                    _s_stop_dist = _s_heat_frac
                     _s_new_risk = _inst.notional(inst_se, shares, _s_entry_fill) * _s_stop_dist
                     _s_max_heat = CONFIG.get("max_portfolio_heat", 1.0)
                     # Gate against BOTH open longs and open shorts, and register
@@ -1348,6 +1607,27 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     if not check_portfolio_heat({**positions, **short_positions},
                                                 _s_new_risk, total_equity, _s_max_heat):
                         continue
+
+                    # The cash clamp the hardcoded `min(..., cash)` used to
+                    # provide. Kept as a clamp rather than folded into the
+                    # allocation, because the sizing methods do not all target a
+                    # notional and several legitimately exceed cash before it.
+                    # Commission included, as the long path's affordability
+                    # step does (`cash / (price + commission_per_share)`), so
+                    # the two legs clamp to the same count when cash binds.
+                    # A positive requirement reserves a fraction of notional;
+                    # zero retains the legacy per-entry full-cash clamp.
+                    _s_budget_price = _s_entry_fill * (
+                        _short_margin_req if _short_margin_req > 0 else 1.0)
+                    _s_unit_budget = _s_budget_price + _inst.commission(inst_se, 1.0)
+                    if _s_unit_budget <= 0:
+                        continue
+                    shares = min(shares, _s_bp / _s_unit_budget)
+                    while shares * _s_budget_price + _inst.commission(inst_se, shares) > _s_bp:
+                        shares = float(np.nextafter(shares, 0.0))
+                    if shares <= 0:
+                        continue
+
 
                     # ADV liquidity cap (mirror of the long path).
                     _s_max_pct_adv = CONFIG.get('max_pct_adv') or 0
@@ -1391,6 +1671,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         'trail_armed': False, 'initial_risk': _s_ir, 'features': _s_features,
                         'entry_impact_bps': _s_entry_impact_bps,
                         'risk': _s_new_risk,  # registered for the portfolio-heat pot (#312 QA)
+                        'size_mult': _s_size_mult,
                     }
 
                 # --- ENTRY-BAR EVALUATION (opt-in, mirror of the long entry-bar check) ---
@@ -1454,12 +1735,17 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
 
             # Mirror the short-entry guard: never open a long while a short is
             # still open on the same symbol (issue #313). A signal of 1 does not
-            # cover a short (only <= -1 covers), so without this the long would
+            # cover a short (only a negative signal other than -2 does), so without this the long would
             # stack on top of the open short — a hedged double position the
             # strategy never intended. A flip is still expressible as a two-bar
             # sequence: -1 on one bar covers the short, then 1 on a later bar
-            # enters the long (same-bar stop/margin/PIT covers also free the
-            # symbol before this loop, so a 1 that bar can enter).
+            # enters the long. A stop or margin exit earlier in this bar also
+            # frees the symbol before this loop; whether a 1 on that bar can then
+            # enter is decided by entry_trigger (#401): under the default "edge"
+            # only a genuine transition into 1 does (e.g. -2 -> 1 after a short
+            # stop), so a hold-state series that still reads 1 does not re-buy
+            # the bar it was stopped out of. (A PIT cover cannot reach here: the
+            # membership / force-exit check just below refuses the entry.)
             if symbol in positions or symbol in short_positions: continue
             if _is_delisted(symbol, date):
                 continue
@@ -1550,27 +1836,47 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         _pv = stop_config.get("value")
                         if _pv is not None and _pv > 0 and raw_entry_price > 0:
                             sizing_kwargs["stop_distance_pct"] = float(_pv) / raw_entry_price
+                    elif stop_type == "signal_bar":
+                        # Also known before entry: the level is the signal bar's own
+                        # extreme, which is exactly what the stop path computes at
+                        # :1520 via signal_bar_stop_level(). Deriving it here rather
+                        # than falling through to the 3xATR proxy keeps sizing and
+                        # the stop on the SAME number -- the disagreement that put
+                        # 20% of the book at risk on the atr branch (#324).
+                        #
+                        # `bars_back` is honoured for the same reason: the stop path
+                        # walks back through _walk_back(), so sizing must walk the
+                        # same distance or it sizes against a bar the stop is not on.
+                        _sb_d = _walk_back(prev_trading_dates[symbol], signal_date,
+                                           stop_config.get("bars_back", 0))
+                        if pd.notna(_sb_d) and _sb_d in df.index and raw_entry_price > 0:
+                            _sb_row = df.loc[_sb_d]
+                            _sb_lvl = _inst.signal_bar_stop_level(
+                                _sb_row.get('High'), _sb_row.get('Low'),
+                                stop_config.get("buffer", 0.0), side="long")
+                            # Only when the level is actually protective. A next-open
+                            # that gaps through the signal-bar low leaves the level
+                            # ABOVE entry, the stop path declines to arm it, and a
+                            # negative distance here would size a nonsense position.
+                            if _sb_lvl is not None and _sb_lvl < raw_entry_price:
+                                sizing_kwargs["stop_distance_pct"] = (
+                                    (raw_entry_price - _sb_lvl) / raw_entry_price)
 
                 # For kelly: compute rolling stats from completed trades so sizing
                 # actually adapts to the strategy's live performance.
-                if sizing_method == "kelly" and len(trade_log) >= 10:
-                    _wins = [t for t in trade_log if t.get("is_win") == 1 and t.get("ProfitPct") is not None]
-                    _losses = [t for t in trade_log if t.get("is_win") == 0 and t.get("ProfitPct") is not None]
-                    if _wins and _losses:
-                        sizing_kwargs["win_rate"] = len(_wins) / len(trade_log)
-                        sizing_kwargs["avg_win"] = sum(t["ProfitPct"] for t in _wins) / len(_wins)
-                        sizing_kwargs["avg_loss"] = sum(abs(t["ProfitPct"]) for t in _losses) / len(_losses)
+                if sizing_method == "kelly":
+                    sizing_kwargs.update(_kelly_stats(trade_log))
 
                 # Slice to current date to prevent look-ahead bias: vol_parity and
                 # risk_parity use .iloc[-1] on the passed DataFrame, so passing the
                 # full history would use a future ATR value on early simulation dates.
                 inst = instruments[symbol]
                 if sizing_method == "risk_pct_capped":
-                    # Compounding risk-percent sizing: risk risk_pct_per_trade of
-                    # CURRENT (compounding) equity per trade, contracts = floor(
-                    # risk_budget / (stop_dist_pts * point_value)), hard-capped at
-                    # max_contracts_cap. This compounds with account growth --
-                    # unlike fixed_contracts, which never scales.
+                    # Resolve the stop distance IN POINTS and hand it to
+                    # position_sizing._risk_pct_capped, which owns the arithmetic
+                    # (#384). Only the resolution stays here: it reads the ATR at
+                    # the signal bar and the live stop_config, neither of which the
+                    # sizing module has.
                     _rp_stop_dist_pts = None
                     _stype_sz = stop_config.get("type", "none")
                     if _stype_sz == "trailing_atr":
@@ -1604,12 +1910,94 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                                 if _pc_sz is not None and _pc_sz > 0:
                                     _eff_sz = min(_eff_sz, _pc_sz)
                                 _rp_stop_dist_pts = _eff_sz
+                    elif _stype_sz == "points":
+                        # THE one stop type whose distance is natively expressed
+                        # in the unit this ladder asks for -- and the one it could
+                        # not get (#385; @shardul0701's "second ladder" on #388).
+                        #
+                        # The engine resolves the same physical quantity twice in
+                        # this entry block, ~90 lines apart, with different
+                        # coverage: the risk_parity FRACTION ladder above handles
+                        # five stop types, this POINTS ladder handled three. The
+                        # fraction ladder even reads stop_config["value"] and
+                        # DIVIDES it by raw_entry_price to manufacture a fraction
+                        # -- out of the number this branch needed verbatim.
+                        #
+                        # `points` + risk_pct_capped is the futures-native pairing
+                        # and long-only it took ZERO trades for a whole backtest,
+                        # silently. Matched pair differing only in side (MES,
+                        # points stop, price 1000): long None, short 20 contracts.
+                        # The short leg is right because it is handed the REALISED
+                        # initial risk instead of re-deriving a subset of it.
+                        _pv_sz = stop_config.get("value")
+                        if _pv_sz is not None and _pv_sz > 0:
+                            _rp_stop_dist_pts = float(_pv_sz)
+                    elif _stype_sz == "signal_bar":
+                        # Same gap, same fix. The level is the signal bar's own
+                        # extreme, known before entry -- signal_bar_stop_level is
+                        # what the stop path itself calls, so deriving it here
+                        # keeps sizing and the stop on the SAME number.
+                        #
+                        # `bars_back` MUST be walked, exactly as the fraction
+                        # ladder does ~100 lines up and as the stop path does at
+                        # :1732. The first version of this branch anchored to
+                        # `signal_date` directly and pinned the share count at
+                        # 100.00 regardless of bars_back -- insensitivity to the
+                        # parameter being the signature. The resulting error is
+                        # UNBOUNDED in the gap between the trigger low and the
+                        # walked-back low (2x at lead_low=80, 5x at 50) and it is
+                        # OVER-risk, which #384's cap never was. The heat gate
+                        # cannot catch it either: :1468 hands it
+                        # `_rp_stop_dist_pts / raw_entry_price`, so the sizer and
+                        # the guard that exists to check the sizer read the same
+                        # wrong number. Measured admitting a 5.005% position under
+                        # a 1.1% cap. (@shardul0701 on #390.)
+                        #
+                        # This is the SECOND parameter of the stop this ladder
+                        # omitted -- stop type first, anchor bar now, and `buffer`
+                        # survives only because it happened to be carried. The
+                        # root is that the long path sizes ~250 lines BEFORE it
+                        # sets the stop, so it has to predict it; the short leg
+                        # cannot have this class of bug because it is handed the
+                        # REALISED distance. Hoisting the stop resolution above
+                        # the sizing call deletes both ladders instead of
+                        # synchronising them -- tracked separately, not here.
+                        _sb_sz = _walk_back(prev_trading_dates[symbol],
+                                            signal_date,
+                                            stop_config.get("bars_back", 0))
+                        if pd.notna(_sb_sz) and _sb_sz in df.index:
+                            _sb_bar = df.loc[_sb_sz]
+                            _sb_lvl = _inst.signal_bar_stop_level(
+                                _sb_bar.get('High'), _sb_bar.get('Low'),
+                                stop_config.get("buffer", 0.0), "long")
+                            if _sb_lvl is not None and _sb_lvl < raw_entry_price:
+                                # Protective side only: a next-open that gaps
+                                # through the extreme leaves the level ABOVE the
+                                # fill, so raw - lvl is negative.
+                                #
+                                # REDUNDANT for the share count and kept anyway.
+                                # `_risk_pct_capped` rejects `<= 0` itself, so
+                                # both paths reach zero units -- removing this
+                                # guard passes every test, which is how I found
+                                # out rather than by reasoning. What it does
+                                # change is what leaves this block: without it a
+                                # NEGATIVE distance is written into
+                                # sizing_kwargs, where the next reader of that
+                                # key has no way to tell it from a real one. The
+                                # stop path guards the same way at :1520; the two
+                                # sites agreeing is worth more than the line.
+                                _rp_stop_dist_pts = float(raw_entry_price - _sb_lvl)
 
+                    sizing_kwargs["stop_distance_points"] = _rp_stop_dist_pts
+                    sizing_kwargs["point_value"] = inst.point_value
+                    # #385: the integer floor and max_contracts_cap are contract-
+                    # shaped and apply to margined instruments only; the
+                    # unmargined path gets a notional ceiling instead. Resolved
+                    # here because position_sizing.py must not import the
+                    # instruments enum.
+                    sizing_kwargs["margined"] = (
+                        inst.margin_mode == _inst.INITIAL_MARGIN)
                     if _rp_stop_dist_pts and _rp_stop_dist_pts > 0:
-                        _risk_budget = max(total_equity, 0.0) * CONFIG.get("risk_pct_per_trade", 0.01)
-                        _raw_contracts = np.floor(_risk_budget / (_rp_stop_dist_pts * inst.point_value))
-                        _cap = CONFIG.get("max_contracts_cap", 20)
-                        shares = max(0.0, min(_raw_contracts, _cap)) * _size_mult
                         # The portfolio heat check below falls back to the flat
                         # target_risk_per_trade (2%) proxy when stop_distance_pct is
                         # absent from sizing_kwargs. For risk_pct_capped the position
@@ -1626,58 +2014,60 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         # raw_entry_price (not the slipped entry_price) to match the
                         # anchor _rp_stop_dist_pts was computed against above.
                         sizing_kwargs["stop_distance_pct"] = _rp_stop_dist_pts / raw_entry_price
-                    else:
-                        shares = 0.0
-                elif sizing_method == "fixed_contracts":
-                    # Fixed contract-count sizing: EXACTLY N contracts every
-                    # trade, forever -- never scaled to equity. This is already
-                    # a contract count, not a dollar-notional target, so it
-                    # bypasses calculate_position_size and the point_value/
-                    # margin conversion below entirely.
-                    shares = float(CONFIG.get("fixed_contracts_per_trade", 1)) * _size_mult
-                else:
-                    shares = calculate_position_size(
-                        method=sizing_method,
-                        equity=total_equity,
-                        price=entry_price,
-                        # Slice to the SIGNAL bar, not the fill bar (#324 review).
-                        # Both consumers take .iloc[-1] of this frame:
-                        # _volatility_parity (position_sizing.py:173) and the
-                        # risk_parity ATR fallback (:205). Sliced to `date` that
-                        # last row is the FILL bar, so under execution_time="open"
-                        # sizing reads a bar the signal never saw -- same-bar
-                        # look-ahead -- and the modes diverge 5x on shares. A
-                        # sizing decision may only use information available at
-                        # the signal.
-                        symbol_data=df.loc[:(signal_date if pd.notna(signal_date) else date)],
-                        config=CONFIG,
-                        allocation_pct=allocation_pct,  # honour the caller's allocation, not CONFIG only
-                        **sizing_kwargs
-                    )
 
-                    # Apply the per-signal size multiplier (entry-queue / ML band)
-                    # to the sized position before the heat check.
-                    shares = shares * _size_mult
+                shares = calculate_position_size(
+                    method=sizing_method,
+                    equity=total_equity,
+                    price=entry_price,
+                    # Slice to the SIGNAL bar, not the fill bar (#324 review).
+                    # Both consumers take .iloc[-1] of this frame:
+                    # _volatility_parity (position_sizing.py) and the
+                    # risk_parity ATR fallback. Sliced to `date` that
+                    # last row is the FILL bar, so under execution_time="open"
+                    # sizing reads a bar the signal never saw -- same-bar
+                    # look-ahead -- and the modes diverge 5x on shares. A
+                    # sizing decision may only use information available at
+                    # the signal.
+                    symbol_data=df.loc[:(signal_date if pd.notna(signal_date) else date)],
+                    config=CONFIG,
+                    allocation_pct=allocation_pct,  # honour the caller's allocation, not CONFIG only
+                    **sizing_kwargs
+                )
 
-                    # Futures size in contracts: the sizing methods return a dollar-notional
-                    # based size; dividing out $/point converts it to contracts (pv=1 for equities).
-                    if inst.margin_mode == _inst.INITIAL_MARGIN:
-                        # Margined (leveraged) futures: the sizing target is a dollar
-                        # amount of equity to commit. Converting it via point_value
-                        # treats that dollar amount as full unlevered notional, so as
-                        # price appreciates the position size keeps shrinking below 1
-                        # contract and, once it floors to 0, equity never moves again
-                        # and it never recovers. Size off margin_required() instead,
-                        # which is what the account actually posts to hold the contract.
-                        # Checked BEFORE point_value (rather than nested inside a
-                        # `point_value != 1.0` gate) so a margined instrument whose
-                        # point_value happens to be 1.0 still gets margin-based sizing
-                        # instead of silently falling through as if it were unlevered.
-                        _target_dollars = shares * entry_price
-                        _per_contract_margin = _inst.margin_required(inst, 1, entry_price)
-                        shares = _target_dollars / _per_contract_margin if _per_contract_margin > 0 else 0.0
-                    elif inst.point_value != 1.0:
-                        shares = shares / inst.point_value
+                # Apply the per-signal size multiplier (entry-queue / ML band)
+                # to the sized position before the heat check.
+                shares = shares * _size_mult
+
+                # risk_pct_capped and fixed_contracts already answer in UNITS
+                # (contracts/shares); the other four return equity-equivalent
+                # share counts at entry_price. Only those counts get converted
+                # below -- putting an instrument-unit count through margin or
+                # point_value conversion re-scales a
+                # number that is already in the right units. This method check is
+                # the one piece of the old three-way dispatch that is load-bearing
+                # rather than duplication, so it survives #384 as an explicit gate.
+                if sizing_method in ("risk_pct_capped", "fixed_contracts"):
+                    pass
+                # Convert equity-equivalent shares to futures contracts: use
+                # their dollar target for margined instruments, otherwise
+                # normalize by point_value (pv=1 for ordinary equities).
+                elif inst.margin_mode == _inst.INITIAL_MARGIN:
+                    # Margined (leveraged) futures: the sizing target is a dollar
+                    # amount of equity to commit. Converting it via point_value
+                    # treats that dollar amount as full unlevered notional, so as
+                    # price appreciates the position size keeps shrinking below 1
+                    # contract and, once it floors to 0, equity never moves again
+                    # and it never recovers. Size off margin_required() instead,
+                    # which is what the account actually posts to hold the contract.
+                    # Checked BEFORE point_value (rather than nested inside a
+                    # `point_value != 1.0` gate) so a margined instrument whose
+                    # point_value happens to be 1.0 still gets margin-based sizing
+                    # instead of silently falling through as if it were unlevered.
+                    _target_dollars = shares * entry_price
+                    _per_contract_margin = _inst.margin_required(inst, 1, entry_price)
+                    shares = _target_dollars / _per_contract_margin if _per_contract_margin > 0 else 0.0
+                elif inst.point_value != 1.0:
+                    shares = shares / inst.point_value
 
                 # --- PORTFOLIO HEAT CHECK ---
                 # Compute the dollar risk this position adds. For methods with a
@@ -1737,10 +2127,25 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     _margin = _inst.margin_required(inst, shares, entry_price)
                     _free = cash - reserved_margin
                     if _margin + commission_cost > _free:
-                        _per = _inst.margin_required(inst, 1, entry_price)
-                        shares = _inst.round_units(inst, (_free - commission_cost) / _per) if _per > 0 else 0.0
+                        # Largest count whose margin AND commission fit:
+                        # floor(free / (margin_per + commission_per)). This
+                        # subtracted the commission of the OVERSIZED count
+                        # before dividing, so a size far past free margin was
+                        # cut further than it needed to be (MES vol_parity,
+                        # $2.50/contract: 1800 where 1904 fit). Fixed with the
+                        # short leg's identical step (#386, QA round 3).
+                        _per = (_inst.margin_required(inst, 1, entry_price)
+                                + _inst.commission(inst, 1))
+                        shares = _inst.round_units(inst, _free / _per) if _per > 0 else 0.0
                         commission_cost = _inst.commission(inst, shares)
                         _margin = _inst.margin_required(inst, shares, entry_price)
+                        # floor(free/per) can land one unit over by float error
+                        # (~1e-9) when free is an exact multiple of per; take
+                        # one fewer rather than skip (QA round 4 on #392).
+                        if _margin + commission_cost > _free and shares >= 1:
+                            shares -= 1
+                            commission_cost = _inst.commission(inst, shares)
+                            _margin = _inst.margin_required(inst, shares, entry_price)
                     can_afford = shares >= 1 and (_margin + commission_cost) <= (cash - reserved_margin)
                 else:
                     # Equity cash_full: full notional + commission debited from cash.
@@ -1751,6 +2156,13 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         if shares <= 0: continue  # Cannot afford even a fraction of a share
                         # Recalculate final total cost with the affordable share size
                         total_cost = (shares * entry_price) + (shares * CONFIG['commission_per_share'])
+                        # Division followed by separate notional/fee products can
+                        # round a fully affordable trade a few ULPs above cash.
+                        # Step down to a representable size that really fits,
+                        # rather than rejecting the entire entry or overdrawing.
+                        while total_cost > _bp:
+                            shares = float(np.nextafter(shares, 0.0))
+                            total_cost = (shares * entry_price) + (shares * CONFIG['commission_per_share'])
                     can_afford = _bp >= total_cost and shares > 0.001
 
                 # Final check: Ensure we can afford the trade and it's a meaningful size
@@ -2141,7 +2553,8 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                 'EntryDate': spos['entry_date'].isoformat(), 'EntryPrice': spos['entry_price'],
                 'ExitDate': last_date.isoformat(), 'ExitPrice': cover_slip,
                 'Profit': net_pnl, 'ProfitPct': net_pnl / spos['notional'] if spos['notional'] > 0 else 0,
-                'Shares': spos['shares'], 'is_win': 1 if net_pnl > 0 else 0,
+                'Shares': spos['shares'], 'PosSizeMult': spos.get('size_mult', 1.0),
+                'is_win': 1 if net_pnl > 0 else 0,
                 'HoldDuration': _hold_duration_days(spos['entry_date'], last_date),
                 'MAE_pct': _s_mae, 'MFE_pct': _s_mfe, 'ExitReason': "End of Backtest",
                 'InitialRisk': _s_ir if (_s_ir and _s_ir > 0) else 0.0, 'RMultiple': _s_rm,

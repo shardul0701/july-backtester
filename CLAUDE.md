@@ -136,6 +136,7 @@ Both failures are **silent**: `gh` exits 0 and prints a URL. Nothing tells you t
 "sensitivity_sweep_steps": 2     # 2 steps each side → 5 values per param
 "sensitivity_sweep_min_val": 2   # floor for generated values (prevents SMA period = 0)
 "rolling_sharpe_window": 126     # rolling Sharpe window in trading days; 0 or None = disable
+"entry_trigger": "edge"          # "edge" (default, #401) = enter only on the transition INTO the entry value; "level" = any bar reading it
 "htb_rate_annual": 0.02          # annual hard-to-borrow rate debited daily on short positions
 "short_margin_requirement": 0.5  # equity short collateral as fraction of notional, reserved from buying power (#430); 0.0 = legacy unbounded shorts
 "mc_sampling": "iid"             # "iid" = independent; "block" = block-bootstrap; "auto" = block for concentrated_futures profile else iid
@@ -350,6 +351,7 @@ output/
 The engine is instrument-aware: **`helpers/instruments.py`** resolves a per-symbol `Instrument` (`resolve_instrument(symbol, config)`) carrying `point_value` ($/point), `tick_size`, `margin_mode`, `commission_model`/value, `slippage_model`/value, `integer_units`, `borrow_applies`, `calendar`. **Equities are the default and reproduce the pre-#229 arithmetic byte-for-byte** (point_value=1, `cash_full` margin, per-share commission, %-slippage). Futures opt in via a contract-month ticker (e.g. `ESM6`) or `config["instruments"]["overrides"]`.
 
 - **Cost/accounting helpers** in `instruments.py` (`commission`, `apply_slippage`, `round_units`, `market_value`, `margin_required`, `unrealized_pnl`, `borrow_cost_per_bar`, `stop_level`, `atr_stop_level`, `atr_stop_distance_pct`) replace the formerly hard-coded sites in `portfolio_simulations.py`.
+- **Cash-bound equity entries:** after the commission-inclusive cash clamp, fractional long shares are rounded down by representable steps if floating-point recomputation puts cost above cash. A fully affordable entry is retained without overdrawing the account.
 - **Futures execution:** margin accounting (entry reserves initial margin, not full notional; equity = cash + unrealized P&L; `reserved_margin` tracks buying power), integer contracts, `$/point` P&L, point-capped stop `{"type":"points","value":N}`, no borrow on futures shorts.
 - **Margin-based futures sizing (#238):** for margined instruments (`margin_mode == INITIAL_MARGIN`) contract count derives from `margin_required()`, not target-notional / `point_value` (which increasingly floored to 0 contracts as price appreciated, silently under-sizing/skipping late trades). The gate is `margin_mode`-first (checked before `point_value != 1.0`), so a futures instrument with `point_value == 1.0` still sizes on margin. Equity sizing (`CASH_FULL`) is unchanged. Applies to both long and short entry paths.
 - **Stop anchoring (#238):** `percentage`/`points` stop levels anchor to the **raw pre-slippage entry price for margined futures only** — `_stop_anchor = raw_entry_price if inst.margin_mode == INITIAL_MARGIN else entry_price`. Equities (`CASH_FULL`) keep the pre-PR slipped-fill anchor **byte-for-byte** (golden master unchanged). *Caveat:* the `trailing_atr` stop path anchors its initial stop/target/breakeven-floor to `raw_entry_price` **unconditionally** (not yet `margin_mode`-gated) — harmless today (trailing_atr is a futures-only mechanic with no equity consumer and no golden-master coverage), tracked as a follow-up. So "equities restore pre-PR behavior" holds for `percentage`/`points` stops, not `trailing_atr`.
@@ -497,7 +499,7 @@ A separate integrity guard *does* invalidate: a cache file whose index is not a 
 - **`helpers/correlation.py`** — pure, stateless module. Public entry point: `run_correlation_analysis(strategy_results, output_path, threshold=0.85)`.
 - **Pipeline placement**: called in `main.py` inside the per-portfolio reporting loop, immediately after `generate_per_portfolio_summary`. Runs once per portfolio.
 - **Input**: list of simulation result dicts (each with `"Strategy"` and `"trade_log"` keys). Trades are grouped by `ExitDate` and profits summed to build a daily P&L series per strategy.
-- **Output CSV path**: `output/runs/<run_id>/<Portfolio_safe_name>_strategy_correlation.csv` — next to `overall_portfolio_summary.csv`, one file per portfolio.
+- **Output CSV path**: `output/runs/<run_id>/<Portfolio_safe_name>_strategy_correlation.csv` (`<Portfolio_safe_name>` = `helpers.summary.safe_path_component(portfolio)`, the same sanitizer the summary CSV paths use, #403) — next to `overall_portfolio_summary.csv`, one file per portfolio.
 - **Threshold**: default `0.85` (absolute Pearson). Pairs with `|r| > 0.85` are logged as `[WARNING]` lines via `logger.warning`.
 - **Skipped silently** when fewer than 2 strategies have non-empty trade logs (returns empty DataFrame + empty list, no CSV written).
 - **Tests**: `tests/test_correlation.py` — covers `_build_daily_pnl_series`, `build_daily_pnl_matrix`, `compute_correlation_matrix`, `find_high_correlation_pairs`, and `run_correlation_analysis` (with `tmp_path` file I/O). No network, no randomness.
@@ -654,15 +656,15 @@ A short, wide banner figure (`figsize=(10, 3), dpi=150`) that shows the full dra
 | `1` | Enter long |
 | `0` | No change |
 | `-1` | Exit long **or** cover short |
-| `-2` | Enter short |
+| `-2` | Enter short (on a bar already short: hold — `-2` never covers). Also exits a long. `1` does NOT cover a short, so a short→long flip needs a `-1` bar first |
 
 - **Borrow cost**: `htb_rate_annual` (config, default `0.02`) converted to a daily compound rate `(1 + annual)^(1/252) - 1` and debited from cash each day a short is held. Set to `0.0` to disable.
 - **Short collateral / buying power (#430)**: each open equity short reserves `notional * short_margin_requirement` (default `0.5`) in `reserved_short_collateral`, stored as `spos['collateral']` and released on every cover path (strategy/stop/PIT cover loop and `_close_short_now`, which covers the intrabar-trailing and fill-bar stop paths). Any new equity entry, long or short, sees only `cash - reserved_short_collateral`; short size is `min(equity * allocation, buying_power / requirement)`, so 0.5 at allocation 0.10 caps the short book near 2x gross. It is a constraint, not a cash debit: `total_equity` stays `cash + MTM`. Futures shorts keep using `reserved_margin`. `0.0` restores the legacy unbounded behaviour. Tests: `tests/test_short_collateral.py`.
-- **Three new blocks in the daily loop** (all additive — no long-path code changed):
+- **Short handling in the daily loop:**
   1. **Borrow cost debit**: iterates `short_positions`, subtracts `notional × htb_rate_daily` from cash and accumulates `spos['total_borrow_cost']`.
-  2. **Short cover**: on signal `< 0` for a held short, fills at Open/Close + slippage, deducts commission both sides, nets `total_borrow_cost` out of profit, logs to `trade_log`.
-  3. **Short entry**: on signal `== -2`, skips if `symbol in positions or symbol in short_positions`, allocates `min(total_equity × allocation_pct, cash)`, receives proceeds into cash.
-- **Short trades in `trade_log`**: `Trade: "Short N"`, `ExitReason: "Short Cover"`. `RMultiple` is `None` for shorts (initial risk undefined without a stop).
+  2. **Short cover**: on a negative signal other than `-2` for a held short, fills at Open/Close + slippage, deducts commission both sides, nets `total_borrow_cost` out of profit, logs to `trade_log`.
+  3. **Short entry**: on signal `== -2`, skips if `symbol in positions or symbol in short_positions`, sizes via `calculate_position_size` with the configured `position_sizing_method` and `size_mults` exactly as the long leg does (#386; subject to cash or margin limits), charges entry commission; short proceeds and the liability offset each other in cash accounting.
+- **Short trades in `trade_log`**: `Trade: "Short N"`, `ExitReason: "Short Cover"`. `RMultiple` uses the initial stop risk when available and is `None` otherwise.
 - **Equity MTM for shorts**: `current_market_value += (shares × entry_price) − (shares × current_close)` — profit when price falls.
 - **Backward compatibility**: all existing 1/0/−1 strategies skip all three new blocks entirely (`short_positions` is always empty for them).
 - **Tests**: `tests/test_short_selling.py` — 7 tests covering config defaults, daily-rate arithmetic, 30-day cost estimate, and no-regression empty-shorts loop.

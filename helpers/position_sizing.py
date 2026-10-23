@@ -2,11 +2,27 @@
 
 Position sizing algorithms for portfolio risk management.
 
-Supports 4 methods:
+Supports 6 methods:
 1. Fixed % allocation (current default)
 2. Kelly Criterion (optimal growth)
 3. Volatility parity (inverse ATR)
 4. Risk parity (equal $ risk per position)
+5. Risk-percent capped (risk a % of CURRENT equity, hard-capped contract count)
+6. Fixed contracts (a constant count, never equity-scaled)
+
+Methods 5 and 6 were implemented inline in ``portfolio_simulations.py`` --
+twice each, on the long path and again on the futures-short path -- and never
+reached this module at all, so ``calculate_position_size`` answered both with
+the "Unknown position sizing method" warning despite both being documented,
+validated ``KNOWN_KEYS`` values (#384, part of #381).
+
+Stop distance is passed in POINTS (``stop_distance_points``), not as a fraction
+of price. A fraction carries an implicit anchor and the engine builds it with a
+different denominator per stop type, so the fraction is only half a computation
+finished at the call site; points are self-sufficient once paired with
+``point_value``. ``_risk_parity`` still accepts the legacy
+``stop_distance_pct`` -- see its docstring for why the engine has not been
+switched over to points for that method yet.
 """
 
 from __future__ import annotations
@@ -14,6 +30,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+import numpy as np
 import pandas as pd
 
 if TYPE_CHECKING:
@@ -37,7 +54,8 @@ def calculate_position_size(
     Parameters
     ----------
     method : str
-        Position sizing method: "fixed", "kelly", "vol_parity", "risk_parity"
+        Position sizing method: "fixed", "kelly", "vol_parity", "risk_parity",
+        "risk_pct_capped", "fixed_contracts"
     equity : float
         Current total portfolio equity
     price : float
@@ -50,6 +68,7 @@ def calculate_position_size(
         Method-specific parameters:
         - Kelly: win_rate, avg_win, avg_loss
         - Risk parity: stop_distance_pct
+        - Risk-pct capped: stop_distance_points, point_value
 
     Returns
     -------
@@ -78,6 +97,13 @@ def calculate_position_size(
 
     elif method == "risk_parity":
         return _risk_parity(equity, price, symbol_data, config, **kwargs)
+
+    elif method == "risk_pct_capped":
+        return _risk_pct_capped(equity, config, price=price,
+                                allocation_pct=allocation_pct, **kwargs)
+
+    elif method == "fixed_contracts":
+        return _fixed_contracts(config)
 
     else:
         logger.warning(
@@ -197,8 +223,29 @@ def _risk_parity(equity: float, price: float, symbol_data: pd.DataFrame, config:
     hitting the stop would lose `target_risk_per_trade` of equity.
 
     shares = (equity * target_risk) / (price * stop_distance_pct)
+
+    Accepts either ``stop_distance_points`` (the module's primitive) or the
+    legacy ``stop_distance_pct``; points win when both are given and are
+    converted here against ``price``.
+
+    The engine's LONG path still feeds this method ``stop_distance_pct``, NOT
+    points, and #384 deliberately did not switch it; both SHORT legs feed it
+    ``stop_distance_points`` (the realised stop, since shorts resolve their
+    stop before sizing -- #386). On the long path ``portfolio_simulations.py`` builds
+    that fraction with a different denominator per stop type -- native for
+    ``percentage``, ``Close`` at the signal bar for the ATR family,
+    ``raw_entry_price`` for ``points`` -- while this function then multiplies
+    back by ``price``, the slipped fill. Converting points against ``price``
+    here therefore agrees with none of those three, so routing risk_parity
+    through points changes share counts on live configurations. That
+    unification is a behaviour change and belongs to #381-D; #384 is a no-op
+    refactor and may not make it.
     """
-    stop_distance_pct = kwargs.get("stop_distance_pct")
+    stop_distance_points = kwargs.get("stop_distance_points")
+    if stop_distance_points and stop_distance_points > 0 and price > 0:
+        stop_distance_pct = stop_distance_points / price
+    else:
+        stop_distance_pct = kwargs.get("stop_distance_pct")
 
     if stop_distance_pct is None or stop_distance_pct <= 0:
         # Fallback: use ATR-based stop if available
@@ -218,6 +265,149 @@ def _risk_parity(equity: float, price: float, symbol_data: pd.DataFrame, config:
     shares = (equity * target_risk) / (price * stop_distance_pct) if stop_distance_pct > 0 else 0.0
 
     return shares
+
+
+def _risk_pct_capped(equity: float, config: dict, price: float | None = None,
+                     allocation_pct: float | None = None, **kwargs) -> float:
+    """
+    Risk-percent sizing off CURRENT equity: risk ``risk_pct_per_trade`` of the
+    account on each trade, measured through the real stop distance.
+
+        units = risk_pct_per_trade * equity
+                / (stop_distance_points * point_value)
+
+    Two clamps then apply, and **which of them applies depends on the
+    instrument** (#385):
+
+    ``margined`` (futures, ``margin_mode == INITIAL_MARGIN``)
+        ``floor()`` to a whole contract, then ``min(units, max_contracts_cap)``.
+        Both are contract-shaped concepts and both stay.
+
+    unmargined (equities, ``margin_mode == CASH_FULL``)
+        Neither. A share count is not integral and ``max_contracts_cap`` is
+        documented as a **contract** count, so applying either to equities was
+        a unit error, not a risk control:
+
+            price  stop            shares     $ risk   % equity
+               20  percentage 5%    20.00      20.01     0.020%
+              100  percentage 5%    20.00     100.05     0.100%
+             1000  percentage 5%    20.00    1000.50     1.001%
+
+        A fixed 20 shares at any price, against a configured 1% — **10x
+        under-risked at $100, 50x at $20**. ``floor()`` travelled with it: a
+        $7,000 name wanting 2.86 shares got 2, a further 30% short.
+
+    A **notional ceiling** replaces the cap on the unmargined path, because the
+    cap was the only thing bounding position size there. ``risk_pct_capped``
+    bypasses the dollar-notional target the other methods size against, so
+    ``allocation_per_trade`` did not restrain it at all:
+
+        allocation_per_trade=1.0   shares=1998.92  notional=99,946
+        allocation_per_trade=0.1   shares=1998.92  notional=99,946
+
+    Identical. Lifting the cap without a ceiling therefore converts a *sizing*
+    bug into a *participation* bug — one name absorbs the book and later
+    signals are dropped for want of cash, which reads as a concentration
+    strategy in a backtest rather than as a bug.
+
+    **The ceiling is NOT ``allocation_per_trade``, and that is a reversal of
+    what #381-B proposed.** Measured, it makes the risk target unreachable in
+    the ordinary case rather than the exceptional one. Required notional is
+    ``risk_pct / stop_frac`` of equity, so an ``allocation_pct`` ceiling binds
+    whenever ``stop_frac < risk_pct / allocation_pct`` — at the defaults, any
+    stop tighter than **10%**, which is very nearly all of them:
+
+        stop            shares      $ risk   % equity   (ceiling = alloc 0.10)
+        atr  (4.0%)      99.55      403.20     0.403%
+        pct5 (5.0%)      99.55      500.00     0.500%
+        trailing (2.0%)  99.55      199.10     0.199%
+
+    Price-invariant, which is the headline defect fixed — but delivering 0.2%
+    against a configured 1%. That is the same defect in a new costume: a
+    10%-notional cap in place of a 20-share cap, still binding before the
+    sizer's own target is met, still silent about it.
+
+    The ceiling is instead ``risk_pct_capped_max_notional_pct`` (default
+    ``1.0`` — no leverage), which is exactly the threshold in the ticket's
+    acceptance clause. ``stop_frac >= risk_pct_per_trade`` is precisely the
+    condition under which the required notional is ``<= equity``, so a ceiling
+    at 1.0 engages *if and only if* the budget was unreachable without leverage
+    — and never on a trade whose target it could have delivered.
+
+    **At the 1.0 default it rarely changes the size actually held, and that is
+    not what it is for.** On a long-only book ``cash <= equity``, so the
+    pre-existing cash clamp (``capital_needed > cash`` →
+    ``shares = cash / entry_price``) is at least as tight and lands on very
+    nearly the same number. What the ceiling changes is *when*: it clamps
+    BEFORE the portfolio heat check, so heat evaluates the position that will
+    actually be held rather than an unclamped one the cash clamp would shrink
+    afterwards. It can change the held size when unrealized short losses leave
+    cash above equity, and below 1.0 it binds directly. (@shardul0701 on #390 — two
+    comments claimed it bound on size at the default and were wrong.)
+
+    ``None`` disables it. ``0.0`` does NOT — it is a ceiling of zero and takes
+    no position, because a bare truthiness guard used to make it silently mean
+    "off" while reading like "zero size".
+
+    ``0.0`` **warns; it does not abort.** ``validate_config`` returns warnings
+    that ``main.py`` logs, and only the separate ``errors`` list exits — so a
+    config with ``0.0`` runs, logs one line, and takes no positions. Said
+    precisely because this is the line a reader would use to decide whether
+    leaving ``0.0`` in a config is safe. (@shardul0701 on #390.)
+
+    The ceiling is NOT applied on the margined path: a futures position posts
+    margin rather than notional, the engine already clamps it on
+    ``margin_required`` downstream, and the cap still bounds it here. Keeping
+    futures byte-identical is what lets the equivalence matrix isolate the
+    equity change.
+
+    Returns 0.0 when no stop distance was supplied — pre-existing behaviour;
+    whether "declined to size" should be distinguishable from "sized to zero"
+    is #381-D.
+    """
+    stop_distance_points = kwargs.get("stop_distance_points")
+    point_value = kwargs.get("point_value", 1.0)
+    margined = bool(kwargs.get("margined", False))
+
+    if not stop_distance_points or stop_distance_points <= 0:
+        return 0.0
+
+    risk_budget = max(equity, 0.0) * config.get("risk_pct_per_trade", 0.01)
+    units = risk_budget / (stop_distance_points * point_value)
+
+    if margined:
+        units = np.floor(units)
+        cap = config.get("max_contracts_cap", 20)
+        return max(0.0, min(units, cap))
+
+    # Unmargined: no integer floor, no contract cap, but a notional ceiling.
+    #
+    # `is not None`, NOT a bare truthiness test. `0.0` is falsy, so the original
+    # guard made it silently mean "no ceiling" -- the opposite of what the
+    # number reads as, and the opposite of what the validator warned it did.
+    #
+    # There were two coherent ways to resolve that and only one that makes the
+    # value mean what it says: `None` is the off switch, and `0.0` is a ceiling
+    # of zero, which yields a zero position. The alternative -- keeping 0.0 as
+    # "off" with an accurate message -- leaves 0.0 and 0.0001 as adjacent values
+    # at opposite extremes of the same control. (@shardul0701 on #390.)
+    ceiling_pct = config.get("risk_pct_capped_max_notional_pct", 1.0)
+    if (price is not None and price > 0 and point_value > 0
+            and ceiling_pct is not None):
+        ceiling = (max(equity, 0.0) * ceiling_pct) / (price * point_value)
+        units = min(units, ceiling)
+    return max(0.0, units)
+
+
+def _fixed_contracts(config: dict) -> float:
+    """
+    A constant contract count on every trade, forever -- never equity-scaled.
+
+    Already an instrument-unit count, so callers must NOT apply the notional /
+    margin conversion used for the equity-equivalent share counts returned by
+    the other methods.
+    """
+    return float(config.get("fixed_contracts_per_trade", 1))
 
 
 def check_portfolio_heat(positions: dict, new_position_risk: float, equity: float, max_heat: float) -> bool:

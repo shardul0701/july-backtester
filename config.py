@@ -231,12 +231,21 @@ CONFIG = {
     "entry_random_seed": 42,
 
     # Whether a bar qualifies as an ENTRY at all.
-    # "level" (default) — enter on any bar whose signal reads the entry value.
+    # "edge" (default)  — enter only on the transition INTO the entry state,
+    #                     matching how the live scanner triggers
+    #                     (`last == 1 and prev != 1`).
+    # "level"           — enter on any bar whose signal reads the entry value.
     #                     Strategies emitting a forward-filled state series make
     #                     every hold bar entry-eligible under this mode.
-    # "edge"            — enter only on the transition INTO the entry state,
-    #                     matching how the live scanner triggers. Opt-in: the
-    #                     default is unchanged so existing results are stable.
+    #
+    # DEFAULT FLIPPED TO "edge" (#401). Under "level" a forward-filled state
+    # series re-enters on the SAME BAR a stop closed the position — measured
+    # 2 trades where the strategy emitted one decision — and WHICH bar gets
+    # taken becomes a function of book size. 29 of 50 functions in
+    # helpers/indicators.py forward-fill, so the default library is hold-state
+    # and was exposed by default. This key is read ONCE PER RUN, so opting
+    # individual strategies in was never expressible; the only two options were
+    # "everyone" or "nobody", and "nobody" meant stable-but-wrong numbers.
     #
     # TWO CONSEQUENCES OF "edge" BEYOND THE LATE-ENTRY FIX, both intended:
     #   * A STOPPED-OUT POSITION DOES NOT RE-ENTER while the state signal is
@@ -250,11 +259,17 @@ CONFIG = {
     #     a late entry frees the capital that entry would have consumed, and
     #     that capital goes to whatever else is competing on the bar — so a
     #     surviving trade can change SIZE, and a symbol can end up with MORE
-    #     trades than level mode gave it. Measured over 80 randomised contested
-    #     books (5 symbols x 120 bars): 20 of the 80 had at least one symbol
-    #     trading more often under edge (25 of 400 book-symbol cells), while
-    #     book totals fell 1564 -> 1434. Net subtraction, but not a filter.
-    "entry_trigger": "level",
+    #     trades than level mode gave it. On the docs/ENTRY_TRIGGER_DELTA.md
+    #     book (30 large caps, 2018-2026) that happened for 1 strategy of 130
+    #     (+1.7%); totals fell 21%. Net subtraction, but not strictly a filter.
+    #
+    # ONLY an exact "level" selects level (case/whitespace ignored); any other
+    # value runs as "edge" -- None silently (it means unset), a typo with a
+    # config_validator warning.
+    # A held -2 (hold-state SHORT) holds the short: -2 is not a cover signal.
+    # Asymmetry to know: -2 exits a long, but 1 does not cover a short, so a
+    # direct -2 -> 1 stays short; a flip needs a -1 bar in between.
+    "entry_trigger": "edge",
 
     # ============================================================
     # SECTION 21: VERBOSE SUMMARY TABLE
@@ -327,6 +342,51 @@ CONFIG = {
     # 0.10 = 10% of equity can be at risk simultaneously
     # 1.0 = no limit (allow full portfolio risk)
     "max_portfolio_heat": 0.10,
+
+    # --- "risk_pct_capped" method (issue #385) ---------------------------
+    # These three existed only in config_validator.KNOWN_KEYS, so the
+    # CONFIG.get(..., default) in helpers/position_sizing.py always applied
+    # and a user had no documented dial. Listed here with their real defaults.
+
+    # Fraction of CURRENT equity to risk per trade, measured through the
+    # actual stop distance. Unlike target_risk_per_trade (used by vol_parity /
+    # risk_parity, which derive their own distance), this budget is subject to
+    # the ceiling and fill-price/stop-anchor drift described below.
+    "risk_pct_per_trade": 0.01,
+
+    # Hard ceiling on the CONTRACT count. Applies to MARGINED instruments
+    # (futures) only -- it is a contract count, and applying it to a fractional
+    # share count was a unit error that pinned equities at a flat 20 shares
+    # regardless of price, stop width or account size (#385). The integer
+    # floor() travels with it and is gated the same way.
+    "max_contracts_cap": 20,
+
+    # Notional ceiling for risk_pct_capped on UNMARGINED instruments
+    # (equities), as a fraction of equity. 1.0 = no leverage. None = disabled.
+    # 0.0 warns and takes no position; it does not abort the run. Use None to disable.
+    #
+    # This is deliberately NOT allocation_per_trade. Required notional is
+    # risk_pct_per_trade / stop_frac of equity, so an allocation ceiling of
+    # 0.10 would bind for any stop tighter than 10% -- nearly all of them --
+    # and deliver ~0.2-0.5% against a configured 1%, which is the same defect
+    # the cap gating removes, wearing a different number.
+    #
+    # At the 1.0 default this rarely changes the size HELD: on a long-only book
+    # cash <= equity, so the pre-existing cash clamp is at least as tight. What
+    # it changes is WHEN -- it clamps before the portfolio heat check, so heat
+    # sees the position that will actually be held. It binds on size below 1.0,
+    # or when unrealized short losses leave cash above equity.
+    "risk_pct_capped_max_notional_pct": 1.0,
+
+    # NOTE: setting max_portfolio_heat == risk_pct_per_trade takes ZERO trades
+    # on equities. The heat gate is shown notional(SLIPPED entry) x
+    # stop_fraction(RAW entry), so it evaluates (1 + slippage_pct) times the
+    # risk actually taken -- a position risking exactly 1.000% presents as
+    # 1.0005% and a 1% cap rejects it. The config validator warns; the
+    # underlying raw-vs-slipped drift is tracked on #381-D.
+
+    # Constant contract count for position_sizing_method="fixed_contracts".
+    "fixed_contracts_per_trade": 1,
 
     # ============================================================
     # SECTION 26: POINT-IN-TIME (PIT) MEMBERSHIP ENFORCEMENT
