@@ -200,9 +200,9 @@ def _is_entry_bar(signals, edge_masks, symbol, sig_date, entry_value):
     True when ``symbol`` may be ENTERED on ``sig_date`` for ``entry_value``
     (1 = long, -2 = short).
 
-    ``edge_masks`` is None in the default "level" mode, where this reduces to the
-    original equality test byte-for-byte. In "edge" mode the bar must ALSO be a
-    transition into the entry state.
+    ``edge_masks`` is None in "level" mode, where this reduces to the original
+    equality test byte-for-byte. In "edge" mode (the default since #401) the bar
+    must ALSO be a transition into the entry state.
     """
     if pd.isna(sig_date) or symbol not in signals:
         return False
@@ -242,7 +242,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
     # Off / no data -> stop fills behave exactly as before (no-op).
     _intrabar_on = bool(CONFIG.get("intrabar_resolution", False)) and intrabar_data is not None
 
-    # --- ENTRY TRIGGER MODE: level (default) vs edge ---
+    # --- ENTRY TRIGGER MODE: edge (default) vs level ---
     # "level" enters on ANY bar whose signal reads the entry value. A strategy
     # that emits a forward-filled *state* series -- 1 on every bar of a hold, as
     # custom_strategies/bull_flag.py does via .replace(0, np.nan).ffill() --
@@ -253,10 +253,19 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
     # 26/27 at 0.01, with the strategy and the data held constant.
     # "edge" enters only on the transition INTO the entry state, which is how the
     # live SignalDeck scanner triggers (`last == 1 and prev != 1`).
-    # Default stays "level": flipping it would move every strategy in the repo
-    # and void tests/test_engine_characterization.py, so it is opt-in per run.
-    _entry_trigger = str(CONFIG.get("entry_trigger", "level")).lower()
-    _edge_masks = _build_entry_edge_masks(signals) if _entry_trigger == "edge" else None
+    # Default is "edge" since #401: under "level" a hold-state signal stopped out
+    # on bar N re-enters on N (or N+1) because the series still reads 1, booking
+    # trades the strategy never signalled. "level" remains available per run.
+    # The golden master pins both (scenario hold_state_stop). The fallback
+    # matches the shipped default so a config missing the key does not silently
+    # get the behaviour the default was flipped away from.
+    # Only an explicit "level" selects level; ANY other value -- a typo like
+    # "edges", None, "Edge " -- runs as edge. Inverted from the original test
+    # (`== "edge"`), under which every unrecognised value silently ran level,
+    # the very behaviour the flip removed, while config_validator told the user
+    # it had fallen back to edge (adversarial QA on #405).
+    _entry_trigger = str(CONFIG.get("entry_trigger", "edge")).strip().lower()
+    _edge_masks = None if _entry_trigger == "level" else _build_entry_edge_masks(signals)
 
     # Dynamic HTB rate compounding based on timeframe (fixes issue #55)
     bars_per_year = get_bars_per_year(CONFIG)
@@ -834,11 +843,18 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                             cover_raw = _mc_close
                             cover_reason = "Margin Call"
 
-            # STRATEGY cover (signal < 0 while short)
+            # STRATEGY cover: any negative signal EXCEPT -2, which is the
+            # short-entry value and, on a bar already short, means "hold". This
+            # covered on -2 too, so a hold-state short ([-2, -2, -2, ...], e.g.
+            # a short ORB) covered every bar: under "level" it churned a round
+            # trip per bar, and under the "edge" default (#401) the re-entry is
+            # refused, so the position went flat after ONE bar
+            # (adversarial QA on #405).
             if pd.isna(cover_raw):
                 sig_date = prev_trading_dates[symbol].get(date) if execution_time == 'open' else date
                 if (pd.notna(sig_date) and sig_date in signals[symbol].index
-                        and signals[symbol].loc[sig_date] < 0):
+                        and signals[symbol].loc[sig_date] < 0
+                        and signals[symbol].loc[sig_date] != -2):
                     cover_raw = row.get('Open' if execution_time == 'open' else 'Close')
                     cover_reason = "Short Cover"
 
@@ -1216,12 +1232,17 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
 
             # Mirror the short-entry guard: never open a long while a short is
             # still open on the same symbol (issue #313). A signal of 1 does not
-            # cover a short (only <= -1 covers), so without this the long would
+            # cover a short (only a negative signal other than -2 does), so without this the long would
             # stack on top of the open short — a hedged double position the
             # strategy never intended. A flip is still expressible as a two-bar
             # sequence: -1 on one bar covers the short, then 1 on a later bar
-            # enters the long (same-bar stop/margin/PIT covers also free the
-            # symbol before this loop, so a 1 that bar can enter).
+            # enters the long. A stop or margin exit earlier in this bar also
+            # frees the symbol before this loop; whether a 1 on that bar can then
+            # enter is decided by entry_trigger (#401): under the default "edge"
+            # only a genuine transition into 1 does (e.g. -2 -> 1 after a short
+            # stop), so a hold-state series that still reads 1 does not re-buy
+            # the bar it was stopped out of. (A PIT cover cannot reach here: the
+            # membership / force-exit check just below refuses the entry.)
             if symbol in positions or symbol in short_positions: continue
             if (not _pit_flag(symbol, date, '_pit_member', True)
                     or _pit_flag(symbol, date, '_pit_force_exit', False)):

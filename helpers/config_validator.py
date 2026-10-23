@@ -230,11 +230,10 @@ def validate_config(config: dict) -> list[str]:
             warnings.append(msg)
             logger.warning(msg)
 
-    # Value-level check for entry_trigger. Registering the key without its
-    # DOMAIN would leave the worst possible gap for this particular setting: a
-    # typo like "edges" falls back to "level", which is the exact behaviour the
-    # option exists to switch OFF -- so the run silently produces the unfixed
-    # numbers while the config file says otherwise. Same precedent as
+    # Value-level check for entry_trigger. The engine runs "level" ONLY for an
+    # exact "level" and "edge" for everything else (#401), so a typo can no
+    # longer silently select the old behaviour -- but someone who meant "level"
+    # and typed "levle" still gets edge without being told. Same precedent as
     # universe_rebase and smoothness_profile above.
     mw = config.get("max_workers")
     if mw is not None and (isinstance(mw, bool) or not isinstance(mw, int) or mw < 1):
@@ -243,11 +242,13 @@ def validate_config(config: dict) -> list[str]:
         warnings.append(msg)
         logger.warning(msg)
 
+    # None means "unset" here as for every other key, and the engine runs an
+    # unset/None entry_trigger as the shipped default "edge" -- no warning due.
     et = config.get("entry_trigger")
-    if et is not None and str(et).lower() not in {"level", "edge"}:
+    if et is not None and str(et).strip().lower() not in {"level", "edge"}:
         msg = (f"WARNING: entry_trigger '{et}' is not a known mode "
                f"(expected 'level' or 'edge') -- the run will fall back to "
-               f"'level', i.e. entry on ANY bar holding the signal value")
+               f"'edge', i.e. entry only on the TRANSITION into the signal value")
         warnings.append(msg)
         logger.warning(msg)
 
