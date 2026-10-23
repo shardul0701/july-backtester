@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 KNOWN_KEYS: set[str] = {
     # SECTION 1: Data Provider
     "data_provider",
+    "polygon_max_retries",
     "polygon_api_secret_name",  # PR #187: added — was triggering "unknown key" warning
     "csv_data_dir",
     # --- Rule-based point-in-time universe (zachisit/july-backtester-private-strategies#70) ---
@@ -103,9 +104,11 @@ KNOWN_KEYS: set[str] = {
     "rolling_sharpe_window",
     # SECTION 17: Short Selling
     "htb_rate_annual",
+    "short_margin_requirement",
     # SECTION 18: MC Sampling
     "mc_sampling",
     "mc_block_size",
+    "random_seed",
     # SECTION 18b: Smoothness verdict profile
     "smoothness_profile",
     # SECTION 19: Volume Impact
@@ -143,6 +146,9 @@ KNOWN_KEYS: set[str] = {
     "instruments",
     # Sub-bar (intraday) resolution
     "intrabar_resolution",
+    "stop_gap_fill",
+    "stop_gap_fill_armed_trail",
+    "entry_bar_stop_check",
     "intrabar_timeframe",
     "intrabar_multiplier",
     "intrabar_parquet_source",

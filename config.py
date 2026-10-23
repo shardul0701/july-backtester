@@ -19,6 +19,8 @@ CONFIG = {
     # polygon_api_secret_name: name of the env-var / .env key that holds the key.
     "data_provider": "polygon",
     "polygon_api_secret_name": "POLYGON_API_KEY",
+    # Retries (exponential backoff, honours Retry-After) on HTTP 429/5xx per request. 0 = off.
+    "polygon_max_retries": 5,
     # Only used when data_provider = "csv":
     "csv_data_dir": "csv_data",
     # Only used when data_provider = "merged" — root of the built unified
@@ -166,6 +168,12 @@ CONFIG = {
     # SECTION 17: SHORT SELLING BORROW COST
     # ============================================================
     "htb_rate_annual": 0.0,         # 0.0 = disabled (long-only default); set to e.g. 0.02 for short strategies
+    # Equity short buying power (#430): each open equity short reserves
+    # notional * this fraction of cash as collateral, released on cover. New
+    # entries (long or short) can only use cash minus the reserved collateral,
+    # so 0.5 with allocation_per_trade=0.10 caps the short book near 2x gross.
+    # 0.0 = legacy behaviour (shorts reserve nothing; unbounded gross leverage).
+    "short_margin_requirement": 0.5,
 
     # ============================================================
     # SECTION 18: MONTE CARLO SAMPLING
@@ -175,6 +183,10 @@ CONFIG = {
                                     # profile, else iid (calibrates the MC "DD-Understated"
                                     # verdict for single-instrument regime-dependent strategies)
     "mc_block_size": None,          # None = auto floor(sqrt(N))
+    "random_seed": None,            # None = unseeded (legacy: MC / bootstrap p-value / noise differ
+                                    # run to run). An int (e.g. 42) makes MC scores, the edge p-value
+                                    # and noise injection reproducible; seeds are derived per
+                                    # portfolio+strategy / symbol, independent of worker assignment (#439)
 
     # ============================================================
     # SECTION 18b: CURVE-SMOOTHNESS VERDICT PROFILE
@@ -387,7 +399,7 @@ CONFIG = {
     # _pit_force_exit marks the last available member bar when no timely post-leave
     # bar exists, so the simulator can close at Close instead of waiting.
     "pit_enforce_daily": True,
-    "pit_warmup_days": 400,              # calendar days of pre-join data for indicators
+    "pit_warmup_days": 400,              # pre-start calendar days for symbols/dependency indicators
     "pit_exit_buffer_days": 10,          # grace-period bars after index removal
     "pit_coverage_tolerance_days": 7,
 
@@ -459,6 +471,19 @@ CONFIG = {
     # sub-bar open instead of optimistically at the stop level). Opt-in; requires
     # 1-min data availability, so it is off by default.
     "intrabar_resolution": False,
+    # Coarse (non-intrabar) stop fills (issue #425). "open" = a bar that OPENS beyond
+    # the stop (gap-through) fills at the worse open: min(Open, stop) long,
+    # max(Open, stop) short. "level" = legacy, always fill at the stop level.
+    # Sub-bar data (intrabar_resolution) still overrides when present.
+    "stop_gap_fill": "open",
+    # Sleeve A parity: an ARMED trailing_atr trail fills at the exact trail level
+    # (gap or not). Set "open" to apply stop_gap_fill to armed trails too.
+    "stop_gap_fill_armed_trail": "level",
+    # Fill-bar stop check (issue #426). Under execution_time="open" the entry fills at
+    # the bar Open, so that bar's Low (High for shorts) is live against the initial
+    # stop: a breach closes the trade on the fill bar. False = legacy (first stop
+    # check on the NEXT bar). No effect under execution_time="close".
+    "entry_bar_stop_check": True,
     # Finer-resolution timeframe fetched per symbol when intrabar_resolution is on.
     "intrabar_timeframe": "MIN",     # "MIN" | "H"
     "intrabar_multiplier": 1,        # e.g. 5 for 5-minute sub-bars

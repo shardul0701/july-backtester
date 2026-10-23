@@ -111,7 +111,38 @@ def _update_trailing_atr_stop(pos, sym_df, date, stop_config, side="long"):
         pos['stop_loss_level'] = candidate if pd.isna(prev) else min(prev, candidate)
 
 
-def _prearm_decision(high, low, stop_level, target, window_bars, side="long"):
+def _coarse_stop_fill(stop_level, bar_open, side="long", gap_mode="open"):
+    """Fill price for a coarse-bar stop hit (issue #425).
+
+    ``gap_mode="open"``: a bar that OPENS beyond the stop (gap-through) fills at
+    the worse open, not the unreachable stop level -- ``min(Open, stop)`` long,
+    ``max(Open, stop)`` short. A bar that opens inside the stop and trades
+    through it still fills at the stop. NaN/missing Open falls back to the stop.
+    ``gap_mode="level"`` always returns the stop level (legacy behaviour).
+    """
+    if gap_mode != "open" or bar_open is None or pd.isna(bar_open):
+        return stop_level
+    return min(bar_open, stop_level) if side == "long" else max(bar_open, stop_level)
+
+
+def _stop_gap_mode(stop_config, pos):
+    """Resolve the gap-fill mode for a position's stop hit.
+
+    ``CONFIG["stop_gap_fill"]`` ("open" default | "level") is the global switch.
+    Sleeve A parity exception: once a ``trailing_atr`` trail has ARMED, the
+    reference fills at the exact trail level, so that case stays "level" unless
+    ``stop_gap_fill_armed_trail`` is explicitly set to "open".
+    """
+    if str(CONFIG.get("stop_gap_fill", "open")).lower() != "open":
+        return "level"
+    if (stop_config.get("type") == "trailing_atr" and pos.get('trail_armed', False)
+            and str(CONFIG.get("stop_gap_fill_armed_trail", "level")).lower() != "open"):
+        return "level"
+    return "open"
+
+
+def _prearm_decision(high, low, stop_level, target, window_bars, side="long",
+                     bar_open=None, gap_mode="level"):
     """Outcome of ONE pre-arm bar for a ``trailing_atr`` position.
 
     Returns ``("stop", fill)`` | ``("arm", None)`` | ``("hold", None)``:
@@ -122,7 +153,9 @@ def _prearm_decision(high, low, stop_level, target, window_bars, side="long"):
       engine's prior behaviour),
     - only the stop → ``("stop", stop_level)`` (reference parity: the leg1 loop
       never gap-refines a plain stop-only hit, same convention as the armed
-      leg2 trail — only the both-hit race above consults finer data),
+      leg2 trail — only the both-hit race above consults finer data); with
+      ``gap_mode="open"`` and ``bar_open`` supplied, a gap-through fills at the
+      worse open (issue #425),
     - only the target → ``("arm", None)`` (caller arms + seeds the trail),
     - neither → ``("hold", None)``.
 
@@ -145,9 +178,9 @@ def _prearm_decision(high, low, stop_level, target, window_bars, side="long"):
             return ("arm", None)
         if which == "stop":
             return ("stop", fill)
-        return ("stop", stop_level)   # no finer coverage -> conservative stop-first
+        return ("stop", _coarse_stop_fill(stop_level, bar_open, side, gap_mode))   # no finer coverage -> conservative stop-first
     if hit_s:
-        return ("stop", stop_level)
+        return ("stop", _coarse_stop_fill(stop_level, bar_open, side, gap_mode))
     if hit_t:
         return ("arm", None)
     return ("hold", None)
@@ -250,7 +283,7 @@ def _is_entry_bar(signals, edge_masks, symbol, sig_date, entry_value):
     return bool(_sym_masks[entry_value].loc[sig_date])
 
 
-def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocation_pct, spy_df, vix_df, tnx_df, stop_config, size_mults=None, delisting_dates=None, intrabar_data=None):
+def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocation_pct, spy_df, vix_df, tnx_df, stop_config, size_mults=None, delisting_dates=None, intrabar_data=None, start_date=None):
     """
     Runs a portfolio simulation with integrated stop-loss handling and logs
     a rich set of features for each trade for future machine learning analysis.
@@ -261,6 +294,9 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
     delisting_dates : dict[str, str], optional
         {symbol: "YYYY-MM-DD"} mapping of delisting dates from helpers/survivorship.py.
         When provided, open positions are force-closed on delisting.
+    start_date : date-like, optional
+        First execution/timeline date. Earlier bars remain available for signal
+        timing, structural stops and prior-bar ADV, but are never simulated.
     """
     from helpers.timeframe_utils import get_bars_per_year, get_bars_per_day_exact
 
@@ -392,19 +428,40 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
     # high-variance one). Revisit only alongside a decision about what a
     # missing ADV should mean -- see the discussion on #269.
     def _daily_adv(volume_series, at_date, symbol):
-        """Trailing ~20-trading-day average DAILY volume as of `at_date`."""
-        adv_series = _adv_cache.get(symbol)
-        if adv_series is None:
+        """Trailing ~20-trading-day average DAILY volume known at order time.
+
+        Timing (issue #436): under ``execution_time="open"`` the order fills at
+        the bar's open, but ``volume_series`` at ``at_date`` holds that bar's
+        FULL-session volume, which is not known yet. The rolling mean is
+        therefore shifted one bar so the value returned for ``at_date`` covers
+        bars strictly BEFORE it. Under ``"close"`` the fill is the bar's last
+        print, so the same-bar value is used unchanged.
+
+        First bar of a series: the shifted value is NaN (no prior bar). Both
+        consumers skip their block on NaN, which would silently remove the cap
+        and impact for that fill, so in that case (and only that case) we fall
+        back to the same-bar value -- a deliberately accepted one-bar
+        look-ahead per symbol, preferred over an uncapped fill.
+        """
+        cached = _adv_cache.get(symbol)
+        if cached is None:
             window_bars, bars_per_day = _adv_params(symbol)
-            adv_series = _adv_cache[symbol] = (
+            same_bar = (
                 volume_series.rolling(
                     window=window_bars, min_periods=1
                 ).mean()
                 * bars_per_day
             )
+            cached = _adv_cache[symbol] = (same_bar, same_bar.shift(1))
+        same_bar, prior_bar = cached
         # NaN propagates through the multiply, so a missing/NaN bar still
         # yields NaN here exactly as the per-call version did.
-        return adv_series.get(at_date, np.nan)
+        if execution_time != "open":
+            return same_bar.get(at_date, np.nan)
+        val = prior_bar.get(at_date, np.nan)
+        if pd.isna(val) and at_date in same_bar.index and same_bar.index.get_loc(at_date) == 0:
+            return same_bar.get(at_date, np.nan)
+        return val
 
     short_positions: dict = {}
 
@@ -415,8 +472,21 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
 
     cash = initial_capital
     reserved_margin = 0.0  # initial margin reserved by open futures positions (buying-power)
+    # Collateral reserved by open EQUITY shorts (#430): a constraint on new entries,
+    # not a cash debit (total_equity stays cash + MTM). Released on every cover path.
+    reserved_short_collateral = 0.0
+    _short_margin_req = max(float(CONFIG.get("short_margin_requirement", 0.5) or 0.0), 0.0)
     positions = {}
     all_dates = sorted(list(set(date for df in portfolio_data.values() for date in df.index)))
+    if start_date is not None and all_dates:
+        _start = pd.Timestamp(start_date)
+        _tz = all_dates[0].tzinfo
+        _start = (_start.tz_localize(_tz) if _start.tzinfo is None
+                  else _start.tz_convert(_tz) if _tz is not None
+                  else _start.tz_localize(None))
+        all_dates = [dt for dt in all_dates if dt >= _start]
+    if not all_dates:
+        return None
     portfolio_timeline = pd.Series(index=all_dates, dtype=float)
     trade_log = []
     trade_counter = 0
@@ -489,7 +559,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
     def _close_short_now(symbol, spos, exit_date, raw_cover_price, cover_reason):
         """Cover a short position immediately — mirror of ``_close_long_now``
         for the opt-in entry-bar intrabar-parity check on the short side."""
-        nonlocal cash, reserved_margin, trade_counter
+        nonlocal cash, reserved_margin, reserved_short_collateral, trade_counter
         inst_c = instruments[symbol]
         cover_slip = _inst.apply_slippage(inst_c, raw_cover_price, "buy")
         # Cover-leg market impact (mirror of the strategy-cover path, #312 QA).
@@ -507,6 +577,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
         cash += _gross - commission
         if inst_c.margin_mode == _inst.INITIAL_MARGIN:
             reserved_margin -= spos.get('margin', 0.0)
+        reserved_short_collateral = max(reserved_short_collateral - spos.get('collateral', 0.0), 0.0)
         trade_counter += 1
         short_trade_df = portfolio_data[symbol].loc[spos['entry_date']:exit_date]
         if not short_trade_df.empty:
@@ -557,7 +628,127 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
         prior = df.loc[:at_date, 'Close'].dropna()
         return prior.iloc[-1] if len(prior) else None
 
+    # --- SURVIVORSHIP BIAS: DELISTING LIQUIDATION (issue #431) ---
+    # Held positions in a delisted symbol are liquidated INSIDE the daily loop, on
+    # the first loop date on/after the delisting date, so cash is credited and the
+    # slot freed before any later sizing / heat decision (no phantom equity).
+    _delist_on = bool(delisting_dates) and CONFIG.get("include_delisted", False)
+    _delist_assumption = CONFIG.get("delisting_price_assumption", "last_close")
+    _delist_ts = {}
+    if _delist_on:
+        _end_day = pd.Timestamp(CONFIG.get("end_date") or pd.Timestamp.now().date())
+        _end_day = _end_day.tz_localize(None).normalize()
+        for sym, value in delisting_dates.items():
+            if sym not in portfolio_data:
+                continue
+            ts = pd.Timestamp(value)
+            # A delisting known today must not be applied to an earlier backtest.
+            if ts.tz_localize(None).normalize() > _end_day:
+                continue
+            tz = portfolio_data[sym].index.tz
+            _delist_ts[sym] = (ts.tz_localize(tz) if ts.tzinfo is None
+                               else ts.tz_convert(tz) if tz is not None
+                               else ts.tz_localize(None))
+    _delist_stats = {"n": 0, "loss": 0.0}
+
+    def _is_delisted(symbol, date):
+        dts = _delist_ts.get(symbol)
+        return dts is not None and date >= dts
+
+    def _delist_exit_price(symbol, fallback_price, delisting_ts):
+        if _delist_assumption == "zero":
+            return 0.0
+        # "last_close": last available Close on/before the delisting date
+        sym_df = portfolio_data.get(symbol)
+        if sym_df is not None and not sym_df.empty:
+            prior = sym_df.loc[sym_df.index <= delisting_ts, 'Close'].dropna()
+            if not prior.empty:
+                return float(prior.iloc[-1])
+        return fallback_price
+
+    def _close_delisted(symbol, pos, delisting_ts, side="long"):
+        """Force-close a held long (or short) in a delisted symbol at the
+        configured assumption price. Credits cash, releases reserved
+        margin/collateral, logs the 'Delisting' trade. Returns the exit price."""
+        nonlocal cash, reserved_margin, reserved_short_collateral, trade_counter
+        exit_price = _delist_exit_price(symbol, pos['entry_price'], delisting_ts)
+        _dl_inst = instruments[symbol]
+        commission = _inst.commission(_dl_inst, pos['shares'])
+        _pos_value = _inst.notional(_dl_inst, pos['shares'], pos['entry_price'])
+        if side == "short":
+            # Symmetric cover at the assumption price (no slippage — no market).
+            gross_pnl = pos['shares'] * (pos['entry_price'] - exit_price) * _dl_inst.point_value
+            net_pnl = gross_pnl - (2 * commission) - pos.get('total_borrow_cost', 0.0)
+            cash += gross_pnl - commission
+            if _dl_inst.margin_mode == _inst.INITIAL_MARGIN:
+                reserved_margin -= pos.get('margin', 0.0)
+            reserved_short_collateral = max(reserved_short_collateral - pos.get('collateral', 0.0), 0.0)
+            _ir = pos.get('initial_risk')
+            _initial_risk_per_share = _ir if (_ir and _ir > 0) else 0.0
+            _r_multiple = (net_pnl / (_ir * pos['shares'] * _dl_inst.point_value)
+                           if _ir and _ir > 0 and pos['shares'] > 0 else None)
+            _pos_value = pos.get('notional', _pos_value)
+            _pct = net_pnl / _pos_value if _pos_value > 0 else 0
+        else:
+            if _dl_inst.margin_mode == _inst.INITIAL_MARGIN:
+                # Futures: realise P&L (via $/point) into cash and release reserved
+                # margin — cash never held the notional, so crediting proceeds would
+                # inject phantom capital.
+                gross_pnl = (exit_price - pos['entry_price']) * pos['shares'] * _dl_inst.point_value
+                cash += gross_pnl - commission
+                reserved_margin -= pos.get('margin', 0.0)
+                net_pnl = gross_pnl - (2 * commission)
+            else:
+                net_pnl = ((exit_price - pos['entry_price']) * pos['shares']) - (2 * commission)
+                # Realised proceeds return to cash (delisting is a real liquidation).
+                cash += (pos['shares'] * exit_price) - commission
+            _initial_sl = pos.get('initial_stop_loss_level')
+            if pd.notna(_initial_sl) and _initial_sl > 0 and _initial_sl < pos['entry_price']:
+                _initial_risk_per_share = pos['entry_price'] - _initial_sl
+            else:
+                _initial_risk_per_share = pos['entry_price'] * 0.01
+            _r_multiple = (net_pnl / (_initial_risk_per_share * pos['shares'] * _dl_inst.point_value)
+                           if _initial_risk_per_share > 0 and pos['shares'] > 0 else None)
+            _pct = net_pnl / _pos_value if _pos_value > 0 else -1.0
+
+        trade_counter += 1
+        trade_log.append({
+            'Symbol': symbol, 'Trade': f"{'Short' if side == 'short' else 'Long'} {trade_counter}",
+            'EntryDate': pos['entry_date'].isoformat(), 'EntryPrice': pos['entry_price'],
+            'ExitDate': delisting_ts.isoformat(), 'ExitPrice': exit_price,
+            'Profit': net_pnl, 'ProfitPct': _pct,
+            'Shares': pos['shares'], 'PosSizeMult': pos.get('size_mult', 1.0),
+            'is_win': 1 if net_pnl > 0 else 0,
+            'HoldDuration': _hold_duration_days(pos['entry_date'], delisting_ts),
+            'MAE_pct': 0.0, 'MFE_pct': 0.0, 'ExitReason': "Delisting",
+            'InitialRisk': _initial_risk_per_share, 'RMultiple': _r_multiple,
+            **pos.get('features', {}),
+        })
+        _delist_stats["n"] += 1
+        _delist_stats["loss"] += net_pnl
+        return exit_price
+
+    def _liquidate_delisted(date, at_close=False):
+        """Liquidate eligible positions when the assumption price is available."""
+        for side, book in (("long", positions), ("short", short_positions)):
+            for symbol, pos in list(book.items()):
+                dts = _delist_ts.get(symbol)
+                if dts is None or date < dts or dts < pos['entry_date']:
+                    continue
+                df = portfolio_data[symbol]
+                if (execution_time == "open" and not at_close
+                        and _delist_assumption != "zero" and date == dts
+                        and date in df.index and pd.notna(df.at[date, 'Close'])):
+                    # Today's Close cannot fund today's earlier open. Older
+                    # closes (and the fixed zero assumption) remain available
+                    # before entries; this close is settled at the end of bar.
+                    continue
+                _close_delisted(symbol, pos, dts, side)
+                del book[symbol]
+
     for date in portfolio_timeline.index:
+        if _delist_on:
+            _liquidate_delisted(date)
         # --- EQUITY CALCULATION ---
         current_market_value = 0.0
         for symbol, pos in positions.items():
@@ -571,8 +762,11 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                 current_market_value += _inst.unrealized_pnl(
                     instruments[symbol], spos['shares'], spos['entry_price'], cur, side="short")
 
+        # Start-of-bar equity: drives sizing and heat decisions this iteration.
+        # The RECORDED timeline point is taken at the end of the bar (issue #438)
+        # so it reflects this bar's fills; this value must stay as-is so share
+        # counts do not change.
         total_equity = cash + current_market_value
-        portfolio_timeline[date] = total_equity
 
         # --- POSITION MANAGEMENT (EXITS) ---
         exited_symbols = []
@@ -616,7 +810,9 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                                                    next_trading_dates[symbol].get(date))
                     _decision, _fill = _prearm_decision(
                         current_high, current_low, pos['stop_loss_level'], pos['trail_target'],
-                        _wbars, side="long")
+                        _wbars, side="long",
+                        bar_open=portfolio_data[symbol].loc[date].get('Open'),
+                        gap_mode=_stop_gap_mode(stop_config, pos))
                     if _decision == "stop":
                         raw_exit_price = _fill
                         exit_date = date
@@ -625,7 +821,10 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     # calls _update_trailing_atr_stop, which arms + seeds off THIS same
                     # bar's High when the target was reached (idempotent on "hold").
                 elif pd.notna(current_low) and current_low <= pos['stop_loss_level']:
-                    raw_exit_price = pos['stop_loss_level']
+                    # Gap-through: a bar opening below the stop fills at the open (#425).
+                    raw_exit_price = _coarse_stop_fill(
+                        pos['stop_loss_level'], portfolio_data[symbol].loc[date].get('Open'),
+                        "long", _stop_gap_mode(stop_config, pos))
                     exit_date = date
                     exit_reason = f"Stop Loss ({stop_config['type']})"
                     # Sub-bar resolution: refine the fill from finer-resolution bars
@@ -851,14 +1050,18 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                                                    next_trading_dates[symbol].get(date))
                     _decision, _fill = _prearm_decision(
                         cur_high, cur_low, spos['stop_loss_level'], spos['trail_target'],
-                        _wbars, side="short")
+                        _wbars, side="short", bar_open=row.get('Open'),
+                        gap_mode=_stop_gap_mode(stop_config, spos))
                     if _decision == "stop":
                         cover_raw = _fill
                         cover_reason = f"Stop Loss ({stop_config['type']})"
                     # "arm" / "hold": leave cover_raw NaN — the trail-update below arms
                     # + seeds off THIS same bar's Low when the target was reached.
                 elif pd.notna(cur_high) and cur_high >= spos['stop_loss_level']:
-                    cover_raw = spos['stop_loss_level']
+                    # Gap-through: a bar opening above the stop covers at the open (#425).
+                    cover_raw = _coarse_stop_fill(
+                        spos['stop_loss_level'], row.get('Open'),
+                        "short", _stop_gap_mode(stop_config, spos))
                     cover_reason = f"Stop Loss ({stop_config['type']})"
                     # See mirrored long-side comment: skip gap-refinement once the ATR
                     # trail has armed, matching the reference's exact-level trail fill.
@@ -930,6 +1133,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
             cash += _gross - commission
             if inst_c.margin_mode == _inst.INITIAL_MARGIN:
                 reserved_margin -= spos.get('margin', 0.0)
+            reserved_short_collateral = max(reserved_short_collateral - spos.get('collateral', 0.0), 0.0)
             trade_counter += 1
             # MAE/MFE for shorts: favorable = price drops, adverse = price rises
             short_trade_df = portfolio_data[symbol].loc[spos['entry_date']:date]
@@ -985,6 +1189,8 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
             _short_items = sorted(portfolio_data.items(), key=lambda x: x[0])
         for symbol, df in _short_items:
             if date not in df.index or symbol in positions or symbol in short_positions:
+                continue
+            if _is_delisted(symbol, date):
                 continue
             if (not _pit_flag(symbol, date, '_pit_member', True)
                     or _pit_flag(symbol, date, '_pit_force_exit', False)):
@@ -1324,6 +1530,12 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     # computed from it above; the slipped/impacted price is only
                     # the realized fill used for notional / P&L accounting.
                     _s_entry_fill = _inst.apply_slippage(inst_se, ep, "sell")
+                    # Equity buying power is cash net of existing short collateral.
+                    # The configured method chooses units below; the final clamp
+                    # accounts for this entry's collateral and commission.
+                    _s_bp = cash - reserved_short_collateral
+                    if _s_bp <= 1e-9 * max(total_equity, 1.0):
+                        continue
 
                     # #386: honour position_sizing_method here. This branch
                     # hardcoded `alloc / fill` -- fixed-fractional -- so
@@ -1400,17 +1612,19 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                                                 _s_new_risk, total_equity, _s_max_heat):
                         continue
 
-                    # The cash clamp the hardcoded `min(..., cash)` used to
-                    # provide. Kept as a clamp rather than folded into the
-                    # allocation, because the sizing methods do not all target a
-                    # notional and several legitimately exceed cash before it.
-                    # Commission included, as the long path's affordability
-                    # step does (`cash / (price + commission_per_share)`), so
-                    # the two legs clamp to the same count when cash binds.
-                    _s_comm_ps = CONFIG.get('commission_per_share', 0.0) or 0.0
-                    if shares * (_s_entry_fill + _s_comm_ps) > cash:
-                        shares = (cash / (_s_entry_fill + _s_comm_ps)
-                                  if _s_entry_fill > 0 else 0.0)
+                    # Clamp the desired units to free buying power, including
+                    # entry commission. Keep this after the heat check, like
+                    # the long leg's affordability clamp.
+                    # A positive requirement reserves a fraction of notional;
+                    # zero retains the legacy per-entry full-cash clamp.
+                    _s_budget_price = _s_entry_fill * (
+                        _short_margin_req if _short_margin_req > 0 else 1.0)
+                    _s_unit_budget = _s_budget_price + _inst.commission(inst_se, 1.0)
+                    if _s_unit_budget <= 0:
+                        continue
+                    shares = min(shares, _s_bp / _s_unit_budget)
+                    while shares * _s_budget_price + _inst.commission(inst_se, shares) > _s_bp:
+                        shares = float(np.nextafter(shares, 0.0))
                     if shares <= 0:
                         continue
 
@@ -1441,13 +1655,16 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         continue
                     commission = _inst.commission(inst_se, shares)
                     cash -= commission   # proceeds and collateral cancel; only commission is a real cash cost
+                    # Reserve collateral off the FINAL (post-ADV-cap) notional (#430).
+                    _s_collateral = shares * _s_entry_fill * _short_margin_req
+                    reserved_short_collateral += _s_collateral
                     # Recompute registered heat risk from the FINAL post-ADV-cap
                     # share count (#317), mirroring the long path.
                     _s_new_risk = _inst.notional(inst_se, shares, _s_entry_fill) * _s_stop_dist
                     short_positions[symbol] = {
                         'entry_date': date, 'entry_price': _s_entry_fill, 'raw_entry_price': ep,
                         'shares': shares, 'notional': shares * _s_entry_fill, 'total_borrow_cost': 0.0,
-                        'margin': 0.0,
+                        'margin': 0.0, 'collateral': _s_collateral,
                         'stop_loss_level': _s_stop, 'initial_stop_loss_level': _s_stop,
                         'trail_target': _s_target, 'atr_locked': _s_atr,
                         'trail_anchor': _s_trail_anchor,
@@ -1473,6 +1690,24 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         del short_positions[symbol]
                     else:
                         _update_trailing_atr_stop(_spos0, df, date, stop_config, side="short")
+                # --- FILL-BAR STOP CHECK (mirror of the long side, issue #426) ---
+                elif (execution_time == 'open' and CONFIG.get("entry_bar_stop_check", True)
+                        and pd.notna(short_positions[symbol].get('stop_loss_level'))):
+                    _spos0 = short_positions[symbol]
+                    _hi0 = df.loc[date].get('High')
+                    if pd.notna(_hi0) and _hi0 >= _spos0['stop_loss_level']:
+                        _cov0 = _coarse_stop_fill(
+                            _spos0['stop_loss_level'], df.loc[date].get('Open'),
+                            "short", _stop_gap_mode(stop_config, _spos0))
+                        if _intrabar_on and symbol in intrabar_data:
+                            _bars0 = _intrabar.window_bars(intrabar_data[symbol], date,
+                                                          next_trading_dates[symbol].get(date))
+                            _refined0, _ = _intrabar.resolve_stop_fill(
+                                _bars0, _spos0['stop_loss_level'], side="short")
+                            if _refined0 is not None:
+                                _cov0 = _refined0
+                        _close_short_now(symbol, _spos0, date, _cov0, f"Stop Loss ({stop_config['type']})")
+                        del short_positions[symbol]
 
         # --- POSITION ENTRY LOGIC ---
         if _priority == "signal_date":
@@ -1512,6 +1747,8 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
             # the bar it was stopped out of. (A PIT cover cannot reach here: the
             # membership / force-exit check just below refuses the entry.)
             if symbol in positions or symbol in short_positions: continue
+            if _is_delisted(symbol, date):
+                continue
             if (not _pit_flag(symbol, date, '_pit_member', True)
                     or _pit_flag(symbol, date, '_pit_force_exit', False)):
                 continue
@@ -1525,7 +1762,11 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
 
             entry_price = _inst.apply_slippage(instruments[symbol], raw_entry_price, "buy")
 
-            if entry_price > 0 and cash > 0:
+            # Equity buying power nets out collateral held by open shorts (#430);
+            # futures buying power is governed by reserved_margin instead.
+            _bp = cash - (0.0 if instruments[symbol].margin_mode == _inst.INITIAL_MARGIN
+                          else reserved_short_collateral)
+            if entry_price > 0 and _bp > 0:
                 # --- PER-SIGNAL SIZE MULTIPLIER ---
                 # Apply per-signal size multiplier when the strategy provides one
                 # (e.g. 0.6x / 0.8x / 1.0x based on ML probability band). Multiplied
@@ -1851,8 +2092,8 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                 # Cash constraint (equity full-notional pre-clamp; futures clamp on margin below)
                 if inst.margin_mode != _inst.INITIAL_MARGIN:
                     capital_needed = _inst.margin_required(inst, shares, entry_price)
-                    if capital_needed > cash:
-                        shares = cash / entry_price
+                    if capital_needed > _bp:
+                        shares = _bp / entry_price
 
                 # --- VOLUME-BASED LIQUIDITY FILTER ---
                 max_pct_adv = CONFIG.get('max_pct_adv') or 0
@@ -1909,9 +2150,9 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                 else:
                     # Equity cash_full: full notional + commission debited from cash.
                     total_cost = _inst.margin_required(inst, shares, entry_price) + commission_cost
-                    if total_cost > cash:
+                    if total_cost > _bp:
                         # Robustly calculate the absolute maximum number of shares we can possibly afford
-                        shares = cash / (entry_price + CONFIG['commission_per_share'])
+                        shares = _bp / (entry_price + CONFIG['commission_per_share'])
                         if shares <= 0: continue  # Cannot afford even a fraction of a share
                         # Recalculate final total cost with the affordable share size
                         total_cost = (shares * entry_price) + (shares * CONFIG['commission_per_share'])
@@ -1919,10 +2160,10 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         # round a fully affordable trade a few ULPs above cash.
                         # Step down to a representable size that really fits,
                         # rather than rejecting the entire entry or overdrawing.
-                        while total_cost > cash:
+                        while total_cost > _bp:
                             shares = float(np.nextafter(shares, 0.0))
                             total_cost = (shares * entry_price) + (shares * CONFIG['commission_per_share'])
-                    can_afford = cash >= total_cost and shares > 0.001
+                    can_afford = _bp >= total_cost and shares > 0.001
 
                 # Final check: Ensure we can afford the trade and it's a meaningful size
                 if can_afford:
@@ -2165,86 +2406,83 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                             # THIS bar's High when the target was already reached (no-op
                             # otherwise), matching the reference's same-bar arm.
                             _update_trailing_atr_stop(_pos0, df, date, stop_config, side="long")
+                    # --- FILL-BAR STOP CHECK (execution_time="open", issue #426) ---
+                    # An open fill leaves the rest of the bar (its Low) live against the
+                    # initial stop, but the management loop only re-checks from the NEXT
+                    # date, so a same-bar breach was ignored. A resting stop would have
+                    # filled; close now. Not applied under "close" (the fill is the bar's
+                    # last print). The trailing_atr + intrabar path above owns its case.
+                    elif (execution_time == 'open' and CONFIG.get("entry_bar_stop_check", True)
+                            and pd.notna(positions[symbol].get('stop_loss_level'))):
+                        _pos0 = positions[symbol]
+                        _lo0 = df.loc[date].get('Low')
+                        if pd.notna(_lo0) and _lo0 <= _pos0['stop_loss_level']:
+                            _fill0 = _coarse_stop_fill(
+                                _pos0['stop_loss_level'], df.loc[date].get('Open'),
+                                "long", _stop_gap_mode(stop_config, _pos0))
+                            if _intrabar_on and symbol in intrabar_data:
+                                _bars0 = _intrabar.window_bars(intrabar_data[symbol], date,
+                                                              next_trading_dates[symbol].get(date))
+                                _refined0, _ = _intrabar.resolve_stop_fill(
+                                    _bars0, _pos0['stop_loss_level'], side="long")
+                                if _refined0 is not None:
+                                    _fill0 = _refined0
+                            _close_long_now(symbol, _pos0, date, _fill0, f"Stop Loss ({stop_config['type']})")
+                            del positions[symbol]
+
+        if _delist_on:
+            _liquidate_delisted(date, at_close=True)
+
+        # --- END-OF-BAR EQUITY SNAPSHOT (issue #438) ---
+        # Recorded after exits, borrow debit, covers and entries so a position
+        # sold/stopped at today's open shows its realised proceeds today, and one
+        # bought today is valued at today's Close. Same-bar round trips
+        # (_close_*_now) are already out of `positions` / in `cash` here.
+        _eob_mv = 0.0
+        for symbol, pos in positions.items():
+            close_price = _mtm_close(portfolio_data[symbol], date)
+            if close_price is not None:
+                _eob_mv += _equity_contribution(instruments[symbol], pos, close_price, side="long")
+        for symbol, spos in short_positions.items():
+            cur = _mtm_close(portfolio_data[symbol], date)
+            if cur is not None:
+                _eob_mv += _inst.unrealized_pnl(
+                    instruments[symbol], spos['shares'], spos['entry_price'], cur, side="short")
+        portfolio_timeline[date] = cash + _eob_mv
 
     exclude_open = CONFIG.get('exclude_open_positions', False)
 
-    # --- SURVIVORSHIP BIAS: FORCE-CLOSE DELISTED OPEN POSITIONS ---
-    # This MUST run before the End-of-Backtest mark-to-market block below.
-    # Otherwise, a still-open position in a delisted symbol would either be
-    # marked-to-market at its last bar (exclude_open=False) or dropped entirely
-    # (exclude_open=True) — in both cases the delisting loss would be silently
-    # ignored, defeating the purpose of survivorship handling.
+    # --- SURVIVORSHIP BIAS: DELISTING SAFETY NET ---
+    # Delisted positions are normally liquidated inside the daily loop (#431). Only
+    # a position whose delisting date falls AFTER the last loop date is still open
+    # here; force-close it (must precede the End-of-Backtest mark-to-market below,
+    # else the delisting loss would be silently ignored) and patch the final
+    # equity point, which the loop snapshotted at mark-to-market.
     survivorship_stats = {}
-    # Each entry: (symbol, delisting_ts, shares, exit_price) — used to correct the
-    # equity curve, whose daily-loop values still mark the position to market.
-    _delisting_corrections = []
     if delisting_dates and CONFIG.get("include_delisted", False):
-        _price_assumption = CONFIG.get("delisting_price_assumption", "last_close")
-        _positions_delisted = 0
-        _total_delisting_loss = 0.0
-        for symbol in list(positions.keys()):
-            if symbol not in delisting_dates:
+        _last_loop_date = all_dates[-1]
+        for symbol, pos in list(positions.items()) + list(short_positions.items()):
+            dts = _delist_ts.get(symbol)
+            if dts is None or dts < pos['entry_date']:
                 continue
-            pos = positions[symbol]
-            delisting_ts = pd.Timestamp(delisting_dates[symbol])
-            entry_ts = pos['entry_date']
-            if delisting_ts < entry_ts:
-                continue  # delisted before we entered — leave for normal handling
-
-            # Determine exit price under the configured assumption.
-            if _price_assumption == "zero":
-                exit_price = 0.0
-            else:  # "last_close": last available Close on/before the delisting date
-                exit_price = pos['entry_price']  # fallback
-                sym_df = portfolio_data.get(symbol)
-                if sym_df is not None and not sym_df.empty:
-                    prior = sym_df.loc[sym_df.index <= delisting_ts, 'Close'].dropna()
-                    if not prior.empty:
-                        exit_price = float(prior.iloc[-1])
-
-            _dl_inst = instruments[symbol]
-            commission = _inst.commission(_dl_inst, pos['shares'])
-            if _dl_inst.margin_mode == _inst.INITIAL_MARGIN:
-                # Futures: realise P&L (via $/point) into cash and release reserved
-                # margin — cash never held the notional, so crediting proceeds would
-                # inject phantom capital.
-                gross_pnl = (exit_price - pos['entry_price']) * pos['shares'] * _dl_inst.point_value
-                cash += gross_pnl - commission
-                reserved_margin -= pos.get('margin', 0.0)
-                net_pnl = gross_pnl - (2 * commission)
+            _is_short = symbol in short_positions
+            logger.info("Delisting of %s (%s) falls after the last loop date; "
+                        "closing via post-loop safety net", symbol, dts.date())
+            exit_price = _close_delisted(symbol, pos, dts, "short" if _is_short else "long")
+            _mtm = _mtm_close(portfolio_data[symbol], _last_loop_date)
+            if _mtm is not None and pd.notna(portfolio_timeline.loc[_last_loop_date]):
+                _sign = -1 if _is_short else 1
+                portfolio_timeline.loc[_last_loop_date] += (
+                    _sign * pos['shares'] * (exit_price - _mtm) * instruments[symbol].point_value
+                    - _inst.commission(instruments[symbol], pos['shares']))
+            if _is_short:
+                del short_positions[symbol]
             else:
-                net_pnl = ((exit_price - pos['entry_price']) * pos['shares']) - (2 * commission)
-                # Realised proceeds return to cash (delisting is a real liquidation).
-                cash += (pos['shares'] * exit_price) - commission
+                del positions[symbol]
 
-            _initial_sl = pos.get('initial_stop_loss_level')
-            if pd.notna(_initial_sl) and _initial_sl > 0 and _initial_sl < pos['entry_price']:
-                _initial_risk_per_share = pos['entry_price'] - _initial_sl
-            else:
-                _initial_risk_per_share = pos['entry_price'] * 0.01
-            _r_multiple = (net_pnl / (_initial_risk_per_share * pos['shares'] * _dl_inst.point_value)
-                           if _initial_risk_per_share > 0 and pos['shares'] > 0 else None)
-
-            trade_counter += 1
-            _pos_value = _inst.notional(_dl_inst, pos['shares'], pos['entry_price'])
-            trade_log.append({
-                'Symbol': symbol, 'Trade': f"Long {trade_counter}",
-                'EntryDate': pos['entry_date'].isoformat(), 'EntryPrice': pos['entry_price'],
-                'ExitDate': delisting_ts.isoformat(), 'ExitPrice': exit_price,
-                'Profit': net_pnl, 'ProfitPct': net_pnl / _pos_value if _pos_value > 0 else -1.0,
-                'Shares': pos['shares'], 'is_win': 1 if net_pnl > 0 else 0,
-                'HoldDuration': _hold_duration_days(pos['entry_date'], delisting_ts),
-                'MAE_pct': 0.0, 'MFE_pct': 0.0, 'ExitReason': "Delisting",
-                'InitialRisk': _initial_risk_per_share, 'RMultiple': _r_multiple,
-                **pos.get('features', {}),
-            })
-            _delisting_corrections.append((symbol, delisting_ts, pos['shares'], exit_price))
-            _positions_delisted += 1
-            _total_delisting_loss += net_pnl
-            del positions[symbol]  # exclude from EoB mark-to-market / drop logic
-
+        _total_delisting_loss = _delist_stats["loss"]
         survivorship_stats = {
-            "positions_delisted": _positions_delisted,
+            "positions_delisted": _delist_stats["n"],
             "total_delisting_loss": _total_delisting_loss,
             "delisting_loss_pct": (_total_delisting_loss / initial_capital
                                    if initial_capital > 0 else 0.0),
@@ -2330,37 +2568,6 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
 
     pnl_list = [t['Profit'] for t in trade_log]
     if not pnl_list: return None
-
-    # --- SURVIVORSHIP BIAS: CORRECT EQUITY CURVE FOR DELISTED POSITIONS ---
-    # The daily loop marked each now-delisted position to market for every bar
-    # of the hold, including bars on/after the delisting date. From the delisting
-    # date forward the position is no longer held — its value is the realised
-    # proceeds (shares * exit_price), which were added to cash above. So for each
-    # date >= delisting we replace the marked-to-market contribution
-    # (shares * Close[date]) with the frozen realised value (shares * exit_price).
-    # This avoids double-counting the loss and keeps Sharpe/drawdown/CAGR correct.
-    if _delisting_corrections:
-        for symbol, delisting_ts, shares, exit_price in _delisting_corrections:
-            sym_df = portfolio_data.get(symbol)
-            if sym_df is None:
-                continue
-            mask = portfolio_timeline.index >= delisting_ts
-            for dt in portfolio_timeline.index[mask]:
-                if pd.isna(portfolio_timeline.loc[dt]):
-                    continue
-                # What the daily loop added for this symbol on this date — must
-                # use the SAME valuation as the loop (issue #320), otherwise this
-                # correction skips exactly the missing/NaN bars the loop now
-                # values at the last non-NaN close, leaving phantom MTM in the
-                # post-delisting equity curve.
-                mtm_close = _mtm_close(sym_df, dt)
-                if mtm_close is None:
-                    continue
-                # x point_value: the daily loop's contribution was $/point-scaled
-                # (unrealized_pnl for futures, market value with pv=1 for equities),
-                # so the replacement delta must scale the same way.
-                portfolio_timeline.loc[dt] += (shares * (exit_price - mtm_close)
-                                               * instruments[symbol].point_value)
 
     duration_list = [t['HoldDuration'] for t in trade_log]
     if exclude_open:
