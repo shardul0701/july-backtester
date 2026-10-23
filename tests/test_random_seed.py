@@ -90,6 +90,13 @@ class TestSeededSimulation:
         _run("Beta"); fe_b = cap["fe"]
         assert not np.array_equal(fe_a, fe_b)
 
+    def test_separator_in_labels_does_not_share_a_task_rng(self, cfg, monkeypatch):
+        cfg["random_seed"] = 42
+        cap = _capture_mc(monkeypatch)
+        _run(name="C", portfolio="A|B"); first = cap["fe"]
+        _run(name="B|C", portfolio="A"); second = cap["fe"]
+        assert not np.array_equal(first, second)
+
     def test_different_seed_differs(self, cfg, monkeypatch):
         cap = _capture_mc(monkeypatch)
         cfg["random_seed"] = 1
@@ -141,6 +148,11 @@ def test_derive_seed_stable_and_label_sensitive():
     assert derive_seed(42, "P", "S") == derive_seed(42, "P", "S")
     assert derive_seed(42, "P", "S") != derive_seed(42, "P", "T")
     assert derive_seed(42, "P", "S") != derive_seed(43, "P", "S")
+
+
+def test_seed_label_components_are_unambiguous():
+    assert derive_seed(42, "A|B", "C", "mc") != derive_seed(42, "A", "B|C", "mc")
+    assert derive_seed(42, "P", "S", "mc") != derive_seed(42, "P", "S|mc")
 
 
 def test_random_seed_is_known_config_key_and_default_none():

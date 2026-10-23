@@ -717,7 +717,8 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
             'EntryDate': pos['entry_date'].isoformat(), 'EntryPrice': pos['entry_price'],
             'ExitDate': delisting_ts.isoformat(), 'ExitPrice': exit_price,
             'Profit': net_pnl, 'ProfitPct': _pct,
-            'Shares': pos['shares'], 'is_win': 1 if net_pnl > 0 else 0,
+            'Shares': pos['shares'], 'PosSizeMult': pos.get('size_mult', 1.0),
+            'is_win': 1 if net_pnl > 0 else 0,
             'HoldDuration': _hold_duration_days(pos['entry_date'], delisting_ts),
             'MAE_pct': 0.0, 'MFE_pct': 0.0, 'ExitReason': "Delisting",
             'InitialRisk': _initial_risk_per_share, 'RMultiple': _r_multiple,
@@ -727,20 +728,23 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
         _delist_stats["loss"] += net_pnl
         return exit_price
 
-    def _liquidate_delisted(date):
-        """Close every held position whose delisting date is on/before `date`."""
-        for symbol, pos in list(positions.items()):
-            dts = _delist_ts.get(symbol)
-            if dts is None or date < dts or dts < pos['entry_date']:
-                continue  # not yet delisted / delisted before entry (normal handling)
-            _close_delisted(symbol, pos, dts, "long")
-            del positions[symbol]
-        for symbol, spos in list(short_positions.items()):
-            dts = _delist_ts.get(symbol)
-            if dts is None or date < dts or dts < spos['entry_date']:
-                continue
-            _close_delisted(symbol, spos, dts, "short")
-            del short_positions[symbol]
+    def _liquidate_delisted(date, at_close=False):
+        """Liquidate eligible positions when the assumption price is available."""
+        for side, book in (("long", positions), ("short", short_positions)):
+            for symbol, pos in list(book.items()):
+                dts = _delist_ts.get(symbol)
+                if dts is None or date < dts or dts < pos['entry_date']:
+                    continue
+                df = portfolio_data[symbol]
+                if (execution_time == "open" and not at_close
+                        and _delist_assumption != "zero" and date == dts
+                        and date in df.index and pd.notna(df.at[date, 'Close'])):
+                    # Today's Close cannot fund today's earlier open. Older
+                    # closes (and the fixed zero assumption) remain available
+                    # before entries; this close is settled at the end of bar.
+                    continue
+                _close_delisted(symbol, pos, dts, side)
+                del book[symbol]
 
     for date in portfolio_timeline.index:
         if _delist_on:
@@ -1608,13 +1612,9 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                                                 _s_new_risk, total_equity, _s_max_heat):
                         continue
 
-                    # The cash clamp the hardcoded `min(..., cash)` used to
-                    # provide. Kept as a clamp rather than folded into the
-                    # allocation, because the sizing methods do not all target a
-                    # notional and several legitimately exceed cash before it.
-                    # Commission included, as the long path's affordability
-                    # step does (`cash / (price + commission_per_share)`), so
-                    # the two legs clamp to the same count when cash binds.
+                    # Clamp the desired units to free buying power, including
+                    # entry commission. Keep this after the heat check, like
+                    # the long leg's affordability clamp.
                     # A positive requirement reserves a fraction of notional;
                     # zero retains the legacy per-entry full-cash clamp.
                     _s_budget_price = _s_entry_fill * (
@@ -2429,6 +2429,9 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                                     _fill0 = _refined0
                             _close_long_now(symbol, _pos0, date, _fill0, f"Stop Loss ({stop_config['type']})")
                             del positions[symbol]
+
+        if _delist_on:
+            _liquidate_delisted(date, at_close=True)
 
         # --- END-OF-BAR EQUITY SNAPSHOT (issue #438) ---
         # Recorded after exits, borrow debit, covers and entries so a position

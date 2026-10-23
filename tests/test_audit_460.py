@@ -71,6 +71,48 @@ def test_delisting_after_requested_end_does_not_change_past_results(engine_confi
     assert result["pnl_percent"] == pytest.approx(0.0)
 
 
+@pytest.mark.parametrize("execution_time", ["open", "close"])
+@pytest.mark.parametrize("side,allocation,delisting_close", [(1, 1., 200.), (-2, 2., 50.)])
+@pytest.mark.parametrize("has_delisting_bar", [True, False])
+def test_delisting_close_cannot_fund_an_earlier_open(
+        engine_config, monkeypatch, execution_time, side, allocation,
+        delisting_close, has_delisting_bar):
+    monkeypatch.setitem(ps.CONFIG, "execution_time", execution_time)
+    monkeypatch.setitem(ps.CONFIG, "delisting_price_assumption", "last_close")
+    a, b = frame(), frame()
+    day = a.index[3]
+    a.loc[day, ["Close", "High", "Low"]] = [
+        delisting_close, max(101., delisting_close + 1), min(99., delisting_close - 1)]
+    if not has_delisting_bar:
+        a = a.iloc[:3]
+    sa = pd.Series([side] + [0] * (len(a) - 1), index=a.index)
+    sb = pd.Series(0, index=b.index)
+    sb.iloc[2 if execution_time == "open" else 3] = 1
+    result = ps.run_portfolio_simulation(
+        {"A": a, "B": b}, {"A": sa, "B": sb},
+        100_000., allocation, None, None, None, {"type": "none"},
+        delisting_dates={"A": day})
+    a_trade, = [t for t in result["trade_log"] if t["Symbol"] == "A"]
+    assert a_trade["ExitReason"] == "Delisting"
+    assert a_trade["ExitPrice"] == (delisting_close if has_delisting_bar else 100.)
+    b_trades = [t for t in result["trade_log"] if t["Symbol"] == "B"]
+    # The delisting day's Close is available for that close, not its open.
+    assert len(b_trades) == (0 if execution_time == "open" and has_delisting_bar else 1)
+
+
+@pytest.mark.parametrize("side", [1, -2])
+def test_delisting_trade_preserves_position_size_metadata(engine_config, side):
+    df = frame()
+    result = ps.run_portfolio_simulation(
+        {"A": df}, {"A": pd.Series([side, 0, 0, 0, 0], index=df.index)},
+        100_000., .5, None, None, None, {"type": "none"},
+        size_mults={"A": pd.Series(.5, index=df.index)},
+        delisting_dates={"A": df.index[2]})
+    trade, = result["trade_log"]
+    assert trade["Shares"] == pytest.approx(250.)
+    assert trade["PosSizeMult"] == .5
+
+
 @pytest.mark.parametrize("side,second_open", [(1, 90.0), (-2, 110.0)])
 def test_fill_bar_stop_uses_intraday_gap_fill(engine_config, monkeypatch, side, second_open):
     monkeypatch.setitem(ps.CONFIG, "execution_time", "open")

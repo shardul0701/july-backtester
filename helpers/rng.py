@@ -11,13 +11,16 @@ so results are reproducible AND independent of which pool worker runs a task
 
 from __future__ import annotations
 
+import json
 import zlib
 
 
 def derive_seed(base_seed, *parts) -> int:
     """Return a stable 32-bit seed from *base_seed* and label *parts*.
 
-    Uses crc32 (not ``hash()``, which is salted per process).
+    Uses crc32 (not ``hash()``, which is salted per process) over an unambiguous
+    JSON array, so separators inside labels cannot move a component boundary.
     """
-    key = "|".join([str(base_seed), *[str(p) for p in parts]])
+    key = json.dumps([str(base_seed), *[str(p) for p in parts]],
+                     ensure_ascii=False, separators=(",", ":"))
     return zlib.crc32(key.encode("utf-8"))

@@ -14,9 +14,8 @@ def _safe_strategy_name(strategy_name):
     """Strategy name made safe for use in an output filename.
 
     Applies the historical cosmetic transforms (spaces to underscores, remove
-    parentheses) so existing
-    legal filenames are unchanged, then runs the result through the
-    shared ``sanitize_symbol_for_filename`` so ANY Windows-illegal character is
+    parentheses) so existing legal filenames are unchanged, then runs the result
+    through ``sanitize_symbol_for_filename`` so ANY Windows-illegal character is
     handled — not just the ``/ ( ) : space`` this site used to strip by hand.
 
     A strategy named ``EMA_PB-A3_ADX>20`` previously kept its ``>`` and produced

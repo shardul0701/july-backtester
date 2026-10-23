@@ -32,6 +32,8 @@
 - **Yahoo includes the `end_date` bar** (#441).
 
 ### RC audit follow-ups (#460)
+- Keep seed-label component boundaries unambiguous, defer delisting prices from the current Close until after open entries, and preserve position-size metadata on delisting trades.
+- Integrate configurable short sizing with collateral/commission budgets, and apply floating-point affordability corrections against free buying power.
 - Fix UTC delisting liquidation, re-entry after delisting, future delistings leaking into earlier runs, and missing safety-net exit commissions.
 - Refine fill-bar stops with intraday data and include entry commissions in short collateral sizing.
 - Preserve warm-up signals, structural stop history and ADV through the first execution bar; warm strategy dependencies while keeping benchmark/WFA periods inside the selected window.

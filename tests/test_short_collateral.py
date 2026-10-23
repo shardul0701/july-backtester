@@ -79,6 +79,40 @@ class TestShortCollateralCap:
         from config import CONFIG
         assert CONFIG["short_margin_requirement"] == 0.5
 
+    @pytest.mark.parametrize("method,expected", [("fixed_contracts", 5.), ("risk_parity", 200.)])
+    def test_collateral_keeps_configured_method_and_size_multiplier(
+            self, monkeypatch, method, expected):
+        _patch(monkeypatch, .5)
+        for key, value in {"position_sizing_method": method,
+                           "fixed_contracts_per_trade": 10,
+                           "target_risk_per_trade": .02}.items():
+            monkeypatch.setitem(ps.CONFIG, key, value)
+        df = _frame()
+        sig = pd.Series(0, index=df.index)
+        sig.iloc[1], sig.iloc[3] = -2, -1
+        result = run_portfolio_simulation(
+            {"A": df}, {"A": sig}, CAP, .1, None, None, None,
+            {"type": "percentage", "value": .05},
+            size_mults={"A": pd.Series(.5, index=df.index)})
+        trade, = result["trade_log"]
+        assert trade["Shares"] == pytest.approx(expected)
+        assert trade["PosSizeMult"] == .5
+
+    def test_non_fixed_size_is_limited_by_collateral_plus_commission(self, monkeypatch):
+        _patch(monkeypatch, .5)
+        monkeypatch.setitem(ps.CONFIG, "position_sizing_method", "risk_parity")
+        monkeypatch.setitem(ps.CONFIG, "target_risk_per_trade", .5)
+        monkeypatch.setitem(ps.CONFIG, "commission_per_share", 1.)
+        df = _frame()
+        sig = pd.Series(0, index=df.index)
+        sig.iloc[1], sig.iloc[3] = -2, -1
+        result = run_portfolio_simulation(
+            {"A": df}, {"A": sig}, CAP, .1, None, None, None,
+            {"type": "percentage", "value": .05})
+        trade, = result["trade_log"]
+        assert trade["Shares"] == pytest.approx(CAP / (100. * .5 + 1.))
+        assert trade["Shares"] * 100. * .5 + trade["Shares"] <= CAP
+
 
 class TestCollateralRelease:
     def _frames(self):
