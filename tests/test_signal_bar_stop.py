@@ -519,240 +519,366 @@ class TestRiskParitySizesOffTheSignalBarStop:
         assert shares == pytest.approx(500.0, rel=0.02), shares
 
 
-class TestShortSideSizingMethodIsAudible:
-    """#372: the equity short entry sizes as alloc/fill unconditionally, so a
-    run configured risk_parity gets FIXED allocation on every short while the
-    long side honours the setting — the book sized by two different methods
-    depending on direction, silently.
+class TestShortSideHonoursTheSizingMethod:
+    """#386: the equity short leg now reads `position_sizing_method`.
 
-    Wiring it is a behavioural change for every existing non-fixed run and
-    wants its own PR. Until then the gap is at least audible: pinned here so
-    nobody removes the warning without replacing it with the fix.
+    This class replaces `TestShortSideSizingMethodIsAudible`, which pinned the
+    #372 WARNING that the gap existed. The banner, its module-level
+    `_WARNED_SHORT_SIZING` dedup set and the autouse fixture that reset it are
+    all gone in the same change — a warning that outlives the gap it describes
+    is worse than none, because the next reader has to prove it is stale before
+    ignoring it.
+
+    The fixture was the piece most likely to be left behind: it only reset
+    module state, so with the set removed it would have gone silently green
+    forever rather than failing. Deleted deliberately, not by accident.
+
+    What was wrong, measured at $100k / $100 / 5% stop:
+
+        method             long      short (before)   short (after)
+        fixed             99.95         100.05          100.05    <- control
+        fixed_contracts    3.00         100.05            3.00    <- was 33x
+        risk_pct_capped   20.00         100.05          method
+        vol_parity       999.48         100.05          method
+        risk_parity      399.80         100.05          method
+
+    `fixed` agreeing to the tick both before and after (the 0.10 is slippage
+    sign) is what shows the harness is symmetric by direction, so a divergence
+    in any other row is the method and not the leg.
     """
 
-    @pytest.fixture(autouse=True)
-    def _reset_warn_dedup(self):
-        """The banner is deduped once-per-method-per-process, so without this
-        the warn test passes only while it happens to run first. Clearing makes
-        every test in the class independent of collection order."""
-        import helpers.portfolio_simulations as ps
-        ps._WARNED_SHORT_SIZING.clear()
-        yield
-        ps._WARNED_SHORT_SIZING.clear()
+    # Instrument is a parameter, not a fixture constant. The equity-only
+    # version of this class passed while the FUTURES short leg still dispatched
+    # on a two-name list, so vol_parity / risk_parity / kelly fell to
+    # fixed-fractional-over-margin there and nothing said so. One argument.
+    # (@shardul0701 on #392.)
+    # Two contract months of the SAME root, not two different roots. The first
+    # draft used MESM6/MNQM6 — $5/point against $2/point — so even `fixed`, the
+    # control that must agree, came out 2.5x apart and the test failed for a
+    # reason with nothing to do with the short leg. A long/short comparison
+    # needs the legs to differ ONLY in direction.
+    SYMS = {"equity": ("LNG", "SRT"), "futures": ("MESM6", "MESZ6")}
 
-    def test_a_short_book_with_non_fixed_sizing_warns(self, caplog):
+    @staticmethod
+    def _book(method, size_mult=None, instrument="equity", **cfg):
         from unittest.mock import patch
-        import logging
         import helpers.portfolio_simulations as ps
-        df = _frame([
-            ("2024-01-02", 100, 105,  95, 100),
-            ("2024-01-03", 100, 101,  99, 100),
-            ("2024-01-04", 100, 101,  99, 100),
-        ])
-        with patch.dict(ps.CONFIG, {"position_sizing_method": "risk_parity"}):
-            with caplog.at_level(logging.WARNING):
-                ps.run_portfolio_simulation(
-                    portfolio_data={"TEST": df},
-                    signals={"TEST": pd.Series([-2, 0, 0], index=df.index)},
-                    initial_capital=100_000.0, allocation_pct=0.5,
-                    spy_df=None, vix_df=None, tnx_df=None,
-                    stop_config={"type": "none"},
-                )
-        assert any("#372" in r.message or "LONG side only" in r.message
-                   for r in caplog.records), [r.message for r in caplog.records]
+        lng, srt = TestShortSideHonoursTheSizingMethod.SYMS[instrument]
+        rows_l = [("2024-01-02", 100, 105,  90, 100),
+                  ("2024-01-03", 100, 101,  99, 100),
+                  ("2024-01-04", 100, 101,  99, 100),
+                  ("2024-01-05", 100, 101,  99, 100)]
+        rows_s = [("2024-01-02", 100, 110,  95, 100),
+                  ("2024-01-03", 100, 101,  99, 100),
+                  ("2024-01-04", 100, 101,  99, 100),
+                  ("2024-01-05", 100, 101,  99, 100)]
+        dfl, dfs = _frame(rows_l), _frame(rows_s)
+        mults = None
+        if size_mult is not None:
+            mults = {lng: pd.Series(size_mult, index=dfl.index, dtype=float),
+                     srt: pd.Series(size_mult, index=dfs.index, dtype=float)}
+        # target_risk 0.004, not the 0.02 default. At 0.02 with this frame's
+        # ATR of 1.0 on a ~100 price, vol_parity sizes to 2,000 shares = 200% of
+        # equity; the long leg absorbs the cash, the short cannot open, and the
+        # test SKIPS on "no trade produced" — silently, for BOTH instruments,
+        # on the one method whose long/short divergence is largest (7.9x). A
+        # skip is not a pass, but it reads like one in a green run.
+        base = {"position_sizing_method": method,
+                "target_risk_per_trade": 0.004,
+                "risk_pct_per_trade": 0.01,
+                "max_contracts_cap": 20,
+                "fixed_contracts_per_trade": 3,
+                "max_portfolio_heat": 1.0,
+                "max_pct_adv": 0.0}
+        if instrument == "futures":
+            base.setdefault("instruments", {
+                "default_asset_class": "equity",
+                "futures_initial_margin_pct": 0.10,
+                "futures_commission_per_contract": 2.50,
+                "futures_slippage_ticks": 1.0, "overrides": {}})
+        base.update(cfg)
+        with patch.dict(ps.CONFIG, base):
+            res = ps.run_portfolio_simulation(
+                portfolio_data={lng: dfl, srt: dfs},
+                signals={lng: pd.Series([1, 0, 0, 0], index=dfl.index),
+                         srt: pd.Series([-2, 0, 0, 0], index=dfs.index)},
+                initial_capital=100_000.0, allocation_pct=0.10,
+                spy_df=None, vix_df=None, tnx_df=None,
+                stop_config={"type": "percentage", "value": 0.05},
+                size_mults=mults,
+            )
+        if not res or not res.get("trade_log"):
+            return {}
+        by_sym = {t["Symbol"]: float(t["Shares"]) for t in res["trade_log"]}
+        return {"LNG": by_sym.get(lng), "SRT": by_sym.get(srt)}
 
-    def test_a_long_only_book_does_not_warn(self, caplog):
-        """No false alarm on the overwhelming majority of runs."""
+    @pytest.mark.parametrize("instrument", ["equity", "futures"])
+    @pytest.mark.parametrize(
+        "method", ["fixed", "vol_parity", "risk_parity", "fixed_contracts",
+                   # Missing from the first version, so halving the equity
+                   # short's risk_pct_capped size left the whole suite green
+                   # (adversarial QA on #392).
+                   "risk_pct_capped"])
+    def test_both_legs_agree_on_share_count(self, method, instrument):
+        """The acceptance criterion: same method, same count, modulo the
+        slippage sign that separates a buy fill from a sell fill.
+
+        `kelly` is deliberately absent: `_book` completes no trades before the
+        compared entry, so kelly falls back to fixed allocation on both legs and
+        a row here would be evidence of nothing. It has its own test with ten
+        trades of history, `test_kelly_short_leg_reads_the_trade_record`.
+        (@shardul0701 on #392.)
+        """
+        out = self._book(method, instrument=instrument)
+        if out.get("LNG") is None or out.get("SRT") is None:
+            pytest.skip("no trade produced")
+        assert out["SRT"] == pytest.approx(out["LNG"], rel=0.01), (
+            method, instrument, out)
+
+    @staticmethod
+    def _kelly_book(instrument="equity", n_hist=12):
+        """A history symbol completes ``n_hist`` round trips (60% winners, +3%
+        / -2%), THEN the long and short legs enter on the same bar -- so both
+        legs size with a trade_log past kelly's 10-trade threshold. The
+        `_book` frame produces no history, which is why kelly agreed there."""
         from unittest.mock import patch
-        import logging
         import helpers.portfolio_simulations as ps
-        df = _frame([
-            ("2024-01-02", 100, 105,  95, 100),
-            ("2024-01-03", 100, 101,  99, 100),
-            ("2024-01-04", 100, 101,  99, 100),
-        ])
-        with patch.dict(ps.CONFIG, {"position_sizing_method": "risk_parity"}):
-            with caplog.at_level(logging.WARNING):
-                ps.run_portfolio_simulation(
-                    portfolio_data={"TEST": df},
-                    signals={"TEST": pd.Series([1, 0, 0], index=df.index)},
-                    initial_capital=100_000.0, allocation_pct=0.5,
-                    spy_df=None, vix_df=None, tnx_df=None,
-                    stop_config={"type": "none"},
-                )
-        assert not any("#372" in r.message for r in caplog.records)
+        lng, srt = TestShortSideHonoursTheSizingMethod.SYMS[instrument]
+        dates = pd.bdate_range("2024-01-02", periods=3 * n_hist + 4)
+        his_px, his_sig = [], []
+        for i in range(n_hist):
+            up = (i % 5) not in (1, 3)              # 3 of every 5 win
+            his_px += [100.0, 100.0, 103.0 if up else 98.0]
+            his_sig += [1, -1, 0]
+        his_px += [100.0] * 4
+        his_sig += [0] * 4
+        his = pd.DataFrame({"Open": his_px, "High": [p * 1.001 for p in his_px],
+                            "Low": [p * 0.999 for p in his_px], "Close": his_px,
+                            "Volume": [1_000_000] * len(dates)}, index=dates)
+        his["ATR_14"], his["ATR_14_pct"], his["RSI_14"] = 1.0, 0.01, 50.0
+        his["SMA_200"] = his["Close"]
+        flat = his.copy()
+        for c in ("Open", "Close"):
+            flat[c] = 100.0
+        flat["High"], flat["Low"] = 101.0, 99.0
+        k = 3 * n_hist + 1                           # entry signal bar
+        sig_l = pd.Series(0, index=dates); sig_l.iloc[k] = 1
+        sig_s = pd.Series(0, index=dates); sig_s.iloc[k] = -2
+        base = {"position_sizing_method": "kelly", "kelly_fraction": 0.25,
+                "max_portfolio_heat": 1.0, "max_pct_adv": 0.0}
+        if instrument == "futures":
+            base["instruments"] = {
+                "default_asset_class": "equity",
+                "futures_initial_margin_pct": 0.10,
+                "futures_commission_per_contract": 0.0,
+                "futures_slippage_ticks": 0.0, "overrides": {}}
+        with patch.dict(ps.CONFIG, base):
+            res = ps.run_portfolio_simulation(
+                portfolio_data={"HIS": his, lng: flat, srt: flat.copy()},
+                signals={"HIS": pd.Series(his_sig, index=dates),
+                         lng: sig_l, srt: sig_s},
+                initial_capital=100_000.0, allocation_pct=0.10,
+                spy_df=None, vix_df=None, tnx_df=None,
+                stop_config={"type": "none"})
+        log = res["trade_log"]
+        by_sym = {t["Symbol"]: float(t["Shares"]) for t in log}
+        return len([t for t in log if t["Symbol"] == "HIS"]), \
+            by_sym.get(lng), by_sym.get(srt)
 
-    @pytest.mark.parametrize("label,sig", [
-        ("long entry then long EXIT", [1, 0, -1]),
-        ("long entry then SCALED partial exit", [1, 0, -0.5]),
+    @pytest.mark.parametrize("instrument", ["equity", "futures"])
+    def test_kelly_short_leg_reads_the_trade_record(self, instrument):
+        """@shardul0701 on #392: kelly was dispatched on both short legs but
+        never SUPPLIED win_rate / avg_win / avg_loss, so past ten trades the
+        long sized off the record and the short stayed pinned at the fixed
+        fallback. Two assertions, because agreement alone is what hid it:
+        the legs agree, AND the long is not the fallback size (so the stats
+        actually reached the sizer and the agreement is not both degrading)."""
+        n_his, lng, srt = self._kelly_book(instrument)
+        assert n_his >= 10, n_his
+        assert lng is not None and srt is not None, (lng, srt)
+        assert srt == pytest.approx(lng, rel=0.01), (instrument, lng, srt)
+        # Fixed fallback is allocation_pct of equity; kelly here is ~8%.
+        fallback = self._book("fixed", instrument=instrument)["LNG"]
+        assert lng < fallback * 0.95, (
+            f"long sized {lng} vs fixed {fallback}: kelly stats never applied")
+
+    # One symbol, one direction per run, zero costs: the cleanest long-vs-short
+    # comparison, used for the size_mults-order and heat-gate cases below.
+    @staticmethod
+    def _one_leg(sym, sig_val, method, stop, cfg=None, mult=None, atr=1.0):
+        from unittest.mock import patch
+        import helpers.portfolio_simulations as ps
+        idx = pd.bdate_range("2024-01-02", periods=6)
+        df = pd.DataFrame({"Open": 100.0, "High": 101.0, "Low": 99.0,
+                           "Close": 100.0, "Volume": 1_000_000}, index=idx)
+        df.iloc[0, df.columns.get_loc("High")] = 110.0
+        df.iloc[0, df.columns.get_loc("Low")] = 90.0
+        df["ATR_14"], df["ATR_14_pct"], df["RSI_14"] = atr, atr / 100, 50.0
+        df["SMA_200"] = df["Close"]
+        sig = pd.Series(0, index=idx); sig.iloc[0] = sig_val; sig.iloc[4] = -1
+        base = {"position_sizing_method": method, "target_risk_per_trade": 0.004,
+                "risk_pct_per_trade": 0.01, "max_contracts_cap": 20,
+                "fixed_contracts_per_trade": 3, "max_portfolio_heat": 1.0,
+                "max_pct_adv": 0.0, "slippage_pct": 0.0,
+                "commission_per_share": 0.0, "volume_impact_coeff": 0.0,
+                "execution_time": "open",
+                "instruments": {"default_asset_class": "equity",
+                                "futures_initial_margin_pct": 0.10,
+                                "futures_commission_per_contract": 0.0,
+                                "futures_slippage_ticks": 0.0, "overrides": {}}}
+        base.update(cfg or {})
+        mults = ({sym: pd.Series(mult, index=idx, dtype=float)}
+                 if mult is not None else None)
+        with patch.dict(ps.CONFIG, base):
+            res = ps.run_portfolio_simulation(
+                {sym: df}, {sym: sig}, 100_000.0, 0.10, None, None, None,
+                stop, size_mults=mults)
+        for t in (res or {}).get("trade_log", []):
+            return float(t["Shares"]), t.get("PosSizeMult")
+        return None, None
+
+    @pytest.mark.parametrize("atr,mult", [
+        (205.0, 0.6),   # fractional contracts: floor(floor(x)*m) < floor(x*m)
+        (0.2, 0.5),     # free-margin clamp binds at mult 1.0 but not at 0.5
     ])
-    def test_a_long_only_book_that_exits_does_not_warn(self, caplog, label, sig):
-        """The discriminator is -2, not "negative".
+    def test_futures_size_mults_apply_where_the_long_applies_them(self, atr, mult):
+        """The futures short first applied size_mults AFTER the margin clamp
+        and round_units; the long applies it to the raw sized answer. Measured
+        by adversarial QA on #392: LONG 2 / SHORT 1 and LONG 2000 / SHORT 1000
+        contracts on these two inputs."""
+        none = {"type": "none"}
+        L, _ = self._one_leg("MESM6", 1, "vol_parity", none, mult=mult, atr=atr)
+        S, s_mult = self._one_leg("MESM6", -2, "vol_parity", none, mult=mult, atr=atr)
+        assert L is not None and S == L, (L, S)
+        assert s_mult == mult   # and the short row records the multiplier
 
-        `-1` is *exit long* as well as *cover short*, and `-1 < s < 0` is a
-        scaled partial exit (v1.11.0) -- so a guard keyed on `s < 0` is true
-        for any long book the moment it closes a position. An AST walk over
-        helpers/indicators.py counts 39 signal functions emitting -1 against
-        exactly 2 emitting -2, so `s < 0` matches ~95% of the shipped signal
-        logic and is short-specific for none of it.
+    @pytest.mark.parametrize("sym,method,heat", [
+        # equity short used the target_risk proxy where the long used the
+        # real 5% stop: LONG rejected, SHORT admitted 80 shares
+        ("LNG", "risk_parity", 0.003),
+        ("LNG", "risk_pct_capped", 0.003),
+        # Futures: the short uses the REAL stop risk (#331), the long the
+        # target_risk proxy -- LONG 200 admitted, SHORT rejected. The long is
+        # the wrong side; fixing it moves long numbers, so it is #467.
+        pytest.param("MESM6", "fixed", 0.005, marks=pytest.mark.xfail(
+            strict=True, reason="#467: futures long heat uses the proxy")),
+        pytest.param("MESM6", "kelly", 0.005, marks=pytest.mark.xfail(
+            strict=True, reason="#467: futures long heat uses the proxy")),
+    ])
+    def test_heat_gate_admits_the_same_position_either_way(self, sym, method, heat):
+        pct5 = {"type": "percentage", "value": 0.05}
+        cfg = {"max_portfolio_heat": heat}
+        L, _ = self._one_leg(sym, 1, method, pct5, cfg)
+        S, _ = self._one_leg(sym, -2, method, pct5, cfg)
+        assert (L is None) == (S is None), (method, heat, L, S)
+        if L is not None:
+            assert S == pytest.approx(L, rel=0.01)
 
-        `[1, 0, 0]` above is the one long-only shape that does NOT trip it --
-        a book that enters and never exits. These two are the shapes real
-        strategies actually produce. @shardul0701 on #375.
-        """
+    @pytest.mark.parametrize("sym,atr,heat,comm", [
+        ("LNG", 1.0, 0.03, 0.0),     # cash clamp binds
+        ("MESM6", 0.2, 1.0, 0.0),    # free-margin clamp binds; diverged at heat 1.0
+    ])
+    def test_heat_gate_runs_before_the_clamp_on_both_legs(self, sym, atr, heat, comm):
+        """The long gates heat on the UNCLAMPED count, then clamps to cash /
+        margin. The shorts gated after clamping, so a method sizing past cash
+        was rejected long and admitted short: LONG None / SHORT 1000 (equity),
+        LONG None / SHORT 2000 (futures). Adversarial QA round 2 on #392."""
+        cfg = {"max_portfolio_heat": heat, "target_risk_per_trade": 0.02,
+               "instruments": {"default_asset_class": "equity",
+                               "futures_initial_margin_pct": 0.10,
+                               "futures_commission_per_contract": comm,
+                               "futures_slippage_ticks": 0.0, "overrides": {}}}
+        none = {"type": "none"}
+        L, _ = self._one_leg(sym, 1, "vol_parity", none, cfg, atr=atr)
+        S, _ = self._one_leg(sym, -2, "vol_parity", none, cfg, atr=atr)
+        assert L == S, (L, S)
+
+    def test_margin_bound_futures_shrink_by_margin_plus_commission(self):
+        """With commission, the futures short SKIPPED a margin-bound entry
+        instead of shrinking it (LONG 1800 / SHORT none, QA round 3 on #392),
+        and the two legs then disagreed on the shrink (1800 / 1900). Both now
+        take the largest count whose margin AND commission fit:
+        floor(100,000 / (50 + 2.50)) = 1904."""
+        cfg = {"instruments": {"default_asset_class": "equity",
+                               "futures_initial_margin_pct": 0.10,
+                               "futures_commission_per_contract": 2.50,
+                               "futures_slippage_ticks": 0.0, "overrides": {}}}
+        none = {"type": "none"}
+        L, _ = self._one_leg("MESM6", 1, "vol_parity", none, cfg, atr=0.2)
+        S, _ = self._one_leg("MESM6", -2, "vol_parity", none, cfg, atr=0.2)
+        assert (L, S) == (1904.0, 1904.0)
+
+    def test_futures_short_registers_real_stop_risk(self):
+        """A 5%-stop MES short at 200 contracts risks 5% of equity and must
+        REGISTER 5% for later entries. The follower is a futures long whose own
+        heat risk is the 2% proxy (#467), so the outcome turns only on what the
+        short registered: real 5% + 2% > 6% cap -> rejected; the target_risk
+        proxy 2% + 2% -> admitted. (QA round 3: the first version used a second
+        5%-stop short, which its own risk rejected either way, so registering
+        the proxy passed it.)"""
         from unittest.mock import patch
-        import logging
         import helpers.portfolio_simulations as ps
-        df = _frame([
-            ("2024-01-02", 100, 105,  95, 100),
-            ("2024-01-03", 100, 101,  99, 100),
-            ("2024-01-04", 100, 101,  99, 100),
-        ])
-        with patch.dict(ps.CONFIG, {"position_sizing_method": "risk_parity"}):
-            with caplog.at_level(logging.WARNING):
-                ps.run_portfolio_simulation(
-                    portfolio_data={"TEST": df},
-                    signals={"TEST": pd.Series(sig, index=df.index)},
-                    initial_capital=100_000.0, allocation_pct=0.5,
-                    spy_df=None, vix_df=None, tnx_df=None,
-                    stop_config={"type": "none"},
-                )
+        idx = pd.bdate_range("2024-01-02", periods=6)
+        data, sigs = {}, {}
+        for sym in ("MESM6", "MESZ6"):
+            df = pd.DataFrame({"Open": 100.0, "High": 101.0, "Low": 99.0,
+                               "Close": 100.0, "Volume": 1_000_000}, index=idx)
+            df["ATR_14"], df["ATR_14_pct"], df["RSI_14"] = 1.0, 0.01, 50.0
+            df["SMA_200"] = df["Close"]
+            sig = pd.Series(0, index=idx)
+            if sym == "MESM6":
+                sig.iloc[0] = -2      # short first
+            else:
+                sig.iloc[1] = 1       # long follows, while the short is open
+            sig.iloc[4] = -1
+            data[sym], sigs[sym] = df, sig
+        cfg = {"position_sizing_method": "fixed", "target_risk_per_trade": 0.02,
+               "max_portfolio_heat": 0.06, "max_pct_adv": 0.0,
+               "slippage_pct": 0.0, "execution_time": "open",
+               "instruments": {"default_asset_class": "equity",
+                               "futures_initial_margin_pct": 0.10,
+                               "futures_commission_per_contract": 0.0,
+                               "futures_slippage_ticks": 0.0, "overrides": {}}}
+        with patch.dict(ps.CONFIG, cfg):
+            res = ps.run_portfolio_simulation(
+                data, sigs, 100_000.0, 0.10, None, None, None,
+                {"type": "percentage", "value": 0.05})
+        opened = [(t["Symbol"], t["Shares"]) for t in res["trade_log"]]
+        assert opened == [("MESM6", 200.0)], opened
+
+    def test_fixed_contracts_no_longer_diverges_33x(self):
+        """The widest of the five, and the one the banner originally excluded
+        because it reads as a fixed method by name."""
+        out = self._book("fixed_contracts")
+        if "SRT" not in out:
+            pytest.skip("no trade produced")
+        assert out["SRT"] == pytest.approx(3.0), out
+
+    def test_size_mults_scales_both_legs(self):
+        """`size_mults` is a public parameter the long path honoured at three
+        sites and the short path at none, so a 0.5x band scaled one leg of a
+        long/short book and not the other. Nothing in-repo passes it, so
+        nothing caught it."""
+        full = self._book("fixed", size_mult=1.0)
+        half = self._book("fixed", size_mult=0.5)
+        if not full or not half:
+            pytest.skip("no trade produced")
+        assert half["LNG"] == pytest.approx(full["LNG"] * 0.5, rel=0.01)
+        assert half["SRT"] == pytest.approx(full["SRT"] * 0.5, rel=0.01), (
+            "short leg still drops size_mults")
+
+    def test_the_372_banner_is_gone(self, caplog):
+        """It described a gap that no longer exists. Asserted rather than
+        assumed, because the whole point of retiring it is that a stale warning
+        costs a reader more than a missing one."""
+        import logging
+        with caplog.at_level(logging.WARNING):
+            self._book("vol_parity")
         assert not any("#372" in r.message for r in caplog.records), (
-            f"{label}: warned on a long-only book -> {[r.message for r in caplog.records]}")
+            [r.message for r in caplog.records])
 
-    def test_a_futures_short_book_does_NOT_warn(self, caplog):
-        """The gap is the equity `cash_full` branch. The FUTURES short leg does
-        dispatch on position_sizing_method, so both legs agree there and the
-        banner was a false alarm:
-
-            futures, fixed_contracts   LONG 1.0   SHORT 1.0   banner fired
-
-        `_has_shorts` scanned for -2 and never consulted margin_mode. A futures
-        user reading "sized by two different methods depending on direction"
-        would go hunting for an inconsistency that isn't there.
-        @shardul0701 on #381.
-        """
-        from unittest.mock import patch
-        import logging
+    def test_the_dedup_set_is_gone_too(self):
+        """The set and its autouse fixture go with the banner. If the set comes
+        back without the warning, this is the test that says so."""
         import helpers.portfolio_simulations as ps
-        df = _frame([
-            ("2024-01-02", 5000, 5050, 4950, 5000),
-            ("2024-01-03", 5000, 5050, 4950, 5000),
-            ("2024-01-04", 5000, 5050, 4950, 5000),
-        ])
-        ovr = {"instruments": {"overrides": {"ESZ6": {
-            "asset_class": "future", "point_value": 20.0, "tick_size": 0.25,
-            "margin_mode": "initial_margin", "initial_margin": 20000.0,
-            "integer_units": True, "borrow_applies": False}}},
-            "position_sizing_method": "fixed_contracts",
-            "fixed_contracts_per_trade": 1}
-        with patch.dict(ps.CONFIG, ovr):
-            with caplog.at_level(logging.WARNING):
-                ps.run_portfolio_simulation(
-                    portfolio_data={"ESZ6": df},
-                    signals={"ESZ6": pd.Series([-2, 0, 0], index=df.index)},
-                    initial_capital=200_000.0, allocation_pct=0.5,
-                    spy_df=None, vix_df=None, tnx_df=None,
-                    stop_config={"type": "none"})
-        assert not any("#372" in r.message for r in caplog.records), \
-            [r.message for r in caplog.records]
-
-    def test_a_MIXED_book_still_warns_for_the_equity_short(self, caplog):
-        """The row that separates a per-symbol gate from a whole-book one.
-
-        A futures-only book is the easy case. The way this gate goes wrong is
-        MIXED: collapse the book to a single instrument class and an equity
-        short sitting beside a futures short gets silenced -- turning the
-        false-positive fix into a false-NEGATIVE on the real gap.
-
-        `_has_shorts` evaluates `margin_mode` per symbol inside the `any()`,
-        so it doesn't. Both shapes pass every other test in this class, which
-        is why this one exists. @shardul0701 on #381.
-        """
-        from unittest.mock import patch
-        import logging
-        import helpers.portfolio_simulations as ps
-        fut = _frame([
-            ("2024-01-02", 5000, 5050, 4950, 5000),
-            ("2024-01-03", 5000, 5050, 4950, 5000),
-            ("2024-01-04", 5000, 5050, 4950, 5000),
-        ])
-        eq = _frame([
-            ("2024-01-02", 100, 105,  95, 100),
-            ("2024-01-03", 100, 101,  99, 100),
-            ("2024-01-04", 100, 101,  99, 100),
-        ])
-        ovr = {"instruments": {"overrides": {"ESZ6": {
-            "asset_class": "future", "point_value": 20.0, "tick_size": 0.25,
-            "margin_mode": "initial_margin", "initial_margin": 20000.0,
-            "integer_units": True, "borrow_applies": False}}},
-            "position_sizing_method": "fixed_contracts",
-            "fixed_contracts_per_trade": 1}
-        with patch.dict(ps.CONFIG, ovr):
-            with caplog.at_level(logging.WARNING):
-                ps.run_portfolio_simulation(
-                    portfolio_data={"ESZ6": fut, "TEST": eq},
-                    signals={"ESZ6": pd.Series([-2, 0, 0], index=fut.index),
-                             "TEST": pd.Series([-2, 0, 0], index=eq.index)},
-                    initial_capital=200_000.0, allocation_pct=0.5,
-                    spy_df=None, vix_df=None, tnx_df=None,
-                    stop_config={"type": "none"})
-        assert any("#372" in r.message for r in caplog.records), (
-            "a mixed book with an EQUITY short must still warn; the gate "
-            "collapsed to book level")
-
-    def test_fixed_contracts_DOES_warn_with_shorts(self, caplog):
-        """`fixed_contracts` reads as a fixed method by name and is not one.
-
-        The equity short leg implements neither `fixed_contracts` nor any other
-        non-default method -- it sizes as alloc/fill unconditionally -- so a
-        run configured for 3 contracts takes 3 shares long and ~100 short. That
-        is the WIDEST divergence of the five methods (33x) and it was the one
-        configuration excluded from the banner. @shardul0701 on #381.
-        """
-        from unittest.mock import patch
-        import logging
-        import helpers.portfolio_simulations as ps
-        df = _frame([
-            ("2024-01-02", 100, 105,  95, 100),
-            ("2024-01-03", 100, 101,  99, 100),
-            ("2024-01-04", 100, 101,  99, 100),
-        ])
-        with patch.dict(ps.CONFIG, {"position_sizing_method": "fixed_contracts",
-                                    "fixed_contracts_per_trade": 3}):
-            with caplog.at_level(logging.WARNING):
-                ps.run_portfolio_simulation(
-                    portfolio_data={"TEST": df},
-                    signals={"TEST": pd.Series([-2, 0, 0], index=df.index)},
-                    initial_capital=100_000.0, allocation_pct=0.5,
-                    spy_df=None, vix_df=None, tnx_df=None,
-                    stop_config={"type": "none"})
-        assert any("#372" in r.message or "LONG side only" in r.message
-                   for r in caplog.records), [r.message for r in caplog.records]
-
-    def test_fixed_sizing_does_not_warn_even_with_shorts(self):
-        """`fixed` is honoured identically on both sides, so there is nothing
-        to warn about."""
-        from unittest.mock import patch
-        import logging
-        import helpers.portfolio_simulations as ps
-        import io
-        df = _frame([
-            ("2024-01-02", 100, 105,  95, 100),
-            ("2024-01-03", 100, 101,  99, 100),
-        ])
-        stream = io.StringIO()
-        h = logging.StreamHandler(stream)
-        ps.logger.addHandler(h)
-        try:
-            with patch.dict(ps.CONFIG, {"position_sizing_method": "fixed"}):
-                ps.run_portfolio_simulation(
-                    portfolio_data={"TEST": df},
-                    signals={"TEST": pd.Series([-2, 0], index=df.index)},
-                    initial_capital=100_000.0, allocation_pct=0.5,
-                    spy_df=None, vix_df=None, tnx_df=None,
-                    stop_config={"type": "none"},
-                )
-        finally:
-            ps.logger.removeHandler(h)
-        assert "#372" not in stream.getvalue()
+        assert not hasattr(ps, "_WARNED_SHORT_SIZING")

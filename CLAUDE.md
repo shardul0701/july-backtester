@@ -647,11 +647,11 @@ A short, wide banner figure (`figsize=(10, 3), dpi=150`) that shows the full dra
 | `-2` | Enter short (on a bar already short: hold — `-2` never covers). Also exits a long. `1` does NOT cover a short, so a short→long flip needs a `-1` bar first |
 
 - **Borrow cost**: `htb_rate_annual` (config, default `0.02`) converted to a daily compound rate `(1 + annual)^(1/252) - 1` and debited from cash each day a short is held. Set to `0.0` to disable.
-- **Three new blocks in the daily loop** (all additive — no long-path code changed):
+- **Short handling in the daily loop:**
   1. **Borrow cost debit**: iterates `short_positions`, subtracts `notional × htb_rate_daily` from cash and accumulates `spos['total_borrow_cost']`.
   2. **Short cover**: on a negative signal other than `-2` for a held short, fills at Open/Close + slippage, deducts commission both sides, nets `total_borrow_cost` out of profit, logs to `trade_log`.
-  3. **Short entry**: on signal `== -2`, skips if `symbol in positions or symbol in short_positions`, allocates `min(total_equity × allocation_pct, cash)`, receives proceeds into cash.
-- **Short trades in `trade_log`**: `Trade: "Short N"`, `ExitReason: "Short Cover"`. `RMultiple` is `None` for shorts (initial risk undefined without a stop).
+  3. **Short entry**: on signal `== -2`, skips if `symbol in positions or symbol in short_positions`, sizes via `calculate_position_size` with the configured `position_sizing_method` and `size_mults` exactly as the long leg does (#386; subject to cash or margin limits), charges entry commission; short proceeds and the liability offset each other in cash accounting.
+- **Short trades in `trade_log`**: `Trade: "Short N"`, `ExitReason: "Short Cover"`. `RMultiple` uses the initial stop risk when available and is `None` otherwise.
 - **Equity MTM for shorts**: `current_market_value += (shares × entry_price) − (shares × current_close)` — profit when price falls.
 - **Backward compatibility**: all existing 1/0/−1 strategies skip all three new blocks entirely (`short_positions` is always empty for them).
 - **Tests**: `tests/test_short_selling.py` — 7 tests covering config defaults, daily-rate arithmetic, 30-day cost estimate, and no-regression empty-shorts loop.

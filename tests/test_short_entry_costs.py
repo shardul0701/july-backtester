@@ -57,8 +57,12 @@ class TestEquityShortSlippage:
         row = pd.DataFrame(res["trade_log"]).iloc[0]
         # ep = 100 (bar1 close); sell fill = 100 * (1 - 0.01) = 99.0. Was 100.0.
         assert row["EntryPrice"] == pytest.approx(99.0)
-        # Share count sizes off the SLIPPED fill, not the raw price.
-        assert row["Shares"] == pytest.approx(100_000.0 / 99.0)
+        # Share count sizes off the SLIPPED fill, not the raw price. Cash binds
+        # here (allocation 1.0), and since #386 the short's cash clamp includes
+        # commission exactly as the long's affordability step does.
+        from helpers.portfolio_simulations import CONFIG as _C
+        _comm = _C.get("commission_per_share", 0.0) or 0.0
+        assert row["Shares"] == pytest.approx(100_000.0 / (99.0 + _comm))
 
     def test_zero_slippage_leaves_entry_at_raw_price(self, monkeypatch):
         df = _frame()
