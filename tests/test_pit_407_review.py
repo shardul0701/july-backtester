@@ -1,5 +1,5 @@
 # tests/test_pit_407_review.py
-"""Regression tests for the #407 review of the #158 PIT -> parquet resolver.
+"""Regression tests for the #407 review of the PIT -> parquet resolver.
 
 Each class pins one finding, measured against the real corpus and rosters
 (2004-01-01 .. 2026-09-28) and reproduced here on a synthetic corpus:
@@ -115,6 +115,26 @@ class TestOverrides:
         # after the window, ordinary resolution: only live ES covers 2020
         assert resolve_security_id("ES", "2020-06-30", m)[0] == "ES"
 
+    def test_retired_override_target_follows_corpus_storage_rename(self, monkeypatch):
+        monkeypatch.setitem(pit.PIT_PARQUET_SECURITY_OVERRIDES, "OLD",
+                            [("2004-01-01", "2026-12-31", "MIDDLE")])
+        m = _map([("FINAL", "1990-01-02", "2026-09-28")])
+        assert resolve_security_id(
+            "OLD", "2010-06-30", m, corpus_renames={"MIDDLE": "FINAL"}
+        )[0] == "FINAL"
+
+    def test_retired_override_target_still_fails_when_renamed_file_has_no_bars(self, monkeypatch):
+        monkeypatch.setitem(pit.PIT_PARQUET_SECURITY_OVERRIDES, "OLD",
+                            [("2004-01-01", "2026-12-31", "MIDDLE")])
+        m = _map([("FINAL", "2020-01-02", "2026-09-28")])
+        assert resolve_security_id(
+            "OLD", "2010-06-30", m, corpus_renames={"MIDDLE": "FINAL"}
+        )[0] is None
+
+    def test_jc_penney_uses_its_bankruptcy_security(self):
+        m = _map([("CPPRQ-202102", "1990-01-02", "2021-02-01")])
+        assert resolve_security_id("JCP", "2010-06-30", m)[0] == "CPPRQ-202102"
+
     def test_every_override_window_is_ordered_and_names_a_security(self):
         for ticker, windows in pit.PIT_PARQUET_SECURITY_OVERRIDES.items():
             for start, end, target in windows:
@@ -193,3 +213,72 @@ def test_unresolvable_member_still_aborts(tmp_path):
     with pytest.raises(PitResolutionError) as exc:
         build_membership_schedule("nq100", "2010-01-04", "2010-12-31", cfg)
     assert {f[0] for f in exc.value.failures} == {"GHOST"}
+
+
+class TestCorpusRenames:
+    """The corpus's _renames.json (norgate-data#16/#18) resolves retired tickers."""
+
+    def _renames(self, tmp_path, entries):
+        (tmp_path / "corpus").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "corpus" / "_renames.json").write_text(__import__("json").dumps(entries))
+
+    def test_renamed_ticker_resolves_historically_to_the_merged_file(self, tmp_path):
+        # After the repair BNY.parquet holds BK's whole history and BK.parquet is gone.
+        _write_parquet(tmp_path / "corpus", "BNY", "1990-01-02", "2026-09-28")
+        self._renames(tmp_path, [{"old": "BK", "new": "BNY", "date": "2026-05-21"}])
+        _write_nq_yaml(tmp_path / "nq_repo", 2010, ["BK"], quote=True)
+        cfg = _cfg(tmp_path, "2010-01-04", "2010-12-31")
+        schedule = build_membership_schedule("nq100", "2010-01-04", "2010-12-31", cfg)
+        assert pit_members_on(schedule, "2010-06-01") == frozenset({"BNY"})
+        # BNY is the storage security ID. The as-of roster identity remains BK;
+        # the future ticker was not injected into the historical membership.
+        assert schedule.roster_tickers == {"BNY": {"BK"}}
+
+    def test_rename_is_identity_continuity_not_a_forced_exit(self):
+        candidates = _map([("BNY", "1990-01-02", "2026-09-28")])
+        renames = {"BK": "BNY"}
+        failures = []
+        roster_tickers = {}
+        before = pit.resolve_members_to_securities(
+            {"BK"}, "2026-05-20", candidates, failures, roster_tickers, renames
+        )
+        after = pit.resolve_members_to_securities(
+            {"BNY"}, "2026-05-21", candidates, failures, roster_tickers, renames
+        )
+        schedule = SecuritySchedule(
+            [("2026-05-20", before), ("2026-05-21", after)], roster_tickers
+        )
+        assert failures == []
+        assert schedule.roster_tickers == {"BNY": {"BK", "BNY"}}
+        assert security_intervals(schedule, "2026-06-30") == {
+            "BNY": [(pd.Timestamp("2026-05-20"), pd.Timestamp("2026-06-30"))]
+        }
+
+    def test_storage_map_cannot_add_a_company_absent_from_the_roster(self):
+        candidates = _map([
+            ("BNY", "1990-01-02", "2026-09-28"),
+            ("MSFT", "1990-01-02", "2026-09-28"),
+        ])
+        resolved = pit.resolve_members_to_securities(
+            {"MSFT"}, "2010-06-01", candidates, [], corpus_renames={"BK": "BNY"}
+        )
+        assert resolved == frozenset({"MSFT"})
+
+    def test_chains_are_followed(self, tmp_path):
+        self._renames(tmp_path, [{"old": "A", "new": "B", "date": "2026-05-01"},
+                                 {"old": "B", "new": "C", "date": "2026-07-01"}])
+        assert pit.load_corpus_renames(_cfg(tmp_path, "2010-01-04", "2010-12-31"))["A"] == "C"
+
+    def test_stale_duplicate_maps_to_its_dated_security(self):
+        m = _map([("SEE-202604", "1990-01-02", "2026-04-08")])
+        assert resolve_security_id("SEE", "2015-06-30", m,
+                                   corpus_renames={"SEE": "SEE-202604"})[0] == "SEE-202604"
+
+    def test_no_file_means_no_renames(self, tmp_path):
+        assert pit.load_corpus_renames(_cfg(tmp_path, "2010-01-04", "2010-12-31")) == {}
+
+    def test_raw_ticker_still_wins_when_it_has_its_own_file(self):
+        # A retired ticker later reused by a new company: dates the new file covers go to it.
+        m = _map([("BK", "2027-01-04", "2027-06-30"), ("BNY", "1990-01-02", "2026-09-28")])
+        assert resolve_security_id("BK", "2027-03-01", m, corpus_renames={"BK": "BNY"})[0] == "BK"
+        assert resolve_security_id("BK", "2010-03-01", m, corpus_renames={"BK": "BNY"})[0] == "BNY"

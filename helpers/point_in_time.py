@@ -19,7 +19,7 @@ build_membership_schedule(index, start_date, end_date, config)
 pit_members_on(schedule, date)
     Binary-search the schedule for membership on an ISO date string.
 
-Parquet security-ID resolution (issue #158)
+Parquet security-ID resolution (#407)
 -------------------------------------------
 ``pit:`` membership is expressed in *bare tickers*. The Norgate Parquet corpus
 keys delisted securities as ``TICKER-YYYYMM``, so a bare ticker is not a stable
@@ -128,7 +128,7 @@ def _raw_pit_ticker(symbol: str, date: str | None = None) -> str:
     Used instead of :func:`normalise_pit_ticker` under the parquet provider: the
     security resolver needs the *historical* ticker (``SYMC`` in 2008), because
     aliasing it to today's ticker first (``GEN``) makes the tenure rule pick
-    whoever held ``GEN`` back then -- GenOn, not Symantec (issue #158 review).
+    whoever held ``GEN`` back then -- GenOn, not Symantec (#407 review).
     Share-class punctuation is also kept, since the corpus spells it ``BRK.B``.
     """
     return str(symbol).strip().upper()
@@ -299,7 +299,7 @@ def tickers_union_for_period(
     list[str]
         Sorted list of unique tickers, or — when
         ``config["data_provider"] == "parquet"`` — of parquet **security IDs**
-        (see the module docstring and issue #158).
+        (see the module docstring and #407).
 
     Raises
     ------
@@ -308,7 +308,7 @@ def tickers_union_for_period(
         single security. Every offender is listed.
     """
     # Parquet: derive the union FROM the schedule rather than resolving the raw
-    # YAML union. A union entry carries no date, and the whole point of #158 is
+    # YAML union. A union entry carries no date, and the whole point of #407 is
     # that a bare ticker means nothing without one. Deriving it from the
     # schedule also makes the two agree by construction — a union of security
     # IDs masked against a schedule of bare tickers (or vice versa) would mask
@@ -366,7 +366,7 @@ def build_membership_schedule(
         ``config["data_provider"] == "parquet"`` the frozensets hold parquet
         **security IDs** resolved as of each snapshot's own date, so a ticker
         that changed hands resolves to the company that actually held it then
-        (see the module docstring and issue #158).
+        (see the module docstring and #407).
 
     Raises
     ------
@@ -447,7 +447,7 @@ def pit_members_on(schedule: list[tuple[str, frozenset]], date: str) -> frozense
 
 
 # ---------------------------------------------------------------------------
-# Parquet security-ID resolution (issue #158)
+# Parquet security-ID resolution (#407)
 # ---------------------------------------------------------------------------
 #
 # WHY THIS LIVES HERE AND NOT IN THE LOADER
@@ -522,7 +522,7 @@ def _format_pit_failures(failures) -> str:
         f"{len(by_ticker)} point-in-time member(s) could not be resolved to a "
         f"single parquet security. The run is aborted rather than dropping or "
         f"substituting them, because both silently reintroduce survivorship "
-        f"bias (issue #158).",
+        f"bias (#407).",
         "",
     ]
     for ticker in sorted(by_ticker):
@@ -667,6 +667,7 @@ PIT_PARQUET_SECURITY_OVERRIDES: dict[str, list[tuple[str, str, str]]] = {
     "SHLD": [(*_ALL, "SHLDQ-202210")],
     "TUP": [(*_ALL, "TUPBQ-202506")],
     "WIN": [(*_ALL, "WINMQ-202009")],
+    "JCP": [(*_ALL, "CPPRQ-202102")],                 # J.C. Penney; full history is under bankruptcy ticker
     # renames / successors that keep the history under another ticker
     "ARNC": [("2004-01-01", "2020-04-01", "HWM")],        # Alcoa Inc -> Arconic -> Howmet
     "CBS": [(*_ALL, "PSKY")],                              # CBS -> ViacomCBS -> Paramount
@@ -689,8 +690,9 @@ PIT_PARQUET_SECURITY_OVERRIDES: dict[str, list[tuple[str, str, str]]] = {
     "RHAT": [(*_ALL, "RHT-201907")],
     "DISCK": [("2005-07-06", "2008-09-17", "WBD")],       # Discovery Holding, before the C class listed
     "LMCA": [("2012-12-01", "2013-01-31", "LMCA-201604")],  # listed 17 days after the index add
-    # corpus defect, not a roster issue: the refresh split BK into a new BNY
-    # file on the 2026-05-21 rename (norgate-data#11). Remove once repaired.
+    # BK -> BNY (2026-05-21). Needed while the corpus held the rename as two
+    # files (norgate-data#16); once repaired, BNY holds BK's whole history and
+    # _renames.json resolves earlier dates too, so this stays correct either way.
     "BK": [("2026-05-21", "2026-12-31", "BNY")],
 }
 
@@ -699,6 +701,40 @@ PIT_PARQUET_SECURITY_OVERRIDES: dict[str, list[tuple[str, str, str]]] = {
 # up to a week (HES, RTN, NBL, AMCR, KHC, CTRX in the #407 review). Inside this
 # window a SINGLE nearby candidate is accepted; more than one still aborts.
 PIT_RESOLUTION_LAG_DAYS = 10
+
+
+def load_corpus_renames(config: dict | None) -> dict[str, str]:
+    """``{retired ticker: security that now holds its history}`` from the corpus.
+
+    The parquet corpus records every ticker it retired in ``_renames.json``
+    (zachisit/july-backtester-norgate-data#16, #18): a rename merges the history
+    under the new ticker (``BK -> BNY``), and a stale duplicate maps to its dated
+    security (``SEE -> SEE-202604``). Chains are followed to the end
+    (``A -> B``, ``B -> C`` gives ``A -> C``). Absent or unreadable file -> ``{}``.
+    This is a **storage-location map**, not membership data. The dated roster is
+    still the sole authority for whether the company belongs to the index on a
+    date. Resolving a 2010 ``BK`` row to ``BNY.parquet`` does not put the future
+    ticker BNY into the 2010 roster; :class:`SecuritySchedule.roster_tickers`
+    retains ``BK`` while the engine uses ``BNY`` only as the security/file ID.
+    That distinction also keeps a position continuous across the rename.
+    """
+    import json
+
+    path = os.path.join(_parquet_corpus_dir(config), "_renames.json")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            entries = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    direct = {str(e["old"]).upper(): str(e["new"]) for e in sorted(entries, key=lambda e: e.get("date", ""))}
+    out = {}
+    for old in direct:
+        seen, target = {old}, direct[old]
+        while target.upper() in direct and target.upper() not in seen:
+            seen.add(target.upper())
+            target = direct[target.upper()]
+        out[old] = target
+    return out
 
 
 def _ticker_spellings(ticker: str) -> list[str]:
@@ -724,7 +760,7 @@ def _describe(candidates) -> list[str]:
 def _resolve_bare(bare: str, when, candidate_map: dict, lag_days: int):
     """Resolve one bare ticker on one date. Returns ``(security | None, candidates)``.
 
-    The original #158 rule -- one covering span wins; several covering spans go
+    The original #407 rule -- one covering span wins; several covering spans go
     to the ticker-tenure tie-break -- plus the lag window for a lone near-miss.
     """
     import pandas as pd
@@ -753,22 +789,29 @@ def _resolve_bare(bare: str, when, candidate_map: dict, lag_days: int):
 
 
 def resolve_security_id(ticker: str, date, candidate_map: dict,
-                        lag_days: int = PIT_RESOLUTION_LAG_DAYS) -> tuple[str | None, list[str]]:
+                        lag_days: int = PIT_RESOLUTION_LAG_DAYS,
+                        corpus_renames: dict | None = None) -> tuple[str | None, list[str]]:
     """Map a roster ticker + membership date to one security ID.
 
     Returns ``(security_id, candidate_descriptions)``; ``security_id`` is
     ``None`` when the member is unresolvable, and the descriptions let the error
     message show the operator *why*.
 
-    Order (issue #158 review on #407):
+    Order (#407 review):
 
     0. **PIT_PARQUET_SECURITY_OVERRIDES**: an explicit, dated, reviewed mapping.
-       If its window covers the date it decides -- and if its target has no bars
-       then, the member fails rather than falling through to a guess.
+       The target follows ``_renames.json`` when the corpus later retires that
+       storage file. If the resulting target has no bars then, the member fails
+       rather than falling through to a guess.
     1. **The raw roster ticker**, in its own spelling and then the other
        share-class punctuation (``BRK.B`` / ``BRK-B``). The ticker the roster
        used *on that date* is the strongest evidence of which security it was.
-    2. **The PIT_TICKER_NORMALISATION alias, only if (1) failed**, preferring the
+    2. **The corpus's own storage-location map** (``_renames.json``, see
+       :func:`load_corpus_renames`): a ticker the corpus retired resolves to the
+       security/file that now holds its history -- the data source's record, so
+       it outranks the hand-kept alias table below. The dated roster still
+       controls membership; this step never adds a member.
+    3. **The PIT_TICKER_NORMALISATION alias, only if (1) and (2) failed**, preferring the
        target's *live bare file*: Norgate back-fills a renamed security's whole
        history under its current ticker, so ``SYMC`` lives in ``GEN.parquet``.
        Going through the tenure rule instead picks whoever held ``GEN`` in 2008
@@ -791,14 +834,18 @@ def resolve_security_id(ticker: str, date, candidate_map: dict,
     # 0. explicit dated override -- validated, never trusted blindly
     for start, end, target in PIT_PARQUET_SECURITY_OVERRIDES.get(raw, ()):
         if pd.Timestamp(start) <= when <= pd.Timestamp(end):
-            bare = parse_security(target)[0]
-            match = [c for c in candidate_map.get(bare, []) if c[0] == target]
+            # Overrides name a security identity, while _renames.json names its
+            # current storage file.  A later corpus rename (PSKY -> SKYD,
+            # IAC -> PPLI) must not invalidate an older reviewed override.
+            storage_target = (corpus_renames or {}).get(target.upper(), target)
+            bare = parse_security(storage_target)[0]
+            match = [c for c in candidate_map.get(bare, []) if c[0] == storage_target]
             seen += match
             # An override is a reviewed decision, so it gets a wider window than
             # the heuristics: LMCA was added to NQ100 17 days before it listed.
             olag = pd.Timedelta(days=31)
             if match and match[0][1] - olag <= when <= match[0][2] + olag:
-                return target, _describe(seen)
+                return storage_target, _describe(seen)
             return None, _describe(seen)
 
     # 1. raw roster ticker, both share-class spellings
@@ -808,7 +855,16 @@ def resolve_security_id(ticker: str, date, candidate_map: dict,
         if sec is not None:
             return sec, _describe(seen)
 
-    # 2. the established alias, live bare file first
+    # 2. the corpus's own record of tickers it retired
+    successor = (corpus_renames or {}).get(raw)
+    if successor:
+        bare = parse_security(successor)[0]
+        exact = [c for c in candidate_map.get(bare, []) if c[0] == successor]
+        seen += exact
+        if exact and exact[0][1] - lag <= when <= exact[0][2] + lag:
+            return successor, _describe(seen)
+
+    # 3. the established alias, live bare file first
     target = PIT_TICKER_NORMALISATION.get(raw.replace(".", "-"))
     if target:
         live = [c for c in candidate_map.get(target, []) if c[0] == target]
@@ -868,7 +924,7 @@ def security_intervals(schedule, end_date: str) -> dict:
 
 
 def resolve_members_to_securities(members, date, candidate_map: dict, failures: list,
-                                  roster_tickers: dict | None = None):
+                                  roster_tickers: dict | None = None, corpus_renames: dict | None = None):
     """Resolve one membership snapshot; append unresolvable members to *failures*.
 
     Does not raise -- the caller collects across the whole schedule and raises
@@ -876,7 +932,8 @@ def resolve_members_to_securities(members, date, candidate_map: dict, failures: 
     """
     resolved = set()
     for ticker in sorted(members):
-        security, candidates = resolve_security_id(ticker, date, candidate_map)
+        security, candidates = resolve_security_id(ticker, date, candidate_map,
+                                                   corpus_renames=corpus_renames)
         if security is None:
             failures.append((str(ticker), str(date)[:10], candidates))
         else:
@@ -893,10 +950,12 @@ def resolve_schedule_to_securities(schedule, config: dict | None):
     once, listing every unresolvable member across every snapshot.
     """
     candidate_map = build_ticker_candidate_map(_load_span_index(config))
+    corpus_renames = load_corpus_renames(config)
     failures: list = []
     roster_tickers: dict[str, set[str]] = {}
     out = SecuritySchedule(
-        [(date, resolve_members_to_securities(members, date, candidate_map, failures, roster_tickers))
+        [(date, resolve_members_to_securities(members, date, candidate_map, failures, roster_tickers,
+                                              corpus_renames))
          for date, members in schedule],
         roster_tickers,
     )
