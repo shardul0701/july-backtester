@@ -128,11 +128,13 @@ all read **one** roster, chosen by the same completeness rule: every yearly YAML
 from 2004 through the backtest's end year (the current year's file is optional,
 since it may not be published yet). A run starting in an unpublished year
 carries forward the latest available roster and its changes. An auto-discovered roster with a missing
-year is skipped with a warning naming that year. If no complete roster is left,
+year or an empty/malformed annual file is skipped with a warning. If no valid,
+complete roster is left,
 the run **aborts** (`PitRosterError`) instead of replaying a timeline whose
 missing years never apply their removals. An explicitly configured
 `SP500_DATA_ROOT` / `NQ100_DATA_ROOT` / `*_pit_path` is used even if incomplete,
-with a warning, because you chose it.
+with a warning, because you chose it. Malformed files in an explicit roster
+abort the run rather than replaying corrupt history.
 
 You can alternatively use the public source repos directly:
 

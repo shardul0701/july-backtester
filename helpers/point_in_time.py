@@ -222,19 +222,25 @@ class PitRosterError(RuntimeError):
     with a missing year never applies that year's removals, so removed members
     stay "in the index" and are never force-exited -- survivorship bias with no
     error. ``incomplete`` lists ``(yaml_dir, missing_years)`` for every roster
-    that was found but rejected; it is empty when no roster exists at all.
+    that was found but rejected. ``invalid`` lists malformed annual files.
+    Both are empty only when no usable YAML roster was found at all.
     """
 
-    def __init__(self, index: str, incomplete: list[tuple[Path, list[int]]]):
+    def __init__(self, index: str, incomplete: list[tuple[Path, list[int]]],
+                 invalid: list[tuple[Path, str]] | None = None):
         self.index = index
         self.incomplete = list(incomplete)
+        self.invalid = list(invalid or [])
         env = "SP500_DATA_ROOT" if index == "sp500" else "NQ100_DATA_ROOT"
-        if incomplete:
+        if incomplete or self.invalid:
             detail = "; ".join(
                 f"{d} is missing {', '.join(map(str, years[:5]))}"
                 f"{' ...' if len(years) > 5 else ''}"
                 for d, years in incomplete
             )
+            invalid_detail = "; ".join(f"{path} is invalid: {why}"
+                                       for path, why in self.invalid)
+            detail = "; ".join(part for part in (detail, invalid_detail) if part)
             msg = (f"No complete {index} PIT roster covers this run ({detail}). "
                    "Re-sync the roster (an interrupted `aws s3 sync` leaves "
                    f"exactly this state) or point {env} at a complete copy.")
@@ -251,6 +257,40 @@ def _latest_published_year() -> int:
     return datetime.date.today().year - 1
 
 
+def _roster_file_problem(path: Path) -> str | None:
+    """Reject empty/corrupt annual data before it can erase membership changes."""
+    try:
+        data = _load_year_yaml(path)
+    except Exception as exc:
+        return f"cannot read roster ({exc})"
+    if not isinstance(data, dict):
+        return "expected a YAML mapping"
+    tickers = data.get("tickers_on_Jan_1")
+    if (not isinstance(tickers, list) or not tickers
+            or any(not isinstance(t, str) or not t.strip() for t in tickers)):
+        return "tickers_on_Jan_1 must be a nonempty list of ticker strings"
+    changes = data.get("changes")
+    if changes is None:
+        return None  # Legacy annual files may spell an empty changes map as null.
+    if not isinstance(changes, dict):
+        return "changes must be a mapping"
+    for change_date, entry in changes.items():
+        try:
+            datetime.date.fromisoformat(str(change_date))
+        except ValueError:
+            return "change dates must use YYYY-MM-DD"
+        if not isinstance(entry, dict):
+            return "each change must be a mapping"
+        for key in ("union", "difference"):
+            values = entry.get(key)
+            if values is not None and (
+                not isinstance(values, list)
+                or any(not isinstance(t, str) or not t.strip() for t in values)
+            ):
+                return f"change {key} must be a list of ticker strings"
+    return None
+
+
 def select_roster(index: str, end_year: int,
                   config: dict | None = None) -> tuple[Path, str]:
     """Return ``(yaml_dir, file_prefix)``: the ONE roster every reader uses.
@@ -265,11 +305,15 @@ def select_roster(index: str, end_year: int,
       with a warning naming the first missing year.
     * An incomplete *explicitly configured* roster is still used -- the operator
       chose it -- with a warning that those years' removals will be missing.
+    * Empty or malformed annual files invalidate an automatic candidate; a
+      malformed explicit roster aborts. Missing explicit years retain their
+      warning-only policy.
     * If nothing complete is found, :class:`PitRosterError` is raised.
     """
     required = range(ROSTER_SEED_YEAR, min(end_year, _latest_published_year()) + 1)
     explicit = set(_explicit_roots(index, config))
     incomplete: list[tuple[Path, list[int]]] = []
+    invalid: list[tuple[Path, str]] = []
     for root in _candidate_roots(index, config):
         for directory in _yaml_dirs_for_root(root, index):
             if not directory.is_dir():
@@ -279,6 +323,23 @@ def select_roster(index: str, end_year: int,
                     continue
                 missing = [y for y in required
                            if not (directory / f"{prefix}-{y}.yaml").is_file()]
+                problems = []
+                # Validate every available year the run may read, including an
+                # optional current-year file when it exists. A touched/empty
+                # file must not masquerade as a year with no removals.
+                for year in range(ROSTER_SEED_YEAR, end_year + 1):
+                    path = directory / f"{prefix}-{year}.yaml"
+                    if path.is_file():
+                        problem = _roster_file_problem(path)
+                        if problem:
+                            problems.append((path, problem))
+                if problems:
+                    if root in explicit:
+                        raise PitRosterError(index, [], problems)
+                    logger.warning("Ignoring invalid %s PIT roster at %s: %s. "
+                                   "Re-sync the roster.", index, directory, problems[0])
+                    invalid.extend(problems)
+                    continue
                 if not missing:
                     return directory, prefix
                 if root in explicit:
@@ -294,7 +355,7 @@ def select_roster(index: str, end_year: int,
                     "(%s-%s.yaml). Re-sync the roster.",
                     index, directory, missing[0], prefix, missing[0])
                 incomplete.append((directory, missing))
-    raise PitRosterError(index, incomplete)
+    raise PitRosterError(index, incomplete, invalid)
 
 
 def _roster_year_files(index: str, start_year: int, end_year: int,
@@ -362,7 +423,12 @@ def load_roster_yaml(stream) -> dict:
 @lru_cache(maxsize=512)
 def _load_year_yaml_cached(path_str: str) -> dict:
     with open(path_str, encoding="utf-8") as fh:
-        return load_roster_yaml(fh)
+        data = load_roster_yaml(fh)
+    if isinstance(data, dict) and isinstance(data.get("changes"), dict):
+        # SafeLoader makes unquoted ISO dates datetime.date keys. Schedule
+        # replay compares and looks up ISO strings, so normalize once here.
+        data["changes"] = {str(date): entry for date, entry in data["changes"].items()}
+    return data
 
 
 def _load_year_yaml(path: Path) -> dict:

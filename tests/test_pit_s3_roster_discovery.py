@@ -293,3 +293,90 @@ def test_run_starting_in_unpublished_year_keeps_prior_membership(
     intervals = pit_enforcement.membership_intervals(f"pit:{index}", cfg)
     assert "AAPL" in intervals
     assert "XOM" not in intervals
+
+
+def _year_path(root, index, year):
+    sub = "sp500_ticker_history" if index == "sp500" else "nasdaq_100_ticker_history"
+    prefix = "sp500-ticker-changes" if index == "sp500" else "n100-ticker-changes"
+    return root / "src" / sub / f"{prefix}-{year}.yaml"
+
+
+@pytest.mark.parametrize("bad_yaml", [
+    "", "{}", "[broken", "tickers_on_Jan_1: AAPL\nchanges: {}\n",
+    "tickers_on_Jan_1: [AAPL]\nchanges: []\n",
+])
+@pytest.mark.parametrize("provider", ["yahoo", "parquet"])
+@pytest.mark.parametrize("index", ["sp500", "nq100"])
+def test_invalid_annual_mirror_falls_back_without_losing_removals(
+    tmp_path, monkeypatch, _no_env, caplog, index, provider, bad_yaml,
+):
+    partial, complete = tmp_path / "partial", tmp_path / "complete"
+    for root in (partial, complete):
+        _xom_roster(root, index)
+    _year_path(partial, index, 2005).write_text(bad_yaml, encoding="utf-8")
+    monkeypatch.setattr(point_in_time, "_candidate_roots", lambda *_: [partial, complete])
+    prices = tmp_path / "prices"
+    prices.mkdir()
+    dates = pd.bdate_range("2004-01-02", "2006-12-29", name="Datetime")
+    for symbol in ("AAPL", "XOM"):
+        pd.DataFrame({"Open": 100., "High": 101., "Low": 99., "Close": 100.,
+                      "Volume": 1e6}, index=dates).to_parquet(prices / f"{symbol}.parquet")
+    cfg = {"start_date": "2004-01-02", "end_date": "2006-12-29",
+           "data_provider": provider, "parquet_data_dir": str(prices)}
+    schedule = point_in_time.build_membership_schedule(
+        index, cfg["start_date"], cfg["end_date"], cfg)
+    assert "XOM" in point_in_time.pit_members_on(schedule, "2005-05-31")
+    assert "XOM" not in point_in_time.pit_members_on(schedule, "2005-06-02")
+    assert "Ignoring invalid" in caplog.text
+    intervals = pit_enforcement.membership_intervals(f"pit:{index}", cfg)
+    assert intervals["XOM"] == [(pd.Timestamp("2004-01-02"), pd.Timestamp("2005-06-01"))]
+    if provider == "parquet":
+        spells = point_in_time.security_intervals(schedule, cfg["end_date"])
+        assert spells["XOM"][0][1] == pd.Timestamp("2005-06-01")
+
+
+@pytest.mark.parametrize("bad_yaml", ["", "[broken"])
+@pytest.mark.parametrize("index", ["sp500", "nq100"])
+def test_invalid_only_roster_aborts_every_reader(tmp_path, monkeypatch, _no_env, index, bad_yaml):
+    _xom_roster(tmp_path, index)
+    _year_path(tmp_path, index, 2005).write_text(bad_yaml, encoding="utf-8")
+    monkeypatch.setattr(point_in_time, "_candidate_roots", lambda *_: [tmp_path])
+    cfg = {"start_date": "2004-01-02", "end_date": "2006-12-29"}
+    for reader in (point_in_time.build_membership_schedule, point_in_time.tickers_union_for_period):
+        with pytest.raises(point_in_time.PitRosterError, match="invalid"):
+            reader(index, cfg["start_date"], cfg["end_date"], cfg)
+    with pytest.raises(point_in_time.PitRosterError, match="invalid"):
+        pit_enforcement.membership_intervals(f"pit:{index}", cfg)
+
+
+@pytest.mark.parametrize("index", ["sp500", "nq100"])
+def test_explicit_invalid_roster_aborts_instead_of_falling_back(tmp_path, monkeypatch, _no_env, index):
+    bad, good = tmp_path / "bad", tmp_path / "good"
+    for root in (bad, good):
+        _xom_roster(root, index)
+    _year_path(bad, index, 2005).write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(point_in_time, "_candidate_roots", lambda *_: [bad, good])
+    with pytest.raises(point_in_time.PitRosterError, match="invalid"):
+        point_in_time.select_roster(index, 2006, {f"{index}_pit_path": str(bad)})
+
+
+@pytest.mark.parametrize("index", ["sp500", "nq100"])
+def test_present_but_invalid_optional_current_year_is_rejected(tmp_path, monkeypatch, _no_env, index):
+    _xom_roster(tmp_path, index)
+    _year_path(tmp_path, index, 2006).write_text("", encoding="utf-8")
+    monkeypatch.setattr(point_in_time, "_candidate_roots", lambda *_: [tmp_path])
+    monkeypatch.setattr(point_in_time, "_latest_published_year", lambda: 2005)
+    with pytest.raises(point_in_time.PitRosterError, match="invalid"):
+        point_in_time.select_roster(index, 2006)
+
+
+@pytest.mark.parametrize("index", ["sp500", "nq100"])
+def test_unquoted_yaml_change_dates_apply_to_the_schedule(tmp_path, monkeypatch, _no_env, index):
+    _xom_roster(tmp_path, index)
+    path = _year_path(tmp_path, index, 2005)
+    path.write_text(path.read_text().replace("'2005-06-01'", "2005-06-01"), encoding="utf-8")
+    monkeypatch.setattr(point_in_time, "_candidate_roots", lambda *_: [tmp_path])
+    schedule = point_in_time.build_membership_schedule(index, "2004-01-02", "2006-12-29")
+    assert "XOM" not in point_in_time.pit_members_on(schedule, "2005-06-02")
+    late = point_in_time.build_membership_schedule(index, "2005-07-01", "2006-12-29")
+    assert "XOM" not in late[0][1]

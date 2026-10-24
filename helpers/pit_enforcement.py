@@ -219,7 +219,7 @@ def membership_intervals(value: str, config: dict | None = None) -> dict:
     try:
         yaml_dir, prefix = select_roster(kind, int(str(end)[:4]), config)
     except PitRosterError as exc:
-        if exc.incomplete:
+        if exc.incomplete or exc.invalid:
             raise
         yaml_dir = None  # no YAML roster at all: keep the legacy fallbacks below
 
