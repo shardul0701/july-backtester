@@ -1,4 +1,4 @@
-"""Tests for ``entry_trigger`` -- level (default) vs edge entry semantics.
+"""Tests for ``entry_trigger`` -- edge (default since #401) vs level entry semantics.
 
 The engine has always tested the signal *level* (``== 1`` / ``== -2``) to decide
 whether a bar is an entry. A strategy that emits a forward-filled *state* series
@@ -8,8 +8,9 @@ entry-eligible, and which bar actually gets taken becomes a function of how much
 cash happens to be free.
 
 ``entry_trigger: "edge"`` restricts entry to the transition INTO the entry state,
-matching how the live scanner triggers. Default stays "level" so no existing
-result moves.
+matching how the live scanner triggers. It is the default since #401: under
+"level" a hold-state signal re-enters on the bar after (or the bar of) a stop-out,
+booking trades the strategy never signalled. "level" stays available per run.
 
 Covers the two pure helpers and all four engine wiring sites (long/short entry
 gate, long/short priority sort key) in helpers/portfolio_simulations.py.
@@ -125,7 +126,10 @@ def _frame(px=100.0, n=7):
     )
 
 
-def _run(portfolio_data, signals, mode, allocation_pct=0.99):
+def _run(portfolio_data, signals, mode, allocation_pct=1.0):
+    # Exhaust buying power in the starvation scenarios. At 0.99 the remaining
+    # cash can fund a small second position; those scenarios only looked
+    # starved while the affordability round-trip incorrectly rejected it.
     with patch.dict(CONFIG, {"entry_trigger": mode}):
         res = run_portfolio_simulation(
             portfolio_data, signals, 100_000.0, allocation_pct,
@@ -143,10 +147,18 @@ _STARVED_SIGS = {
 }
 
 
-class TestLevelModeIsUnchanged:
-    def test_default_config_is_level(self):
-        assert str(CONFIG.get("entry_trigger", "level")).lower() == "level"
+class TestDefaultIsEdge:
+    """Flipped by #401. Both the shipped value and the engine's fallback for a
+    config missing the key must be "edge". The fallback is pinned by behaviour
+    (see ``TestEdgeModeDisablesStopReEntry``), not by grepping the source."""
 
+    def test_shipped_config_is_edge(self):
+        # Index, not .get(): a .get with an "edge" default would pass on a
+        # config.py that dropped the key entirely.
+        assert str(CONFIG["entry_trigger"]).lower() == "edge"
+
+
+class TestLevelModeIsUnchanged:
     def test_uncontested_entry_is_identical_in_both_modes(self):
         """With cash free on the breakout bar the two modes must agree exactly.
 
@@ -222,28 +234,28 @@ class TestEdgeModeReallocatesCapitalRatherThanOnlySkippingEntries:
     def _ccc_shares(self, mode):
         log = _run(self.DATA, self.SIGS, mode)
         row = log[log["Symbol"] == "CCC"]
-        assert len(row) == 1, "CCC should trade exactly once in %s mode" % mode
+        if row.empty:
+            return 0.0
+        assert len(row) == 1, "CCC should trade at most once in %s mode" % mode
         return float(row.iloc[0]["Shares"])
 
     def test_level_mode_lets_a_hold_bar_take_a_breakouts_allocation(self):
-        """CCC still enters -- there is no position-count cap and equities are
-        fractional, so the residual cash always funds *something*. What it
-        cannot fund is a real position: BBB's hold bar took the allocation and
-        CCC is left with the rounding."""
+        """BBB's hold bar consumes the released cash before CCC's breakout.
+
+        Any rounding residual is too small to fund the minimum share count.
+        """
         log = _run(self.DATA, self.SIGS, "level")
-        assert sorted(log["Symbol"]) == ["AAA", "BBB", "CCC"]
-        assert self._ccc_shares("level") < 10.0
+        assert sorted(log["Symbol"]) == ["AAA", "BBB"]
+        assert self._ccc_shares("level") == 0.0
 
     def test_edge_mode_gives_that_allocation_back_to_the_breakout(self):
-        """Same bar, same signal, ~105x the position. `test_uncontested_entry_
-        is_identical_in_both_modes` says edge only ever subtracts -- that holds
-        per symbol in isolation, not per book."""
+        """A fresh breakout gets the position when the hold bar is refused."""
         log = _run(self.DATA, self.SIGS, "edge")
         assert sorted(log["Symbol"]) == ["AAA", "CCC"]
         assert self._ccc_shares("edge") > 900.0
 
-    def test_the_reallocation_is_two_orders_of_magnitude(self):
-        assert self._ccc_shares("edge") / self._ccc_shares("level") > 50.0
+    def test_the_reallocation_restores_a_full_position(self):
+        assert self._ccc_shares("edge") - self._ccc_shares("level") > 900.0
 
 
 def _frame_px(closes):
@@ -278,6 +290,8 @@ class TestEdgeModeDisablesStopReEntry:
         sigs = {"X": pd.Series([1.0] * (len(self.CLOSES) - 1) + [-1.0],
                                index=idx, dtype=float)}
         with patch.dict(CONFIG, {"entry_trigger": mode}):
+            if mode == "__missing__":
+                del CONFIG["entry_trigger"]
             res = run_portfolio_simulation(
                 {"X": frame}, sigs, 100_000.0, 0.95,
                 None, None, None, self.STOP,
@@ -294,28 +308,119 @@ class TestEdgeModeDisablesStopReEntry:
         assert len(log) == 1
         assert "Stop Loss" in str(log.iloc[0]["ExitReason"])
 
+    @pytest.mark.parametrize("value", ["edges", "Edge ", "pulse", None, " LEVEL "])
+    def test_only_an_explicit_level_runs_level(self, value):
+        """The engine used to build edge masks only for an exact "edge", so
+        every unrecognised value -- a typo, None -- ran LEVEL while the
+        validator said it fell back to edge (adversarial QA on #405). Now
+        only "level" (case/whitespace-insensitive) selects level."""
+        log = self._run_stop(value)
+        expected = 2 if str(value).strip().lower() == "level" else 1
+        assert len(log) == expected, (value, len(log))
+
+    def test_a_config_missing_the_key_behaves_as_edge(self):
+        """The engine fallback (#401). A config written before the key existed
+        must get the shipped default, not the semantics it was flipped away
+        from -- this fails if the fallback reverts to "level"."""
+        log = self._run_stop("__missing__")
+        assert len(log) == 1
+        assert "Stop Loss" in str(log.iloc[0]["ExitReason"])
+
+
+class TestHoldStateShort:
+    """-2 is the short-ENTRY value; on a bar already short it means "hold".
+    The engine covered on ANY negative signal, -2 included, so a hold-state
+    short covered every bar: level churned a round trip per bar, and the edge
+    default refused the re-entry, leaving the book flat after one bar --
+    signal [-2]*8 + [-1, 0] gave 8 trades under level, 1 one-bar trade under
+    edge (adversarial QA on #405)."""
+
+    @pytest.mark.parametrize("mode", ["level", "edge"])
+    def test_held_short_is_one_trade_held_to_the_cover(self, mode):
+        frame, idx = _frame_px([100.0] * 10)
+        sig = pd.Series([-2.0] * 8 + [-1.0, 0.0], index=idx)
+        with patch.dict(CONFIG, {"entry_trigger": mode, "execution_time": "close"}):
+            res = run_portfolio_simulation(
+                {"X": frame}, {"X": sig}, 100_000.0, 0.5,
+                None, None, None, {"type": "none"})
+        log = pd.DataFrame(res["trade_log"])
+        assert len(log) == 1, log[["EntryDate", "ExitDate"]]
+        assert log.iloc[0]["ExitReason"] == "Short Cover"
+        assert pd.Timestamp(log.iloc[0]["ExitDate"]) == idx[8]
+
+
+    def test_a_second_minus_2_pulse_does_not_reshort(self):
+        """[0,-2,0,0,-2,0,0,-1] used to cover and re-open on the second -2,
+        resetting the entry price and stop (2 trades). -2 never covers, so it
+        is one short held to the -1, in both modes."""
+        frame, idx = _frame_px([100.0] * 8)
+        sig = pd.Series([0, -2, 0, 0, -2, 0, 0, -1], index=idx, dtype=float)
+        for mode in ("level", "edge"):
+            with patch.dict(CONFIG, {"entry_trigger": mode, "execution_time": "close"}):
+                res = run_portfolio_simulation(
+                    {"X": frame}, {"X": sig}, 100_000.0, 0.5,
+                    None, None, None, {"type": "none"})
+            log = pd.DataFrame(res["trade_log"])
+            assert len(log) == 1, (mode, len(log))
+
+    def test_short_to_long_needs_a_cover_bar(self):
+        """Documented asymmetry, pinned: -2 exits a long (it is <= -1), but 1
+        does not cover a short (#313's long-over-short guard), so a direct
+        -2 -> 1 holds the short. A flip is -1 then 1."""
+        frame, idx = _frame_px([100.0] * 10)
+        sig = pd.Series([0, -2, -2, -2, 1, 1, 1, 1, 1, 0], index=idx, dtype=float)
+        with patch.dict(CONFIG, {"entry_trigger": "edge", "execution_time": "close"}):
+            res = run_portfolio_simulation(
+                {"X": frame}, {"X": sig}, 100_000.0, 0.5,
+                None, None, None, {"type": "none"})
+        log = pd.DataFrame(res["trade_log"])
+        assert len(log) == 1 and str(log.iloc[0]["Trade"]).startswith("Short")
+
+
+class TestFreshSignalOnTheStopBar:
+    """Pinned as-is, NOT endorsed. #401's review measured that a fresh 1
+    emitted ON the stop bar ({1: 1, 5: 1}) enters that bar in both modes --
+    bar 4 reads 0, so bar 5 is a genuine transition. Under execution_time
+    "close" that is executable; under "open" it books an entry at the open of
+    a bar whose stop fired intrabar, which is the narrow follow-up #401 split
+    out. This pins the current behaviour so that follow-up visibly flips it."""
+
+    CLOSES = [100.0, 101.0, 102.0, 101.0, 100.0, 94.0, 95.0, 96.0, 97.0, 98.0]
+
+    @pytest.mark.parametrize("mode", ["level", "edge"])
+    def test_fresh_entry_on_the_stop_bar_enters(self, mode):
+        frame, idx = _frame_px(self.CLOSES)
+        sig = pd.Series(0.0, index=idx)
+        sig.iloc[1] = 1
+        sig.iloc[5] = 1
+        with patch.dict(CONFIG, {"entry_trigger": mode, "execution_time": "close"}):
+            res = run_portfolio_simulation(
+                {"X": frame}, {"X": sig}, 100_000.0, 0.5,
+                None, None, None, {"type": "percentage", "value": 0.05})
+        log = pd.DataFrame(res["trade_log"])
+        assert len(log) == 2, log[["EntryDate", "ExitDate", "ExitReason"]]
+        assert "Stop Loss" in str(log.iloc[0]["ExitReason"])
+        assert log.iloc[1]["EntryDate"] == log.iloc[0]["ExitDate"]
+
 
 class TestShortSide:
-    """A forward-filled SHORT state series churns under level mode.
+    """A forward-filled SHORT state series no longer churns in either mode.
 
-    ``-2`` satisfies both the entry test (``== -2``) and the exit test
-    (``< 0``), so each hold bar covers the position and immediately re-opens it,
-    paying a full round trip of commission and slippage every bar. Edge mode
-    blocks the re-entry.
-
-    NOTE: the exit-side overlap is a SEPARATE pre-existing issue and is NOT
-    fixed here -- edge mode leaves one trade that still covers on the next
-    ``-2`` bar rather than holding the short. These tests pin the entry-side
-    change only.
+    ``-2`` used to satisfy both the entry test (``== -2``) and the cover test
+    (``< 0``), so under level each hold bar covered and re-opened the short.
+    The cover test now excludes -2 (#405 QA, see TestHoldStateShort), so the
+    churn is gone at its source and both modes hold one short to the -1.
     """
 
     DATA = {"SSS": _frame()}
     SIGS = {"SSS": _sig([-2, -2, -2, -2, -1, 0, 0])}
 
-    def test_level_mode_churns_one_short_into_a_round_trip_per_bar(self):
+    def test_level_mode_no_longer_churns(self):
+        """FLIPPED: this pinned 4 round trips (the churn) before the cover test
+        stopped treating -2 as a cover."""
         log = _run(self.DATA, self.SIGS, "level", allocation_pct=0.5)
-        assert len(log) == 4
-        assert all(str(t).startswith("Short") for t in log["Trade"])
+        assert len(log) == 1
+        assert str(log.iloc[0]["Trade"]).startswith("Short")
 
     def test_edge_mode_opens_the_short_once(self):
         log = _run(self.DATA, self.SIGS, "edge", allocation_pct=0.5)
@@ -337,15 +442,24 @@ class TestShortSide:
 # --------------------------------------------------------------------------
 class TestConfigValidation:
     def test_known_values_produce_no_entry_trigger_warning(self):
-        for value in ("level", "edge", "EDGE"):
+        for value in ("level", "edge", "EDGE", " edge "):
             warns = validate_config({"entry_trigger": value})
             assert not [w for w in warns if "entry_trigger" in w]
 
     def test_a_typo_is_caught_at_startup(self):
-        """Silently falling back to 'level' would produce exactly the numbers
-        the option exists to switch off, while the config file says otherwise."""
+        """Someone who meant "level" and typed "levle" gets edge; they must be
+        told, and told the truth about which mode they got."""
         warns = validate_config({"entry_trigger": "edges"})
-        assert [w for w in warns if "entry_trigger" in w]
+        msgs = [w for w in warns if "entry_trigger" in w]
+        assert msgs and "fall back to 'edge'" in msgs[0], msgs
+
+    def test_an_explicit_none_is_unset_not_a_typo(self):
+        """``None`` means "unset" for every key the validator knows, and the
+        engine now runs it as the shipped default "edge" (it used to run LEVEL
+        -- adversarial QA on #405), so it needs no warning. The engine half is
+        pinned by test_only_an_explicit_level_runs_level[None]."""
+        assert not [w for w in validate_config({"entry_trigger": None})
+                    if "entry_trigger" in w]
 
     def test_absent_key_is_not_a_warning(self):
         assert not [w for w in validate_config({}) if "entry_trigger" in w]
