@@ -1448,11 +1448,10 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                 # proxy (adversarial QA on #392: risk_parity 5% stop, 0.3% heat
                 # cap -> LONG rejected, SHORT admitted 80 shares).
                 #
-                # NOT used by the futures short, which keeps the real stop risk
-                # #331 chose on purpose. The futures LONG uses the proxy, so the
-                # two futures legs still differ under a binding heat cap -- the
-                # long is the wrong side, and fixing it moves long numbers:
-                # tracked separately (see the futures heat gate below).
+                # Futures shorts use their real stop risk (#331), and #467
+                # now applies real protective-stop risk to futures longs too.
+                # This equity-specific fraction does not control either
+                # futures gate.
                 _s_heat_frac = (
                     _s_ir / ep
                     if (_s_eq_sizing_method in ("risk_parity", "risk_pct_capped")
