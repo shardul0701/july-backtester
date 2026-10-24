@@ -576,6 +576,15 @@ def _scenario(name):
         sig.iloc[8] = -1
         return {"SSS": df}, {"SSS": sig}, {}, {"type": "none"}, {}
 
+    if name == "tiny_equity_short_entry":
+        control = _df([100.] * 8)
+        thin = _df([100.] * 8, volumes=[.02] * 8)
+        return ({"AAA": control, "BBB": thin},
+                {"AAA": _sig(control, {1: 1, 6: -1}),
+                 "BBB": _sig(thin, {1: -2, 6: -1})},
+                {"slippage_pct": 0., "commission_per_share": 0., "max_pct_adv": .05},
+                {"type": "none"}, {})
+
     if name == "futures_short_liquidity":
         df = _df([100.] * 30, opens=[100.] * 30,
                  highs=[101.] * 30, lows=[99.] * 30)
@@ -612,6 +621,7 @@ def _scenario(name):
 
 
 SCENARIOS = [
+    "tiny_equity_short_entry",
     "futures_short_liquidity",
     "futures_long_real_stop_heat",
     "long_basic", "long_pct_stop", "long_atr_stop", "short_borrow",

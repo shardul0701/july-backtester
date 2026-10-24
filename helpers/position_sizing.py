@@ -215,6 +215,21 @@ def _volatility_parity(equity: float, price: float, symbol_data: pd.DataFrame, c
     return shares
 
 
+def _record_sizing_diagnostic(kwargs, reason, detail=None):
+    diagnostics = kwargs.get("diagnostics")
+    if diagnostics is not None:
+        diagnostics.record(reason, kwargs.get("diagnostic_symbol"), detail=detail)
+
+
+def _record_missing_stop(kwargs):
+    known_types = {"none", "percentage", "points", "atr", "trailing_atr", "signal_bar"}
+    reason = ("no_stop_distance" if kwargs.get("stop_type", "none") in known_types
+              else "unsupported_stop_type")
+    detail = (f"stop type {kwargs.get('stop_type')!r}"
+              if reason == "unsupported_stop_type" else None)
+    _record_sizing_diagnostic(kwargs, reason, detail)
+
+
 def _risk_parity(equity: float, price: float, symbol_data: pd.DataFrame, config: dict, **kwargs) -> float:
     """
     Risk parity sizing: equal $ risk per position.
@@ -252,19 +267,41 @@ def _risk_parity(equity: float, price: float, symbol_data: pd.DataFrame, config:
         if "ATR_14" in symbol_data.columns and len(symbol_data) > 0:
             atr = symbol_data["ATR_14"].iloc[-1]
             if pd.notna(atr) and atr > 0:
-                # Default: 3x ATR stop
+                if kwargs.get("diagnostics") is not None:
+                    _record_sizing_diagnostic(kwargs, "atr_proxy_substituted")
+                else:
+                    logger.warning(
+                        "risk_parity: no stop distance supplied, substituting a "
+                        "3xATR proxy (%.4f of price). The position is sized "
+                        "against a distance the strategy did not ask for.",
+                        (atr * 3.0) / price if price > 0 else 0.0)
                 stop_distance_pct = (atr * 3.0) / price
             else:
-                logger.warning("No valid stop distance for risk parity sizing. Falling back to fixed.")
+                if kwargs.get("diagnostics") is not None:
+                    _record_missing_stop(kwargs)
+                else:
+                    logger.warning("No valid stop distance for risk parity sizing. Falling back to fixed.")
                 return _fixed_allocation(equity, price, config)
         else:
-            logger.warning("No stop distance or ATR for risk parity sizing. Falling back to fixed.")
+            if kwargs.get("diagnostics") is not None:
+                _record_missing_stop(kwargs)
+            else:
+                logger.warning("No stop distance or ATR for risk parity sizing. Falling back to fixed.")
             return _fixed_allocation(equity, price, config)
 
     target_risk = config.get("target_risk_per_trade", 0.02)
-    shares = (equity * target_risk) / (price * stop_distance_pct) if stop_distance_pct > 0 else 0.0
-
-    return shares
+    if stop_distance_pct <= 0:
+        # #387, site 6: the THIRD distinct answer this one function gives to
+        # "no measurable stop" -- proxy above, fall back to fixed above that,
+        # and zero here. Reachable when the 3xATR proxy itself resolves
+        # non-positive. Announced for the same reason as the proxy: a returned
+        # zero is indistinguishable from a deliberate no-trade at every call
+        # site. (@shardul0701 on #387.)
+        logger.warning(
+            "risk_parity: stop distance resolved to %r; taking no position.",
+            stop_distance_pct)
+        return 0.0
+    return (equity * target_risk) / (price * stop_distance_pct)
 
 
 def _risk_pct_capped(equity: float, config: dict, price: float | None = None,
@@ -361,15 +398,15 @@ def _risk_pct_capped(equity: float, config: dict, price: float | None = None,
     futures byte-identical is what lets the equivalence matrix isolate the
     equity change.
 
-    Returns 0.0 when no stop distance was supplied — pre-existing behaviour;
-    whether "declined to size" should be distinguishable from "sized to zero"
-    is #381-D.
+    Returns 0.0 when no stop distance was supplied. Optional diagnostics record
+    that outcome and any cap applied, without changing the arithmetic.
     """
     stop_distance_points = kwargs.get("stop_distance_points")
     point_value = kwargs.get("point_value", 1.0)
     margined = bool(kwargs.get("margined", False))
 
     if not stop_distance_points or stop_distance_points <= 0:
+        _record_missing_stop(kwargs)
         return 0.0
 
     risk_budget = max(equity, 0.0) * config.get("risk_pct_per_trade", 0.01)
@@ -378,6 +415,8 @@ def _risk_pct_capped(equity: float, config: dict, price: float | None = None,
     if margined:
         units = np.floor(units)
         cap = config.get("max_contracts_cap", 20)
+        if units > cap:
+            _record_sizing_diagnostic(kwargs, "clamped_by_contract_cap")
         return max(0.0, min(units, cap))
 
     # Unmargined: no integer floor, no contract cap, but a notional ceiling.
@@ -395,6 +434,8 @@ def _risk_pct_capped(equity: float, config: dict, price: float | None = None,
     if (price is not None and price > 0 and point_value > 0
             and ceiling_pct is not None):
         ceiling = (max(equity, 0.0) * ceiling_pct) / (price * point_value)
+        if units > ceiling:
+            _record_sizing_diagnostic(kwargs, "clamped_by_notional_ceiling")
         units = min(units, ceiling)
     return max(0.0, units)
 

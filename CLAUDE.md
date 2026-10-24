@@ -952,3 +952,7 @@ Opening Kelly entries use a completed-trade prefix captured before the fill bar'
 ### Futures short liquidity (#468)
 
 Futures short entries apply the same contract ADV cap and prior-bar volume timing as futures longs. Market impact lowers the short-sale fill, contributes to round-trip `VolumeImpact_bps`, and increases risk to a raw-price-anchored stop. A final heat check precedes margin/cash mutation, and subsequent entries see the impacted stop exposure. Tests: `tests/test_futures_short_liquidity.py`.
+
+### Position sizing diagnostics (#387/#394)
+
+Each simulation accumulates actual sizing conditions and logs one report; successful results also include `sizing_diagnostics`. Counts describe conditions, so one entry attempt may contribute multiple reasons. Risk methods record their own missing-stop, ATR-proxy and cap outcomes. All entry legs record cash/margin, ADV and heat outcomes, including final-fill heat checks. Zero-trade runs log before returning `None`. Tests: `tests/test_sizing_diagnostics.py` and `tests/test_sizing_diagnostics_all_paths.py`.

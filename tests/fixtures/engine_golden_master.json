@@ -1545,6 +1545,52 @@
       }
     ]
   },
+  "tiny_equity_short_entry": {
+    "equity_curve": [
+      100000.0,
+      100000.0,
+      100000.0,
+      100000.0,
+      100000.0,
+      100000.0,
+      100000.0,
+      100000.0
+    ],
+    "equity_len": 8,
+    "scalars": {
+      "Trades": 1,
+      "avg_trade_duration": 7.0,
+      "calmar_ratio": null,
+      "initial_capital": 100000.0,
+      "max_drawdown": 0.0,
+      "pnl_percent": 0.0,
+      "profit_factor": null,
+      "sharpe_ratio": 0,
+      "win_rate": 0.0
+    },
+    "trade_log": [
+      {
+        "EntryDate": "2023-01-03T00:00:00",
+        "EntryPrice": 100.0,
+        "ExitDate": "2023-01-10T00:00:00",
+        "ExitPrice": 100.0,
+        "ExitReason": "Strategy Exit",
+        "HoldDuration": 7,
+        "InitialRisk": 1.0,
+        "MAE_pct": -0.01,
+        "MFE_pct": 0.01,
+        "PosSizeMult": 1.0,
+        "Profit": 0.0,
+        "ProfitPct": 0.0,
+        "RMultiple": 0.0,
+        "Shares": 100.0,
+        "Symbol": "AAA",
+        "Trade": "Long 1",
+        "VolumeImpact_bps": 0.0,
+        "is_win": 0
+      }
+    ]
+  },
   "trailing_atr_equity": {
     "equity_curve": [
       100000.0,
