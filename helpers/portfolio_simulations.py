@@ -5,8 +5,7 @@ import pandas as pd
 import numpy as np
 from config import CONFIG
 from .simulations import calculate_advanced_metrics
-from helpers.position_sizing import (calculate_position_size, check_portfolio_heat,
-                                    notional_ceiling_will_bind)
+from helpers.position_sizing import calculate_position_size, check_portfolio_heat
 from helpers.sizing_diagnostics import SizingDiagnostics as _SizingDiagnostics
 from helpers import instruments as _inst
 from helpers import intrabar as _intrabar
@@ -1444,6 +1443,8 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                 _s_eq_sizing_method = CONFIG.get('position_sizing_method', 'fixed')
                 df_se = portfolio_data[symbol]
                 _s_sizing_kwargs_base = {
+                    "diagnostics": _sizing_diag, "diagnostic_symbol": symbol,
+                    "stop_type": stop_config.get("type", "none"),
                     "stop_distance_points": _s_ir,
                     "point_value": inst_se.point_value,
                     "margined": inst_se.margin_mode == _inst.INITIAL_MARGIN,
@@ -1558,7 +1559,8 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         margined=(inst_se.margin_mode
                                   == _inst.INITIAL_MARGIN),
                         **{k: v for k, v in _s_sizing_kwargs_base.items()
-                           if k in ("win_rate", "avg_win", "avg_loss")},
+                           if k in ("win_rate", "avg_win", "avg_loss", "diagnostics",
+                                    "diagnostic_symbol", "stop_type")},
                     )
                     # size_mults on the FUTURES short leg too (#386), at the
                     # same point the long leg applies it: on the raw sized
@@ -1601,6 +1603,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     if not check_portfolio_heat({**positions, **short_positions},
                                                 _fs_risk(shares), total_equity,
                                                 CONFIG.get("max_portfolio_heat", 1.0)):
+                        _sizing_diag.record("rejected_by_heat", symbol)
                         continue
 
                     # Same contract-volume cap and prior-bar ADV timing as longs.
@@ -1608,6 +1611,8 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     if _s_max_pct_adv > 0 and 'Volume' in df_se.columns:
                         _s_adv = _daily_adv(df_se['Volume'], date, symbol)
                         if pd.notna(_s_adv) and _s_adv > 0:
+                            if _s_adv * _s_max_pct_adv < shares:
+                                _sizing_diag.record("clamped_by_adv", symbol)
                             shares = min(shares, _s_adv * _s_max_pct_adv)
 
                     # A short sale fills lower. Stops stay anchored to the raw
@@ -1633,6 +1638,8 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     _s_per_contract_margin = _inst.margin_required(inst_se, 1, _s_entry_fill)
                     if _s_per_contract_margin > 0:
                         _s_max_by_margin = _free / _s_per_contract_margin
+                        if _s_max_by_margin < shares:
+                            _sizing_diag.record("clamped_by_cash", symbol)
                         if _s_max_by_margin <= 0:
                             continue
                         shares = min(shares, _s_max_by_margin)
@@ -1644,6 +1651,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     _s_margin = _inst.margin_required(inst_se, shares, _s_entry_fill)
                     commission = _inst.commission(inst_se, shares)
                     if _s_margin + commission > cash - reserved_margin:
+                        _sizing_diag.record("clamped_by_cash", symbol)
                         # Shrink to the largest count whose margin + commission
                         # fit -- the same step as the long's affordability
                         # check -- rather than skip.
@@ -1671,6 +1679,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     if not check_portfolio_heat({**positions, **short_positions},
                                                 _fs_new_risk, total_equity,
                                                 CONFIG.get("max_portfolio_heat", 1.0)):
+                        _sizing_diag.record("rejected_by_heat", symbol)
                         continue
                     # Include the newly applied impact in the realized R basis.
                     _s_final_ir = (_s_stop - _s_entry_fill
@@ -1706,6 +1715,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     # accounts for this entry's collateral and commission.
                     _s_bp = cash - reserved_short_collateral
                     if _s_bp <= 1e-9 * max(total_equity, 1.0):
+                        _sizing_diag.record("clamped_by_cash", symbol)
                         continue
 
                     # #386: honour position_sizing_method here. This branch
@@ -1781,6 +1791,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     # otherwise a shorts-only book never accumulates heat (#312 QA).
                     if not check_portfolio_heat({**positions, **short_positions},
                                                 _s_new_risk, total_equity, _s_max_heat):
+                        _sizing_diag.record("rejected_by_heat", symbol)
                         continue
 
                     # Clamp the desired units to free buying power, including
@@ -1793,6 +1804,8 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     _s_unit_budget = _s_budget_price + _inst.commission(inst_se, 1.0)
                     if _s_unit_budget <= 0:
                         continue
+                    if _s_bp / _s_unit_budget < shares:
+                        _sizing_diag.record("clamped_by_cash", symbol)
                     shares = min(shares, _s_bp / _s_unit_budget)
                     while shares * _s_budget_price + _inst.commission(inst_se, shares) > _s_bp:
                         shares = float(np.nextafter(shares, 0.0))
@@ -1808,6 +1821,8 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                             _s_max_shares = _s_adv20 * _s_max_pct_adv
                             if _s_max_shares <= 0:
                                 continue
+                            if _s_max_shares < shares:
+                                _sizing_diag.record("clamped_by_adv", symbol)
                             shares = min(shares, _s_max_shares)
 
                     # Market impact: a short SALE fills LOWER as size grows
@@ -1822,7 +1837,8 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                             _s_entry_fill = _s_entry_fill * (1 - _s_impact_add)
                             _s_entry_impact_bps = round(_s_impact_add * 10000, 1)
 
-                    if shares <= 0:
+                    # Match the cash-long minimum meaningful equity size.
+                    if shares <= 0.001:
                         continue
                     commission = _inst.commission(inst_se, shares)
                     cash -= commission   # proceeds and collateral cancel; only commission is a real cash cost
@@ -1937,6 +1953,8 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
             # futures buying power is governed by reserved_margin instead.
             _bp = cash - (0.0 if instruments[symbol].margin_mode == _inst.INITIAL_MARGIN
                           else reserved_short_collateral)
+            if entry_price > 0 and _bp <= 0:
+                _sizing_diag.record("clamped_by_cash", symbol)
             if entry_price > 0 and _bp > 0:
                 # --- PER-SIGNAL SIZE MULTIPLIER ---
                 # Apply per-signal size multiplier when the strategy provides one
@@ -1950,7 +1968,10 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
 
                 # --- POSITION SIZING ---
                 sizing_method = CONFIG.get('position_sizing_method', 'fixed')
-                sizing_kwargs = {}
+                sizing_kwargs = {
+                    "diagnostics": _sizing_diag, "diagnostic_symbol": symbol,
+                    "stop_type": stop_config.get("type", "none"),
+                }
 
                 # For risk_parity: derive stop_distance_pct from the configured stop so
                 # sizing uses the actual stop rather than always falling back to 3x ATR.
@@ -2159,35 +2180,6 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                                 # sites agreeing is worth more than the line.
                                 _rp_stop_dist_pts = float(raw_entry_price - _sb_lvl)
 
-                    # #387: name the condition rather than letting a missing
-                    # number become a silent zero. Two kinds, not one -- a stop
-                    # type this ladder has no branch for is an engine gap
-                    # (derivable, merely absent), while {"type": "none"} is a
-                    # genuinely absent distance and a config choice. Reporting
-                    # them as one would mislabel whichever the user has.
-                    if not _rp_stop_dist_pts or _rp_stop_dist_pts <= 0:
-                        _sizing_diag.record(
-                            "no_stop_distance" if _stype_sz == "none"
-                            else "unsupported_stop_type", symbol)
-                    elif (inst.margin_mode != _inst.INITIAL_MARGIN
-                          and raw_entry_price > 0
-                          and notional_ceiling_will_bind(
-                              CONFIG, _rp_stop_dist_pts / raw_entry_price)):
-                        # Not a defect: below that threshold the budget is
-                        # genuinely unreachable without leverage, so the clamped
-                        # value is correct. Reported because "delivered less
-                        # than configured, on purpose" and "delivered less than
-                        # configured, by accident" are indistinguishable from
-                        # outside otherwise.
-                        #
-                        # The predicate lives in position_sizing, not here. The
-                        # first version inlined it and
-                        # test_no_inline_sizing_copies_remain caught it --
-                        # correctly, since reconstructing a sizing decision in
-                        # this file is the fifth copy of what #384 consolidated
-                        # regardless of whether the caller only wanted to log.
-                        _sizing_diag.record("clamped_by_notional_ceiling", symbol)
-
                     sizing_kwargs["stop_distance_points"] = _rp_stop_dist_pts
                     sizing_kwargs["point_value"] = inst.point_value
                     # #385: the integer floor and max_contracts_cap are contract-
@@ -2311,7 +2303,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     if pd.notna(adv_20) and adv_20 > 0:
                         max_shares_allowed = adv_20 * max_pct_adv
                         if max_shares_allowed <= 0:
-                            _sizing_diag.record("skipped_zero_volume", symbol)
+                            _sizing_diag.record("clamped_by_adv", symbol)
                             continue
                         if max_shares_allowed < shares:
                             _sizing_diag.record("clamped_by_adv", symbol)
@@ -2339,6 +2331,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     _margin = _inst.margin_required(inst, shares, entry_price)
                     _free = cash - reserved_margin
                     if _margin + commission_cost > _free:
+                        _sizing_diag.record("clamped_by_cash", symbol)
                         # Largest count whose margin AND commission fit:
                         # floor(free / (margin_per + commission_per)). This
                         # subtracted the commission of the OVERSIZED count
@@ -2363,6 +2356,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     # Equity cash_full: full notional + commission debited from cash.
                     total_cost = _inst.margin_required(inst, shares, entry_price) + commission_cost
                     if total_cost > _bp:
+                        _sizing_diag.record("clamped_by_cash", symbol)
                         # Robustly calculate the absolute maximum number of shares we can possibly afford
                         shares = _bp / (entry_price + CONFIG['commission_per_share'])
                         if shares <= 0: continue  # Cannot afford even a fraction of a share
@@ -2462,6 +2456,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         # Recheck and register the final, post-clamp exposure.
                         if not check_portfolio_heat({**positions, **short_positions},
                                                     _final_risk, total_equity, max_heat):
+                            _sizing_diag.record("rejected_by_heat", symbol)
                             continue
                     positions[symbol] = {
                         'shares': shares, 'entry_price': entry_price,

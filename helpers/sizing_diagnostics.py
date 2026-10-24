@@ -1,65 +1,10 @@
-"""helpers/sizing_diagnostics.py
+"""Per-run explanations for absent stop inputs and overridden position sizes.
 
-One consumer-facing account of *why* the engine sized a position differently
-from what was asked for — or declined to size one at all (#387, part of #381).
-
-The problem
------------
-The engine declined or clamped a position in six places and said so in none of
-them, and the places disagreed with each other about what to do:
-
-    _risk_parity, no stop distance      3xATR proxy -- sizes 3.35x too large
-    risk_pct_capped long, no distance   shares = 0.0 -- no trade
-    risk_pct_capped short, no distance  shares = 0.0
-    cash clamp                          truncates to cash / price
-    ADV cap                             truncates, or `continue` at zero volume
-    _risk_parity's own zero             returns 0.0
-
-Two sizing methods, opposite failure modes, on the same input. The root is that
-*"the engine could not deliver what was configured"* was not represented
-anywhere, so each call site inferred it from an absent number and invented an
-answer.
-
-`{"type": "none"}` is the DOCUMENTED DEFAULT stop config, so the failing
-combination for the second row was "select a sizing method and change nothing
-else": `run_portfolio_simulation` returned `None`, with no error and no partial
-result, and a zero-trade run reads as a *strategy* finding — which invites
-debugging the signal logic for a fault in the sizing gate.
-
-Four kinds, not one
--------------------
-Collapsing these into a single "no stop" message would mislabel three of them.
-The taxonomy is @shardul0701's on #387, and the third kind is his correction to
-an earlier four-way cut of mine that grouped clamps with absent stops:
-
-    COVERAGE_DRIFT      derivable and merely missing from a switch. Closed by
-                        #385 for `points` / `signal_bar`; kept as a category so
-                        a seventh stop type is reported rather than silent.
-    NO_STOP             genuinely absent -- `{"type": "none"}`. No distance
-                        exists. Needs a deliberate policy, which this module
-                        does NOT decide; it only makes the condition visible.
-    OVERRIDDEN          the size WAS computable and something else reduced it:
-                        cash, the ADV cap, portfolio heat. Distinguishable from
-                        NO_STOP in the message and actionable in a different
-                        way -- a cash clamp says raise capital or lower
-                        allocation, an ADV truncation says the name is too thin
-                        for the size, and neither says anything about stops.
-    UNREACHABLE         `stop_frac < risk_pct_per_trade`: the budget cannot be
-                        delivered without leverage, so the ceiling-clamped
-                        value is correct and merely undeclared.
-
-Why a run summary rather than a warning per site
-------------------------------------------------
-The ADV cap is armed by default (`max_pct_adv: 0.05`) and fires per entry, so a
-per-site warning would emit thousands of lines on a thin universe and be
-filtered out within a day. Worse, the #372 banner in this same engine showed the
-other failure mode: a once-per-process dedup set that had to be reset by an
-autouse fixture in the test suite, and that would have gone silently green
-forever once the gap it guarded was closed.
-
-So this accumulates counts and reports ONCE per simulation. No dedup state, no
-per-bar logging, and the counts land on the result dict where a test can assert
-them instead of scraping a log.
+Counts describe sizing conditions across entry attempts; one attempt may have
+several conditions. Risk-method outcomes are recorded by the sizing function
+that made the decision. Cash/margin, ADV and heat outcomes are recorded at the
+engine's actual guards. Zero-trade runs log the same report before returning
+None; successful results also expose counts under sizing_diagnostics.
 """
 
 from __future__ import annotations
@@ -81,8 +26,8 @@ REASONS = {
     # kind, one-line consumer-facing explanation
     "no_stop_distance": (
         NO_STOP,
-        "no stop distance was available, so the position could not be "
-        "risk-sized (stop_loss_configs is {'type': 'none'}?)"),
+        "no stop distance was available for the requested risk sizing; "
+        "check stop_loss_configs and the signal-bar inputs"),
     "unsupported_stop_type": (
         COVERAGE_DRIFT,
         "the sizing method has no branch for this stop type, though the "
@@ -94,18 +39,18 @@ REASONS = {
         "position is sized against a distance the strategy did not ask for"),
     "clamped_by_cash": (
         OVERRIDDEN,
-        "reduced to fit available cash -- raise capital or lower "
-        "allocation_per_trade"),
+        "reduced or declined to fit available cash or margin -- raise capital "
+        "or lower allocation_per_trade"),
     "clamped_by_adv": (
         OVERRIDDEN,
         "reduced by the max_pct_adv liquidity cap -- the name is too thin for "
         "the requested size"),
-    "skipped_zero_volume": (
-        OVERRIDDEN,
-        "skipped: the ADV cap resolved to zero shares on a zero-volume bar"),
     "rejected_by_heat": (
         OVERRIDDEN,
         "rejected by the max_portfolio_heat budget"),
+    "clamped_by_contract_cap": (
+        OVERRIDDEN,
+        "reduced by max_contracts_cap before the requested risk budget was reached"),
     "clamped_by_notional_ceiling": (
         UNREACHABLE,
         "the risk budget is unreachable without leverage (stop distance is "
@@ -161,9 +106,9 @@ class SizingDiagnostics:
     def format_report(self, label: str = "") -> str:
         if self.is_empty():
             return ""
-        head = "Position sizing: {} entr{} did not get the configured size".format(
-            sum(self._counts.values()),
-            "y" if sum(self._counts.values()) == 1 else "ies")
+        count = sum(self._counts.values())
+        head = "Position sizing: {} condition{} recorded".format(
+            count, "" if count == 1 else "s")
         if label:
             head = "[{}] {}".format(label, head)
         lines = [head]

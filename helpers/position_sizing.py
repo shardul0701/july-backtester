@@ -215,6 +215,19 @@ def _volatility_parity(equity: float, price: float, symbol_data: pd.DataFrame, c
     return shares
 
 
+def _record_sizing_diagnostic(kwargs, reason):
+    diagnostics = kwargs.get("diagnostics")
+    if diagnostics is not None:
+        diagnostics.record(reason, kwargs.get("diagnostic_symbol"))
+
+
+def _record_missing_stop(kwargs):
+    known_types = {"none", "percentage", "points", "atr", "trailing_atr", "signal_bar"}
+    reason = ("no_stop_distance" if kwargs.get("stop_type", "none") in known_types
+              else "unsupported_stop_type")
+    _record_sizing_diagnostic(kwargs, reason)
+
+
 def _risk_parity(equity: float, price: float, symbol_data: pd.DataFrame, config: dict, **kwargs) -> float:
     """
     Risk parity sizing: equal $ risk per position.
@@ -252,30 +265,26 @@ def _risk_parity(equity: float, price: float, symbol_data: pd.DataFrame, config:
         if "ATR_14" in symbol_data.columns and len(symbol_data) > 0:
             atr = symbol_data["ATR_14"].iloc[-1]
             if pd.notna(atr) and atr > 0:
-                # Default: 3x ATR stop
-                #
-                # #387: the ONLY one of this function's three fallbacks that was
-                # silent, and the only one that returns a WRONG SIZE rather than
-                # a different method -- the other two announce themselves and
-                # then hand off to _fixed_allocation, which is a documented
-                # method behaving as documented. This one sizes against a
-                # distance the strategy never asked for (3.35x too large,
-                # measured) while reporting nothing. An inconsistently applied
-                # concept, not a missing one: the vocabulary already exists in
-                # this module and was skipped on the harmful branch.
-                # (@shardul0701's correction on #387 -- my ticket claimed all
-                # three were silent.)
-                logger.warning(
-                    "risk_parity: no stop distance supplied, substituting a "
-                    "3xATR proxy (%.4f of price). The position is sized "
-                    "against a distance the strategy did not ask for.",
-                    (atr * 3.0) / price if price > 0 else 0.0)
+                if kwargs.get("diagnostics") is not None:
+                    _record_sizing_diagnostic(kwargs, "atr_proxy_substituted")
+                else:
+                    logger.warning(
+                        "risk_parity: no stop distance supplied, substituting a "
+                        "3xATR proxy (%.4f of price). The position is sized "
+                        "against a distance the strategy did not ask for.",
+                        (atr * 3.0) / price if price > 0 else 0.0)
                 stop_distance_pct = (atr * 3.0) / price
             else:
-                logger.warning("No valid stop distance for risk parity sizing. Falling back to fixed.")
+                if kwargs.get("diagnostics") is not None:
+                    _record_missing_stop(kwargs)
+                else:
+                    logger.warning("No valid stop distance for risk parity sizing. Falling back to fixed.")
                 return _fixed_allocation(equity, price, config)
         else:
-            logger.warning("No stop distance or ATR for risk parity sizing. Falling back to fixed.")
+            if kwargs.get("diagnostics") is not None:
+                _record_missing_stop(kwargs)
+            else:
+                logger.warning("No stop distance or ATR for risk parity sizing. Falling back to fixed.")
             return _fixed_allocation(equity, price, config)
 
     target_risk = config.get("target_risk_per_trade", 0.02)
@@ -387,15 +396,15 @@ def _risk_pct_capped(equity: float, config: dict, price: float | None = None,
     futures byte-identical is what lets the equivalence matrix isolate the
     equity change.
 
-    Returns 0.0 when no stop distance was supplied — pre-existing behaviour;
-    whether "declined to size" should be distinguishable from "sized to zero"
-    is #381-D.
+    Returns 0.0 when no stop distance was supplied. Optional diagnostics record
+    that outcome and any cap applied, without changing the arithmetic.
     """
     stop_distance_points = kwargs.get("stop_distance_points")
     point_value = kwargs.get("point_value", 1.0)
     margined = bool(kwargs.get("margined", False))
 
     if not stop_distance_points or stop_distance_points <= 0:
+        _record_missing_stop(kwargs)
         return 0.0
 
     risk_budget = max(equity, 0.0) * config.get("risk_pct_per_trade", 0.01)
@@ -404,6 +413,8 @@ def _risk_pct_capped(equity: float, config: dict, price: float | None = None,
     if margined:
         units = np.floor(units)
         cap = config.get("max_contracts_cap", 20)
+        if units > cap:
+            _record_sizing_diagnostic(kwargs, "clamped_by_contract_cap")
         return max(0.0, min(units, cap))
 
     # Unmargined: no integer floor, no contract cap, but a notional ceiling.
@@ -421,36 +432,10 @@ def _risk_pct_capped(equity: float, config: dict, price: float | None = None,
     if (price is not None and price > 0 and point_value > 0
             and ceiling_pct is not None):
         ceiling = (max(equity, 0.0) * ceiling_pct) / (price * point_value)
+        if units > ceiling:
+            _record_sizing_diagnostic(kwargs, "clamped_by_notional_ceiling")
         units = min(units, ceiling)
     return max(0.0, units)
-
-
-def notional_ceiling_will_bind(config: dict, stop_distance_pct: float) -> bool:
-    """True when `risk_pct_capped`'s notional ceiling will clamp the position.
-
-    The budget needs `risk_pct_per_trade / stop_frac` of equity in notional, so
-    the ceiling engages exactly when
-
-        stop_frac < risk_pct_per_trade / risk_pct_capped_max_notional_pct
-
-    which at the 1.0 default is `stop_frac < risk_pct_per_trade` — the threshold
-    in #385's acceptance clause, and the condition under which the budget is
-    genuinely unreachable without leverage.
-
-    Exposed as a predicate so the ENGINE can report the condition (#387) without
-    re-deriving it. The first version computed it inline at the call site and was
-    caught by `test_no_inline_sizing_copies_remain` — correctly: reading
-    `risk_pct_per_trade` in `portfolio_simulations.py` to reconstruct a sizing
-    decision is the fifth copy of the thing #384 consolidated, whatever it is
-    being used for. The guard does not care that the caller only wanted to log.
-    """
-    if not stop_distance_pct or stop_distance_pct <= 0:
-        return False
-    ceiling_pct = config.get("risk_pct_capped_max_notional_pct", 1.0)
-    if ceiling_pct is None or ceiling_pct <= 0:
-        return False
-    return stop_distance_pct < (config.get("risk_pct_per_trade", 0.01)
-                                / ceiling_pct)
 
 
 def _fixed_contracts(config: dict) -> float:
