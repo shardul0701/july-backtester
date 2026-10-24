@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Futures long heat uses its actual known stop risk, including a final market-impact check, rather than a sizing proxy (#467).
+
 ## [1.16.0] — Backtest-integrity epic (#424)
 
 > **Results change.** Most fixes in this release remove optimistic biases, so headline numbers for

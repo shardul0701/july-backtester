@@ -576,10 +576,29 @@ def _scenario(name):
         sig.iloc[8] = -1
         return {"SSS": df}, {"SSS": sig}, {}, {"type": "none"}, {}
 
+    if name == "futures_long_real_stop_heat":
+        # A $500 MES long risks 1% through a five-point stop. The $100
+        # follower risks 5%, so only the control fits a 4% aggregate heat cap.
+        control = _df([500.] * 8, opens=[500.] * 8,
+                      highs=[501.] * 8, lows=[499.] * 8)
+        follower = _df([100.] * 8, opens=[100.] * 8,
+                       highs=[101.] * 8, lows=[99.] * 8)
+        return ({"MESM6": control, "MESZ6": follower},
+                {"MESM6": _sig(control, {0: 1, 6: -1}),
+                 "MESZ6": _sig(follower, {1: 1, 6: -1})},
+                {"execution_time": "close", "position_sizing_method": "fixed",
+                 "max_portfolio_heat": .04, "max_pct_adv": 0.,
+                 "instruments": {"default_asset_class": "equity", "overrides": {},
+                                 "futures_initial_margin_pct": .1,
+                                 "futures_commission_per_contract": 0.,
+                                 "futures_slippage_ticks": 0.}},
+                {"type": "points", "value": 5.}, {})
+
     raise ValueError(name)
 
 
 SCENARIOS = [
+    "futures_long_real_stop_heat",
     "long_basic", "long_pct_stop", "long_atr_stop", "short_borrow",
     "vol_impact", "risk_parity_stop", "exclude_open", "multi_symbol",
     "trailing_atr_equity", "hold_state_stop", "hold_state_stop_level",
