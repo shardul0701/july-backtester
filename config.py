@@ -405,8 +405,8 @@ CONFIG = {
 
     # --- PIT Data Repo Paths (optional) ---
     # Absolute paths to local clones of the PIT ticker-history repos.
-    # Leave as "" to use the S3-synced rosters beside parquet_data_dir, then
-    # NQ100_DATA_ROOT / SP500_DATA_ROOT, or the bundled point_in_time folders.
+    # Leave as "" to use NQ100_DATA_ROOT / SP500_DATA_ROOT, then S3-synced
+    # rosters beside parquet_data_dir, then bundled point_in_time folders.
     #   NQ100 -- https://github.com/shardul0701/NQ100-Survivorship-bias-data-2004-2026
     #   SP500 -- https://github.com/shardul0701/SP500-Survivorship-bias-data-2004-2026
     "nq100_pit_path": "",

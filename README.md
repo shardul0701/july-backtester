@@ -126,7 +126,8 @@ The read-only AWS key used by the sync must include `s3:GetObject` and
 The membership schedule, the fetched universe and daily forced-exit enforcement
 all read **one** roster, chosen by the same completeness rule: every yearly YAML
 from 2004 through the backtest's end year (the current year's file is optional,
-since it may not be published yet). An auto-discovered roster with a missing
+since it may not be published yet). A run starting in an unpublished year
+carries forward the latest available roster and its changes. An auto-discovered roster with a missing
 year is skipped with a warning naming that year. If no complete roster is left,
 the run **aborts** (`PitRosterError`) instead of replaying a timeline whose
 missing years never apply their removals. An explicitly configured

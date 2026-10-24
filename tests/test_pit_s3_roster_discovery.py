@@ -268,3 +268,28 @@ def test_run_ending_this_year_accepts_mirror_without_this_years_file(tmp_path, m
     monkeypatch.setattr(point_in_time, "_candidate_roots", lambda *_: [root])
     directory, _ = point_in_time.select_roster("sp500", this_year, {})
     assert root in directory.parents
+
+
+@pytest.mark.parametrize("provider", ["yahoo", "parquet"])
+@pytest.mark.parametrize("index", ["sp500", "nq100"])
+def test_run_starting_in_unpublished_year_keeps_prior_membership(
+    tmp_path, monkeypatch, _no_env, index, provider,
+):
+    root = tmp_path / "pit" / index
+    _xom_roster(root, index, years=(2004, 2005))
+    monkeypatch.setattr(point_in_time, "_candidate_roots", lambda *_: [root])
+    monkeypatch.setattr(point_in_time, "_latest_published_year", lambda: 2005)
+    # Isolate roster replay; security-ID resolution is separately covered.
+    if provider == "parquet":
+        monkeypatch.setattr(point_in_time, "resolve_schedule_to_securities",
+                            lambda schedule, config: schedule)
+    cfg = {"start_date": "2006-01-02", "end_date": "2006-01-13",
+           "data_provider": provider}
+    schedule = point_in_time.build_membership_schedule(
+        index, cfg["start_date"], cfg["end_date"], cfg)
+    assert schedule == [(cfg["start_date"], frozenset({"AAPL"}))]
+    assert "AAPL" in point_in_time.tickers_union_for_period(
+        index, cfg["start_date"], cfg["end_date"], cfg)
+    intervals = pit_enforcement.membership_intervals(f"pit:{index}", cfg)
+    assert "AAPL" in intervals
+    assert "XOM" not in intervals

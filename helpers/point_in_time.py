@@ -299,7 +299,7 @@ def select_roster(index: str, end_year: int,
 
 def _roster_year_files(index: str, start_year: int, end_year: int,
                        config: dict | None = None) -> list[tuple[int, Path]]:
-    """``[(year, path)]`` for each roster year in range, from the selected roster.
+    """Roster files in range, plus the latest prior anchor if the start is missing.
 
     A missing year is logged, never silently skipped: a required year can only be
     missing from an explicitly configured roster (``select_roster`` rejects
@@ -319,6 +319,16 @@ def _roster_year_files(index: str, start_year: int, end_year: int,
             logger.warning("PIT roster for %s %s is not available yet (%s); "
                            "removals in %s will not be applied.",
                            index, year, path, year)
+    # A current-year file is optional, including when the run STARTS in that
+    # year. Carry the last published January roster plus its change events
+    # forward; accepting the mirror but returning no members would be a false
+    # empty universe. The same anchor feeds the schedule and the fetched union.
+    if not out or out[0][0] > start_year:
+        for year in range(start_year - 1, ROSTER_SEED_YEAR - 1, -1):
+            path = directory / f"{prefix}-{year}.yaml"
+            if path.is_file():
+                out.insert(0, (year, path))
+                break
     return out
 
 
@@ -512,7 +522,7 @@ def build_membership_schedule(
 
     # --- Step 1: derive initial membership at exactly start_date ---
     members: set[str] = set()
-    if year_files and year_files[0][0] == sy:
+    if year_files and year_files[0][0] <= sy:
         data = _load_year_yaml(year_files[0][1])
         members = {norm(t) for t in (data.get("tickers_on_Jan_1") or [])}
         for change_date in sorted(str(d) for d in (data.get("changes") or {}).keys()):
