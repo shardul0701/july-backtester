@@ -59,3 +59,14 @@ def test_market_impact_cannot_push_final_stop_risk_over_heat(settings, monkeypat
     monkeypatch.setitem(ps.CONFIG, "max_portfolio_heat", .03)
     monkeypatch.setitem(ps.CONFIG, "volume_impact_coeff", 1.)
     assert run(frame(volume=1000.), {"type": "points", "value": 5.}) is None
+
+
+@pytest.mark.parametrize("price", [2500., 2500.25, 2500.5])
+def test_exact_heat_budget_is_allowed_without_fraction_round_trip(settings, monkeypatch, price):
+    monkeypatch.setitem(ps.CONFIG, "position_sizing_method", "fixed_contracts")
+    monkeypatch.setitem(ps.CONFIG, "fixed_contracts_per_trade", 4)
+    result = run(frame(price), {"type": "points", "value": 25.})
+    assert result is not None, "exactly $500 of stop risk must fit a $500 cap"
+    trade, = result["trade_log"]
+    assert trade["Shares"] == 4.
+    assert trade["InitialRisk"] == 25.

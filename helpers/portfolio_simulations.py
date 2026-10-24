@@ -2201,14 +2201,14 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                 # target_risk_per_trade parameter (which is what vol/risk parity
                 # sized against anyway). notional() applies $/point for futures.
                 _stop_dist = sizing_kwargs.get("stop_distance_pct") or CONFIG.get("target_risk_per_trade", 0.02)
+                new_position_risk = _inst.notional(inst, shares, entry_price) * _stop_dist
                 if inst.margin_mode == _inst.INITIAL_MARGIN:
                     _heat_stop = _initial_long_stop(
                         symbol, df, signal_date, raw_entry_price, entry_price)[0]
                     if pd.notna(_heat_stop) and _heat_stop < entry_price:
                         # Same stop resolver as the final position, not a third
                         # prediction ladder. Include the actual entry fill.
-                        _stop_dist = (entry_price - _heat_stop) / entry_price
-                new_position_risk = _inst.notional(inst, shares, entry_price) * _stop_dist
+                        new_position_risk = shares * inst.point_value * (entry_price - _heat_stop)
                 max_heat = CONFIG.get("max_portfolio_heat", 1.0)
                 # Gate against BOTH open longs and open shorts. Before #312 an
                 # equity short carried no 'risk' key, so passing `positions`
