@@ -30,9 +30,8 @@ REASONS = {
         "check stop_loss_configs and the signal-bar inputs"),
     "unsupported_stop_type": (
         COVERAGE_DRIFT,
-        "the sizing method has no branch for this stop type, though the "
-        "distance is derivable -- this is a gap in the engine, not a config "
-        "error"),
+        "unsupported stop type prevented resolving a sizing distance; check "
+        "stop_loss_configs or add support for this stop type"),
     "atr_proxy_substituted": (
         NO_STOP,
         "no stop distance, so risk_parity substituted a 3xATR proxy -- the "
@@ -53,9 +52,8 @@ REASONS = {
         "reduced by max_contracts_cap before the requested risk budget was reached"),
     "clamped_by_notional_ceiling": (
         UNREACHABLE,
-        "the risk budget is unreachable without leverage (stop distance is "
-        "narrower than risk_pct_per_trade), so the ceiling-clamped size was "
-        "used"),
+        "the configured notional ceiling prevents reaching the risk budget, "
+        "so the ceiling-clamped size was used"),
 }
 
 
@@ -68,13 +66,15 @@ class SizingDiagnostics:
     resetting from a test fixture. One instance per run, returned on the result.
     """
 
-    __slots__ = ("_counts", "_symbols")
+    __slots__ = ("_counts", "_symbols", "_details")
 
     def __init__(self):
         self._counts = Counter()
         self._symbols = {}
+        self._details = {}
 
-    def record(self, reason: str, symbol: str | None = None) -> None:
+    def record(self, reason: str, symbol: str | None = None,
+               detail: str | None = None) -> None:
         if reason not in REASONS:
             # A typo'd reason would otherwise be counted under its own key and
             # reported as a category nobody defined.
@@ -82,6 +82,10 @@ class SizingDiagnostics:
                 "unknown sizing-diagnostic reason %r; add it to REASONS with "
                 "its kind" % (reason,))
         self._counts[reason] += 1
+        if detail:
+            details = self._details.setdefault(reason, [])
+            if len(details) < 5 and detail not in details:
+                details.append(detail)
         if symbol is not None:
             # Bounded: the first few names are enough to make a report
             # actionable, and an unbounded set on a 500-name universe is a
@@ -119,6 +123,9 @@ class SizingDiagnostics:
             if names:
                 suffix = "  e.g. {}{}".format(
                     ", ".join(names), ", ..." if n > len(names) else "")
+            details = self._details.get(reason, [])
+            if details:
+                suffix += "  (" + "; ".join(details) + ")"
             lines.append("  {:>6}  {:<12} {}{}".format(n, kind, explanation, suffix))
         return "\n".join(lines)
 

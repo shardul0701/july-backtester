@@ -89,7 +89,7 @@ def test_known_stop_without_valid_atr_is_absent_distance_not_coverage_drift(side
     caplog.set_level(logging.WARNING)
     assert _run(side, symbol, "risk_pct_capped", {"type": "atr", "multiplier": 2.}, atr=float("nan")) is None
     assert "no stop distance" in caplog.text.lower()
-    assert "gap in the engine" not in caplog.text.lower()
+    assert "unsupported stop type" not in caplog.text.lower()
 
 
 @pytest.mark.parametrize("side,symbol", PATHS)
@@ -104,7 +104,8 @@ def test_healthy_entries_stay_silent(side, symbol, caplog):
 def test_unknown_stop_is_reported_as_coverage_drift(side, symbol, caplog):
     caplog.set_level(logging.WARNING)
     assert _run(side, symbol, "risk_pct_capped", {"type": "future_stop"}) is None
-    assert "gap in the engine" in caplog.text
+    assert "unsupported stop type" in caplog.text
+    assert "future_stop" in caplog.text
 
 
 @pytest.mark.parametrize("side", [1, -2])
@@ -139,3 +140,22 @@ def test_tiny_adv_limited_equity_entry_is_declined_and_explained(side, caplog):
     caplog.set_level(logging.WARNING)
     assert _run(side, "AAA", volume=.02, max_pct_adv=.05) is None
     assert "max_pct_adv" in caplog.text
+
+
+@pytest.mark.parametrize("side", [1, -2])
+def test_custom_ceiling_explains_configured_limit_without_claiming_leverage(side, caplog):
+    caplog.set_level(logging.WARNING)
+    result = _run(side, "AAA", "risk_pct_capped", {"type": "percentage", "value": .05},
+                  risk_pct_capped_max_notional_pct=.10)
+    assert result["trade_log"][0]["Shares"] == 100.
+    assert "configured notional ceiling" in caplog.text
+    assert "leverage" not in caplog.text
+
+
+def test_unsupported_type_examples_are_bounded():
+    from helpers.sizing_diagnostics import SizingDiagnostics
+    diagnostics = SizingDiagnostics()
+    for i in range(50):
+        diagnostics.record("unsupported_stop_type", "AAA", detail=f"type-{i}")
+    report = diagnostics.format_report()
+    assert "type-0" in report and "type-49" not in report

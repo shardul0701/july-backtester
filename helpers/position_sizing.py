@@ -215,17 +215,19 @@ def _volatility_parity(equity: float, price: float, symbol_data: pd.DataFrame, c
     return shares
 
 
-def _record_sizing_diagnostic(kwargs, reason):
+def _record_sizing_diagnostic(kwargs, reason, detail=None):
     diagnostics = kwargs.get("diagnostics")
     if diagnostics is not None:
-        diagnostics.record(reason, kwargs.get("diagnostic_symbol"))
+        diagnostics.record(reason, kwargs.get("diagnostic_symbol"), detail=detail)
 
 
 def _record_missing_stop(kwargs):
     known_types = {"none", "percentage", "points", "atr", "trailing_atr", "signal_bar"}
     reason = ("no_stop_distance" if kwargs.get("stop_type", "none") in known_types
               else "unsupported_stop_type")
-    _record_sizing_diagnostic(kwargs, reason)
+    detail = (f"stop type {kwargs.get('stop_type')!r}"
+              if reason == "unsupported_stop_type" else None)
+    _record_sizing_diagnostic(kwargs, reason, detail)
 
 
 def _risk_parity(equity: float, price: float, symbol_data: pd.DataFrame, config: dict, **kwargs) -> float:

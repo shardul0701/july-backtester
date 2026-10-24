@@ -16,6 +16,7 @@ Two things the original runs did not do:
 Run:  python scripts/reverify_sizing_mutants.py
 """
 import os
+from pathlib import Path
 import subprocess
 import sys
 
@@ -28,6 +29,7 @@ CONS = "tests/test_position_sizing_consolidation.py"
 SBAR = "tests/test_signal_bar_stop.py"
 LADDER = "tests/test_stop_ladder_symmetry.py"
 DIAG = "tests/test_sizing_diagnostics.py"
+DIAG_ALL = "tests/test_sizing_diagnostics_all_paths.py"
 
 # (label, file, old, new, test targets)
 MUTANTS = [
@@ -97,34 +99,40 @@ def run(targets):
         raise RuntimeError("pytest did not complete: " + p.stdout[-2000:] + p.stderr[-1000:])
     tail = [l for l in p.stdout.splitlines()
             if l.startswith("FAILED") or " passed" in l or " failed" in l]
-    return tail[-1] if tail else "?", sum(
-        1 for l in p.stdout.splitlines() if l.startswith("FAILED"))
+    return (tail[-1] if tail else "?", sum(
+        1 for l in p.stdout.splitlines() if l.startswith("FAILED")), p.returncode)
 
 
 def main():
     print("control:")
-    for t in (GM, CONS, SBAR, LADDER, DIAG):
-        line, nf = run([t])
+    for t in (GM, CONS, SBAR, LADDER, DIAG, DIAG_ALL):
+        line, nf, returncode = run([t])
         print("   %-46s %s" % (t, line))
+        if returncode != 0 or nf:
+            print("!! control failed; no mutation results can be trusted")
+            return 1
     print()
 
     bad = []
     for label, path, old, new, targets in MUTANTS:
-        src = open(path).read()
+        source_path = Path(path)
+        original_bytes = source_path.read_bytes()
+        src = original_bytes.decode("utf-8").replace("\r\n", "\n")
         n = src.count(old)
         if n != 1:
             print("!! %-46s SUBSTITUTION MATCHED %d TIMES -- not a result" % (label, n))
             bad.append(label)
             continue
         try:
-            open(path, "w").write(src.replace(old, new, 1))
-            line, nf = run(targets)
+            source_path.write_text(src.replace(old, new, 1), encoding="utf-8", newline="\n")
+            line, nf, returncode = run(targets)
         finally:
-            open(path, "w").write(src)
-        assert open(path).read() == src, "restore failed for " + path
-        verdict = "KILLED (%d)" % nf if nf else "SURVIVED"
+            source_path.write_bytes(original_bytes)
+        assert source_path.read_bytes() == original_bytes, "restore failed for " + path
+        killed = returncode == 1 and nf > 0
+        verdict = "KILLED (%d)" % nf if killed else "SURVIVED/INVALID"
         print("%-10s %-46s %s" % (verdict, label, line))
-        if not nf:
+        if not killed:
             bad.append(label)
 
     print()
