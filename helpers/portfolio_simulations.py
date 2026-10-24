@@ -1585,13 +1585,34 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     # understates it (two 5%-stop MES shorts = 10% real risk were
                     # both admitted under a 6% cap when the proxy was used).
                     def _fs_risk(n):
-                        if _s_ir and _s_ir > 0:
-                            return _s_ir * inst_se.point_value * n
+                        if pd.notna(_s_stop) and _s_stop > _s_entry_fill:
+                            return (_s_stop - _s_entry_fill) * inst_se.point_value * n
                         return (_inst.notional(inst_se, n, _s_entry_fill)
                                 * CONFIG.get("target_risk_per_trade", 0.02))
                     if not check_portfolio_heat({**positions, **short_positions},
                                                 _fs_risk(shares), total_equity,
                                                 CONFIG.get("max_portfolio_heat", 1.0)):
+                        continue
+
+                    # Same contract-volume cap and prior-bar ADV timing as longs.
+                    _s_max_pct_adv = CONFIG.get('max_pct_adv') or 0
+                    if _s_max_pct_adv > 0 and 'Volume' in df_se.columns:
+                        _s_adv = _daily_adv(df_se['Volume'], date, symbol)
+                        if pd.notna(_s_adv) and _s_adv > 0:
+                            shares = min(shares, _s_adv * _s_max_pct_adv)
+
+                    # A short sale fills lower. Stops stay anchored to the raw
+                    # signal/fill price, so impact increases actual stop risk.
+                    _s_entry_impact_bps = 0.0
+                    _s_impact_add = 0.0
+                    _s_impact_coeff = CONFIG.get('volume_impact_coeff', 0.0)
+                    if _s_impact_coeff > 0 and 'Volume' in df_se.columns:
+                        _s_adv = _daily_adv(df_se['Volume'], date, symbol)
+                        if pd.notna(_s_adv) and _s_adv > 0:
+                            _s_impact_add = _s_impact_coeff * np.sqrt(shares / _s_adv)
+                            _s_entry_fill *= 1 - _s_impact_add
+                            _s_entry_impact_bps = round(_s_impact_add * 10000, 1)
+                    if not np.isfinite(_s_entry_fill) or _s_entry_fill <= 0:
                         continue
 
                     # Free-margin clamp. The old branch applied this up front via
@@ -1600,6 +1621,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     # clamp here instead. Without it an over-large size falls to
                     # the affordability check below and the trade is SKIPPED
                     # rather than reduced, which is a different outcome.
+                    _s_per_contract_margin = _inst.margin_required(inst_se, 1, _s_entry_fill)
                     if _s_per_contract_margin > 0:
                         _s_max_by_margin = _free / _s_per_contract_margin
                         if _s_max_by_margin <= 0:
@@ -1637,6 +1659,14 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         if shares < 1 or _s_margin + commission > cash - reserved_margin:
                             continue
                     _fs_new_risk = _fs_risk(shares)
+                    if not check_portfolio_heat({**positions, **short_positions},
+                                                _fs_new_risk, total_equity,
+                                                CONFIG.get("max_portfolio_heat", 1.0)):
+                        continue
+                    # Include the newly applied impact in the realized R basis.
+                    _s_final_ir = (_s_stop - _s_entry_fill
+                                   if _s_impact_add > 0 and pd.notna(_s_stop)
+                                   and _s_stop > _s_entry_fill else _s_ir)
                     reserved_margin += _s_margin
                     cash -= commission
                     short_positions[symbol] = {
@@ -1646,7 +1676,8 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                         'stop_loss_level': _s_stop, 'initial_stop_loss_level': _s_stop,
                         'trail_target': _s_target, 'atr_locked': _s_atr,
                         'trail_anchor': _s_trail_anchor,
-                        'trail_armed': False, 'initial_risk': _s_ir, 'features': _s_features,
+                        'trail_armed': False, 'initial_risk': _s_final_ir, 'features': _s_features,
+                        'entry_impact_bps': _s_entry_impact_bps,
                         'risk': _fs_new_risk,  # registered for the portfolio-heat pot (#324 QA)
                         'size_mult': _s_size_mult,
                     }
