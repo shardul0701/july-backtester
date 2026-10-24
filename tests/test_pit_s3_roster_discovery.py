@@ -380,3 +380,32 @@ def test_unquoted_yaml_change_dates_apply_to_the_schedule(tmp_path, monkeypatch,
     assert "XOM" not in point_in_time.pit_members_on(schedule, "2005-06-02")
     late = point_in_time.build_membership_schedule(index, "2005-07-01", "2006-12-29")
     assert "XOM" not in late[0][1]
+
+
+@pytest.mark.parametrize("change_date", ["20050601", "2005-W22-3", "2005-99-99"])
+@pytest.mark.parametrize("index", ["sp500", "nq100"])
+def test_noncanonical_change_dates_are_rejected(tmp_path, monkeypatch, _no_env, index, change_date):
+    _xom_roster(tmp_path, index)
+    path = _year_path(tmp_path, index, 2005)
+    path.write_text(path.read_text().replace("'2005-06-01'", repr(change_date)), encoding="utf-8")
+    monkeypatch.setattr(point_in_time, "_candidate_roots", lambda *_: [tmp_path])
+    with pytest.raises(point_in_time.PitRosterError, match="YYYY-MM-DD"):
+        point_in_time.select_roster(index, 2006)
+
+
+@pytest.mark.parametrize("index", ["sp500", "nq100"])
+def test_mixed_quoted_and_unquoted_dates_agree_across_readers(tmp_path, monkeypatch, _no_env, index):
+    _xom_roster(tmp_path, index, years=(2004, 2005))
+    path = _year_path(tmp_path, index, 2005)
+    path.write_text(path.read_text() +
+                    "  2005-09-01:\n    union: ['XOM']\n    difference: []\n", encoding="utf-8")
+    monkeypatch.setattr(point_in_time, "_candidate_roots", lambda *_: [tmp_path])
+    cfg = {"start_date": "2004-01-02", "end_date": "2005-12-30"}
+    schedule = point_in_time.build_membership_schedule(index, cfg["start_date"], cfg["end_date"], cfg)
+    assert "XOM" not in point_in_time.pit_members_on(schedule, "2005-07-01")
+    assert "XOM" in point_in_time.pit_members_on(schedule, "2005-10-01")
+    intervals = pit_enforcement.membership_intervals(f"pit:{index}", cfg)
+    assert intervals["XOM"] == [
+        (pd.Timestamp("2004-01-02"), pd.Timestamp("2005-06-01")),
+        (pd.Timestamp("2005-09-01"), pd.Timestamp("2005-12-30")),
+    ]

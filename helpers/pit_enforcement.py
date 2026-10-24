@@ -76,7 +76,7 @@ def _yaml_change_intervals(start: str, end: str, yaml_dir: "Path",
     represented as separate intervals rather than swallowed.
     """
     import pandas as pd
-    from helpers.pit_universe import _load_sp500_yaml as _load_yaml  # generic YAML loader
+    from helpers.point_in_time import _load_year_yaml as _load_yaml
 
     yaml_dir = Path(yaml_dir)
     if not yaml_dir.is_dir():

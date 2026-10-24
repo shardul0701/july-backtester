@@ -276,7 +276,8 @@ def _roster_file_problem(path: Path) -> str | None:
         return "changes must be a mapping"
     for change_date, entry in changes.items():
         try:
-            datetime.date.fromisoformat(str(change_date))
+            if datetime.date.fromisoformat(str(change_date)).isoformat() != str(change_date):
+                return "change dates must use YYYY-MM-DD"
         except ValueError:
             return "change dates must use YYYY-MM-DD"
         if not isinstance(entry, dict):
