@@ -156,3 +156,29 @@ def test_cli_spawn_workers_agree_on_a_known_corpus(tmp_path):
     assert rows["CLEAN"]["score_int"] == rows["CLEAN"]["score_float"]
     assert rows["ZERO"]["score_int"] - rows["ZERO"]["score_float"] == .5
     assert "error" in rows["CORRUPT"]
+
+
+@pytest.mark.parametrize("bad_code", [
+    "raise RuntimeError('broken initialization')",
+    "import census_dependency_that_does_not_exist",
+    "this is not valid python !!!",
+    "import multiprocessing as _mp\nif _mp.current_process().name != 'MainProcess':\n    raise RuntimeError('worker-only initialization failure')",
+])
+def test_module_initialization_failure_exits_without_worker_respawn_loop(tmp_path, bad_code):
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    module = tmp_path / "broken_quality.py"
+    module.write_text(MODULE.read_text(encoding="utf-8") + "\n" + bad_code + "\n", encoding="utf-8")
+    corpus_dir = tmp_path / "corpus"
+    corpus_dir.mkdir()
+    _frame().to_parquet(corpus_dir / "CLEAN.parquet")
+    result = subprocess.run(
+        [sys.executable, str(Path(ROOT) / "scripts" / "data_quality_cast_census.py"),
+         "--module", str(module), "--corpus", str(corpus_dir), "--workers", "2"],
+        cwd=ROOT, capture_output=True, text=True, encoding="utf-8", timeout=30,
+    )
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "cannot initialize scoring module" in result.stderr
+    assert "SpawnPoolWorker" not in result.stderr

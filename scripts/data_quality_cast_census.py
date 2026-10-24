@@ -62,7 +62,7 @@ OUTPUT
 *keyed* dict: symbol, bars, score_int, score_float -- or symbol plus `error`
 for a frame that would not load. There is no per-row error field on a scored
 row and no positional row format; the earlier hand-run artifact quoted on #389
-used positional rows whose fourth field is zero_volume_pct (null when zero),
+used positional rows whose fifth item (zero-based index 4) is zero_volume_pct (null when zero),
 which reads convincingly as an error column and silently drops 2,798 of 35,309
 series if joined as one. Join on `symbol`.
 
@@ -212,13 +212,24 @@ def _init_worker(module_path: str, cap: int | None) -> None:
     # Suppressed in the worker only: this census does not control that call and
     # is not the place to surface it.
     warnings.filterwarnings("ignore", category=FutureWarning)
+    _MODS.clear()
     path = Path(module_path)
-    as_committed, un_cast, _ = build_variant_sources(path, cap)
-    _MODS["committed"] = _exec_module(as_committed, path, "as_committed")
-    _MODS["uncast"] = _exec_module(un_cast, path, "un_cast")
+    try:
+        as_committed, un_cast, _ = build_variant_sources(path, cap)
+        _MODS["committed"] = _exec_module(as_committed, path, "as_committed")
+        _MODS["uncast"] = _exec_module(un_cast, path, "un_cast")
+        if any(not callable(getattr(mod, "validate_ohlcv", None)) for mod in _MODS.values()):
+            raise ValueError("module must define callable validate_ohlcv")
+    except (Exception, SystemExit) as exc:
+        # Raising in a Pool initializer makes Pool respawn it indefinitely.
+        # Keep the worker alive long enough to propagate a fatal task error.
+        _MODS.clear()
+        _MODS["init_error"] = f"cannot initialize scoring module: {type(exc).__name__}: {exc}"
 
 
 def _score_one(file_path: str) -> dict:
+    if "init_error" in _MODS:
+        raise RuntimeError(_MODS["init_error"])
     import pandas as pd
 
     symbol = Path(file_path).stem
@@ -400,6 +411,13 @@ def main(argv=None) -> int:
     # call that built the pair, so what gets reported is what was scored.
     _, _, eff_cap = build_variant_sources(module_path, args.cap)
 
+    # Execute both copies before spawning; worker-only failures are propagated
+    # by _score_one rather than causing repeated initializer respawns.
+    with warnings.catch_warnings():
+        _init_worker(str(module_path), args.cap)
+    if "init_error" in _MODS:
+        ap.error(_MODS["init_error"])
+
     corpus = Path(args.corpus).expanduser().resolve()
     if not corpus.is_dir():
         ap.error("corpus directory not found: {}".format(corpus))
@@ -415,15 +433,18 @@ def main(argv=None) -> int:
 
     t0 = time.time()
     rows: list[dict] = []
-    with mp.Pool(args.workers, initializer=_init_worker,
-                 initargs=(str(module_path), args.cap)) as pool:
-        for i, row in enumerate(
-                pool.imap_unordered(_score_one, files, chunksize=16), 1):
-            rows.append(row)
-            if i % 2000 == 0:
-                el = time.time() - t0
-                print("[census] {:,}/{:,}  {:.0f}s elapsed, ~{:.0f}s left".format(
-                    i, len(files), el, el / i * (len(files) - i)), file=sys.stderr)
+    try:
+        with mp.Pool(args.workers, initializer=_init_worker,
+                     initargs=(str(module_path), args.cap)) as pool:
+            for i, row in enumerate(
+                    pool.imap_unordered(_score_one, files, chunksize=16), 1):
+                rows.append(row)
+                if i % 2000 == 0:
+                    el = time.time() - t0
+                    print("[census] {:,}/{:,}  {:.0f}s elapsed, ~{:.0f}s left".format(
+                        i, len(files), el, el / i * (len(files) - i)), file=sys.stderr)
+    except Exception as exc:
+        ap.error(f"scoring workers failed: {exc}")
 
     print("[census] scored {:,} in {:.0f}s".format(len(rows), time.time() - t0),
           file=sys.stderr)
