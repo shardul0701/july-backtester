@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Opening Kelly orders use only trades completed before the fill bar; closing orders retain same-bar completed outcomes (#466).
+
 - Futures long heat uses its actual known stop risk, including a final market-impact check, rather than a sizing proxy (#467).
 
 ## [1.16.0] — Backtest-integrity epic (#424)
