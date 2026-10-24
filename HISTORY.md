@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Futures short entries honor the ADV cap and adverse entry impact, report both impact legs, and recheck actual stop risk after impact; margin affordability uses the slipped/impacted fill (#468).
+
 - Opening Kelly orders use only trades completed before the fill bar; closing orders retain same-bar completed outcomes (#466).
 
 - Futures long heat uses its actual known stop risk, including a final market-impact check, rather than a sizing proxy (#467).

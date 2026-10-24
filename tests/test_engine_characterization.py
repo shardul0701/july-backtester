@@ -576,6 +576,20 @@ def _scenario(name):
         sig.iloc[8] = -1
         return {"SSS": df}, {"SSS": sig}, {}, {"type": "none"}, {}
 
+    if name == "futures_short_liquidity":
+        df = _df([100.] * 30, opens=[100.] * 30,
+                 highs=[101.] * 30, lows=[99.] * 30)
+        return ({"MESM6": df, "MESZ6": df.copy()},
+                {"MESM6": _sig(df, {21: 1, 26: -1}),
+                 "MESZ6": _sig(df, {21: -2, 26: -1})},
+                {"max_portfolio_heat": 100., "max_pct_adv": .00005,
+                 "volume_impact_coeff": .5,
+                 "instruments": {"default_asset_class": "equity", "overrides": {},
+                                 "futures_initial_margin_pct": .1,
+                                 "futures_commission_per_contract": 0.,
+                                 "futures_slippage_ticks": 0.}},
+                {"type": "none"}, {})
+
     if name == "futures_long_real_stop_heat":
         # A $500 MES long risks 1% through a five-point stop. The $100
         # follower risks 5%, so only the control fits a 4% aggregate heat cap.
@@ -598,6 +612,7 @@ def _scenario(name):
 
 
 SCENARIOS = [
+    "futures_short_liquidity",
     "futures_long_real_stop_heat",
     "long_basic", "long_pct_stop", "long_atr_stop", "short_borrow",
     "vol_impact", "risk_parity_stop", "exclude_open", "multi_symbol",

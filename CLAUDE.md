@@ -948,3 +948,7 @@ In `helpers/summary.py::generate_per_portfolio_summary()`, Step 4b's `save_only_
 ### Kelly execution timing (#466)
 
 Opening Kelly entries use a completed-trade prefix captured before the fill bar's delistings, exits, and fill-bar stops. Same-open exits are conservatively excluded. Closing entries retain all outcomes already booked in the bar. Applies to equity/futures and both directions. Tests: `tests/test_kelly_execution_timing.py`.
+
+### Futures short liquidity (#468)
+
+Futures short entries apply the same contract ADV cap and prior-bar volume timing as futures longs. Market impact lowers the short-sale fill, contributes to round-trip `VolumeImpact_bps`, and increases risk to a raw-price-anchored stop. A final heat check precedes margin/cash mutation, and subsequent entries see the impacted stop exposure. Tests: `tests/test_futures_short_liquidity.py`.
