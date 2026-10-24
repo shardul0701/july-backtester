@@ -116,3 +116,43 @@ class TestReporting:
     def test_json_rounding_is_writer_only(self):
         r = census._round_row({"symbol": "X", "score_float": 79.99999999})
         assert r["score_float"] == 80.0
+
+
+@pytest.mark.parametrize("flag,value", [
+    ("--workers", "0"), ("--workers", "-1"), ("--limit", "0"),
+    ("--limit", "-1"), ("--threshold", "nan"), ("--threshold", "inf"),
+])
+def test_invalid_cli_values_are_rejected(flag, value, tmp_path, capsys):
+    with pytest.raises(SystemExit) as exc:
+        census.main([flag, value, "--corpus", str(tmp_path)])
+    assert exc.value.code == 2
+    assert flag in capsys.readouterr().err
+
+
+def test_cli_spawn_workers_agree_on_a_known_corpus(tmp_path):
+    import json
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    corpus_dir = tmp_path / "corpus"
+    corpus_dir.mkdir()
+    _frame().to_parquet(corpus_dir / "CLEAN.parquet")
+    _frame(zero_vol=70).to_parquet(corpus_dir / "ZERO.parquet")
+    (corpus_dir / "CORRUPT.parquet").write_bytes(b"not parquet")
+    results = []
+    for workers in (1, 2):
+        artifact = tmp_path / f"census-{workers}.json"
+        result = subprocess.run(
+            [sys.executable, str(Path(ROOT) / "scripts" / "data_quality_cast_census.py"),
+             "--corpus", str(corpus_dir), "--workers", str(workers), "--json-out", str(artifact)],
+            cwd=ROOT, capture_output=True, text=True, encoding="utf-8", timeout=60,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "Series scored        : 2   (1 unreadable)" in result.stdout
+        results.append(json.loads(artifact.read_text(encoding="utf-8")))
+    assert results[0] == results[1]
+    rows = {r["symbol"]: r for r in results[0]["rows"]}
+    assert rows["CLEAN"]["score_int"] == rows["CLEAN"]["score_float"]
+    assert rows["ZERO"]["score_int"] - rows["ZERO"]["score_float"] == .5
+    assert "error" in rows["CORRUPT"]

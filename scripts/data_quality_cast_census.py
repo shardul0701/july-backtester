@@ -85,6 +85,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import math
 import multiprocessing as mp
 import os
 import re
@@ -372,7 +373,8 @@ def main(argv=None) -> int:
     ap.add_argument("--threshold", type=float, default=80.0,
                     help="the gate being cleared (default: %(default)s)")
     ap.add_argument("--workers", type=int,
-                    default=max(1, (os.cpu_count() or 2) - 1))
+                    default=min(8, max(1, (os.cpu_count() or 2) - 1)),
+                    help="process count (default: up to 8; override for larger runs)")
     ap.add_argument("--limit", type=int, default=None,
                     help="score only the first N series (smoke test)")
     ap.add_argument("--json-out", default=None,
@@ -382,7 +384,14 @@ def main(argv=None) -> int:
     if args.cap is not None and args.cap < 0:
         ap.error("--cap must be >= 0, got {}".format(args.cap))
 
-    module_path = Path(args.module)
+    if args.workers < 1:
+        ap.error("--workers must be >= 1")
+    if args.limit is not None and args.limit < 1:
+        ap.error("--limit must be >= 1")
+    if not math.isfinite(args.threshold):
+        ap.error("--threshold must be finite")
+
+    module_path = Path(args.module).expanduser().resolve()
     if not module_path.is_file():
         ap.error("module not found: {}".format(module_path))
 
@@ -391,7 +400,7 @@ def main(argv=None) -> int:
     # call that built the pair, so what gets reported is what was scored.
     _, _, eff_cap = build_variant_sources(module_path, args.cap)
 
-    corpus = Path(args.corpus)
+    corpus = Path(args.corpus).expanduser().resolve()
     if not corpus.is_dir():
         ap.error("corpus directory not found: {}".format(corpus))
     files = sorted(str(p) for p in corpus.glob("*.parquet"))
@@ -420,7 +429,8 @@ def main(argv=None) -> int:
           file=sys.stderr)
 
     if args.json_out:
-        Path(args.json_out).write_text(
+        rows.sort(key=lambda row: row["symbol"])
+        Path(args.json_out).expanduser().write_text(
             json.dumps({"cap": eff_cap, "threshold": args.threshold,
                         "corpus": str(corpus),
                         "rows": [_round_row(r) for r in rows]}, indent=1),
