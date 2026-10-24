@@ -228,8 +228,10 @@ def _risk_parity(equity: float, price: float, symbol_data: pd.DataFrame, config:
     legacy ``stop_distance_pct``; points win when both are given and are
     converted here against ``price``.
 
-    The engine still feeds this method ``stop_distance_pct``, NOT points, and
-    #384 deliberately did not switch it. ``portfolio_simulations.py`` builds
+    The engine's LONG path still feeds this method ``stop_distance_pct``, NOT
+    points, and #384 deliberately did not switch it; both SHORT legs feed it
+    ``stop_distance_points`` (the realised stop, since shorts resolve their
+    stop before sizing -- #386). On the long path ``portfolio_simulations.py`` builds
     that fraction with a different denominator per stop type -- native for
     ``percentage``, ``Close`` at the signal bar for the ATR family,
     ``raw_entry_price`` for ``points`` -- while this function then multiplies
@@ -365,8 +367,8 @@ def _risk_pct_capped(equity: float, config: dict, price: float | None = None,
     nearly the same number. What the ceiling changes is *when*: it clamps
     BEFORE the portfolio heat check, so heat evaluates the position that will
     actually be held rather than an unclamped one the cash clamp would shrink
-    afterwards. It can change the held size once short proceeds push cash above
-    equity, and below 1.0 it binds directly. (@shardul0701 on #390 — two
+    afterwards. It can change the held size when unrealized short losses leave
+    cash above equity, and below 1.0 it binds directly. (@shardul0701 on #390 — two
     comments claimed it bound on size at the default and were wrong.)
 
     ``None`` disables it. ``0.0`` does NOT — it is a ceiling of zero and takes
@@ -455,9 +457,9 @@ def _fixed_contracts(config: dict) -> float:
     """
     A constant contract count on every trade, forever -- never equity-scaled.
 
-    Already a unit count rather than a dollar-notional target, so callers must
-    NOT put it through the point_value / margin conversion that turns the other
-    methods' dollar answers into contracts.
+    Already an instrument-unit count, so callers must NOT apply the notional /
+    margin conversion used for the equity-equivalent share counts returned by
+    the other methods.
     """
     return float(config.get("fixed_contracts_per_trade", 1))
 

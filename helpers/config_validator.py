@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 KNOWN_KEYS: set[str] = {
     # SECTION 1: Data Provider
     "data_provider",
+    "polygon_max_retries",
     "polygon_api_secret_name",  # PR #187: added — was triggering "unknown key" warning
     "csv_data_dir",
     # --- Rule-based point-in-time universe (zachisit/july-backtester-private-strategies#70) ---
@@ -103,9 +104,11 @@ KNOWN_KEYS: set[str] = {
     "rolling_sharpe_window",
     # SECTION 17: Short Selling
     "htb_rate_annual",
+    "short_margin_requirement",
     # SECTION 18: MC Sampling
     "mc_sampling",
     "mc_block_size",
+    "random_seed",
     # SECTION 18b: Smoothness verdict profile
     "smoothness_profile",
     # SECTION 19: Volume Impact
@@ -143,6 +146,9 @@ KNOWN_KEYS: set[str] = {
     "instruments",
     # Sub-bar (intraday) resolution
     "intrabar_resolution",
+    "stop_gap_fill",
+    "stop_gap_fill_armed_trail",
+    "entry_bar_stop_check",
     "intrabar_timeframe",
     "intrabar_multiplier",
     "intrabar_parquet_source",
@@ -151,9 +157,12 @@ KNOWN_KEYS: set[str] = {
     # SECTION 30: Cross-sectional rotation (issue #294)
     "rotation",
     "max_position_pct",
+    # SECTION 31: Simulation workers (#414)
+    "max_workers",
     # SECTION 27: Deterministic Entry Queue
     "entry_priority",
     "entry_random_seed",
+    "entry_trigger",
     "nq100_pit_path",
     # Merged Norgate+Polygon provider (merged_data_root registered in SECTION 1)
     "merged_quality_filter_enabled",
@@ -305,6 +314,28 @@ def validate_config(config: dict) -> list[str]:
                f"({_heat}) <= risk_pct_per_trade ({_rp}) x (1 + slippage_pct) "
                f"-- risk_pct_capped will size every equity position to just "
                f"over the heat cap and take ZERO trades, silently")
+        warnings.append(msg)
+        logger.warning(msg)
+
+    # Value-level check for entry_trigger. The engine runs "level" ONLY for an
+    # exact "level" and "edge" for everything else (#401), so a typo can no
+    # longer silently select the old behaviour -- but someone who meant "level"
+    # and typed "levle" still gets edge without being told. Same precedent as
+    # universe_rebase and smoothness_profile above.
+    mw = config.get("max_workers")
+    if mw is not None and (isinstance(mw, bool) or not isinstance(mw, int) or mw < 1):
+        msg = (f"WARNING: max_workers {mw!r} is not a positive integer or None "
+               f"-- the run will ignore it and use min(cpu_count(), tasks)")
+        warnings.append(msg)
+        logger.warning(msg)
+
+    # None means "unset" here as for every other key, and the engine runs an
+    # unset/None entry_trigger as the shipped default "edge" -- no warning due.
+    et = config.get("entry_trigger")
+    if et is not None and str(et).strip().lower() not in {"level", "edge"}:
+        msg = (f"WARNING: entry_trigger '{et}' is not a known mode "
+               f"(expected 'level' or 'edge') -- the run will fall back to "
+               f"'edge', i.e. entry only on the TRANSITION into the signal value")
         warnings.append(msg)
         logger.warning(msg)
 
