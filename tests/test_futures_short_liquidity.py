@@ -116,3 +116,20 @@ def test_following_entry_sees_impacted_risk(settings, monkeypatch):
     assert trade["Symbol"] == "MESM6"
     assert trade["EntryPrice"] == 90.
     assert trade["Shares"] * 5. * trade["InitialRisk"] == 300.
+
+
+@pytest.mark.parametrize("commission,expected", [(0., 2010.), (2.5, 1913.)])
+def test_affordability_uses_slipped_fill_even_without_volume_impact(
+    settings, monkeypatch, commission, expected,
+):
+    monkeypatch.setitem(ps.CONFIG, "position_sizing_method", "fixed_contracts")
+    monkeypatch.setitem(ps.CONFIG, "fixed_contracts_per_trade", 3000)
+    monkeypatch.setitem(ps.CONFIG, "instruments", {
+        **ps.CONFIG["instruments"], "futures_slippage_ticks": 2.,
+        "futures_commission_per_contract": commission,
+    })
+    trade, = _run(-2)["trade_log"]
+    assert trade["EntryPrice"] == 99.5
+    assert trade["Shares"] == expected
+    per_contract = 99.5 * 5. * .1 + commission
+    assert expected * per_contract <= 100_000. < (expected + 1) * per_contract
