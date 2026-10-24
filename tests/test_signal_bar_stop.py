@@ -757,9 +757,8 @@ class TestShortSideHonoursTheSizingMethod:
         # real 5% stop: LONG rejected, SHORT admitted 80 shares
         ("LNG", "risk_parity", 0.003),
         ("LNG", "risk_pct_capped", 0.003),
-        # Futures: the short uses the REAL stop risk (#331), the long the
-        # target_risk proxy -- LONG 200 admitted, SHORT rejected. The long is
-        # the wrong side; fixing it moves long numbers, so it is #467.
+        # Futures: both legs now use real stop risk (#331/#467), so neither
+        # may admit a 5%-risk position under a 0.5% heat cap.
         ("MESM6", "fixed", 0.005),
         ("MESM6", "kelly", 0.005),
     ])

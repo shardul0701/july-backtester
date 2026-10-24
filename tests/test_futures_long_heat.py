@@ -70,3 +70,22 @@ def test_exact_heat_budget_is_allowed_without_fraction_round_trip(settings, monk
     trade, = result["trade_log"]
     assert trade["Shares"] == 4.
     assert trade["InitialRisk"] == 25.
+
+
+def test_later_entry_sees_the_first_positions_filled_risk(settings, monkeypatch):
+    monkeypatch.setitem(ps.CONFIG, "position_sizing_method", "fixed_contracts")
+    monkeypatch.setitem(ps.CONFIG, "fixed_contracts_per_trade", 4)
+    monkeypatch.setitem(ps.CONFIG, "volume_impact_coeff", .5)
+    data = {symbol: frame(volume=100.) for symbol in ("MESM6", "MESZ6")}
+    signals = {}
+    for symbol, entry in (("MESM6", 1), ("MESZ6", 2)):
+        sig = pd.Series(0, index=data[symbol].index)
+        sig.iloc[entry], sig.iloc[5] = 1, -1
+        signals[symbol] = sig
+    result = ps.run_portfolio_simulation(
+        data, signals, 100_000., .1, None, None, None,
+        {"type": "points", "value": 5.})
+    trade, = result["trade_log"]
+    assert trade["Symbol"] == "MESM6"
+    assert trade["EntryPrice"] == pytest.approx(110.)
+    assert trade["Shares"] * 5. * trade["InitialRisk"] == pytest.approx(300.)
