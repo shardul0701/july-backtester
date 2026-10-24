@@ -757,13 +757,10 @@ class TestShortSideHonoursTheSizingMethod:
         # real 5% stop: LONG rejected, SHORT admitted 80 shares
         ("LNG", "risk_parity", 0.003),
         ("LNG", "risk_pct_capped", 0.003),
-        # Futures: the short uses the REAL stop risk (#331), the long the
-        # target_risk proxy -- LONG 200 admitted, SHORT rejected. The long is
-        # the wrong side; fixing it moves long numbers, so it is #467.
-        pytest.param("MESM6", "fixed", 0.005, marks=pytest.mark.xfail(
-            strict=True, reason="#467: futures long heat uses the proxy")),
-        pytest.param("MESM6", "kelly", 0.005, marks=pytest.mark.xfail(
-            strict=True, reason="#467: futures long heat uses the proxy")),
+        # Futures: both legs now use real stop risk (#331/#467), so neither
+        # may admit a 5%-risk position under a 0.5% heat cap.
+        ("MESM6", "fixed", 0.005),
+        ("MESM6", "kelly", 0.005),
     ])
     def test_heat_gate_admits_the_same_position_either_way(self, sym, method, heat):
         pct5 = {"type": "percentage", "value": 0.05}
@@ -809,20 +806,19 @@ class TestShortSideHonoursTheSizingMethod:
         assert (L, S) == (1904.0, 1904.0)
 
     def test_futures_short_registers_real_stop_risk(self):
-        """A 5%-stop MES short at 200 contracts risks 5% of equity and must
-        REGISTER 5% for later entries. The follower is a futures long whose own
-        heat risk is the 2% proxy (#467), so the outcome turns only on what the
-        short registered: real 5% + 2% > 6% cap -> rejected; the target_risk
-        proxy 2% + 2% -> admitted. (QA round 3: the first version used a second
-        5%-stop short, which its own risk rejected either way, so registering
-        the proxy passed it.)"""
+        """Real short risk 5% plus real long risk 2% exceeds a 6% cap.
+
+        Prices differ under a shared five-point stop, so replacing the short's
+        registered risk with its 2% proxy would admit the follower (2% + 2%).
+        """
         from unittest.mock import patch
         import helpers.portfolio_simulations as ps
         idx = pd.bdate_range("2024-01-02", periods=6)
         data, sigs = {}, {}
         for sym in ("MESM6", "MESZ6"):
-            df = pd.DataFrame({"Open": 100.0, "High": 101.0, "Low": 99.0,
-                               "Close": 100.0, "Volume": 1_000_000}, index=idx)
+            price = 100.0 if sym == "MESM6" else 250.0
+            df = pd.DataFrame({"Open": price, "High": price + 1, "Low": price - 1,
+                               "Close": price, "Volume": 1_000_000}, index=idx)
             df["ATR_14"], df["ATR_14_pct"], df["RSI_14"] = 1.0, 0.01, 50.0
             df["SMA_200"] = df["Close"]
             sig = pd.Series(0, index=idx)
@@ -842,7 +838,7 @@ class TestShortSideHonoursTheSizingMethod:
         with patch.dict(ps.CONFIG, cfg):
             res = ps.run_portfolio_simulation(
                 data, sigs, 100_000.0, 0.10, None, None, None,
-                {"type": "percentage", "value": 0.05})
+                {"type": "points", "value": 5.0})
         opened = [(t["Symbol"], t["Shares"]) for t in res["trade_log"]]
         assert opened == [("MESM6", 200.0)], opened
 

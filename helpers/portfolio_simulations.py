@@ -628,6 +628,132 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
         prior = df.loc[:at_date, 'Close'].dropna()
         return prior.iloc[-1] if len(prior) else None
 
+    def _initial_long_stop(symbol, df, signal_date, raw_entry_price, entry_price):
+        """Resolve long stop/trail state for both heat admission and the final fill."""
+        inst = instruments[symbol]
+        stop_loss_level = np.nan
+        _trail_target = None   # arm price for trailing_atr (None otherwise)
+        _atr_locked = None     # ATR frozen at the breakout bar for trailing_atr
+        _trail_anchor = None   # stop/target/floor anchor price for trailing_atr
+        _stype = stop_config.get("type")
+        if _stype in ('percentage', 'points'):
+            # Margined instruments (futures): anchor to the RAW pre-slippage
+            # price, not the slipped fill. Slippage is a separate, symmetric
+            # friction applied to the realized entry/exit fills; for futures it
+            # must not also shift where the stop/target levels sit, or every
+            # stop distance is silently shrunk (long side) by the entry-slippage
+            # amount.
+            #
+            # Cash-full instruments (equities): keep the PRE-EXISTING behaviour
+            # of anchoring to the slipped `entry_price`. The equity backtest path
+            # is protected byte-for-byte by the golden-master suite
+            # (tests/fixtures/engine_golden_master.json); changing this anchor
+            # for equities would silently alter historical equity results, which
+            # is out of scope for this futures-only fix.
+            _stop_anchor = (
+                raw_entry_price if inst.margin_mode == _inst.INITIAL_MARGIN
+                else entry_price)
+            stop_loss_level = _inst.stop_level(
+                instruments[symbol], _stop_anchor, stop_config, side="long")
+
+        elif _stype == 'atr':
+            # Anchor to the SIGNAL bar. `signal_date` is already
+            # execution-aware (:1147): the bar before the fill under
+            # execution_time="open", the fill bar itself under "close".
+            #
+            # This previously read prev_trading_dates[entry_exec_date],
+            # which is only the signal bar under "open" -- under
+            # "close" entry_exec_date == signal_date, so it read one
+            # bar too EARLY. Same defect class as #310, but this one
+            # moves P&L rather than exported features: it sets the
+            # exit level and InitialRisk, hence every R-multiple,
+            # expectancy and SQN downstream. Measured 10x difference
+            # in stop distance (97.00 vs 70.00) on identical inputs,
+            # from the execution mode alone.
+            day_before_entry = signal_date
+
+            if pd.notna(day_before_entry) and day_before_entry in df.index:
+                day_before_data = df.loc[day_before_entry]
+                atr_before_entry = day_before_data.get('ATR_14')
+                close_before_entry = day_before_data.get('Close')
+
+                if pd.notna(atr_before_entry) and pd.notna(close_before_entry):
+                    # The initial stop is based on the previous day's data,
+                    # matching the "Next Day Activation" spec. point_cap (if set)
+                    # clips the ATR distance to a fixed point ceiling per trade.
+                    stop_loss_level = _inst.atr_stop_level(
+                        close_before_entry, atr_before_entry,
+                        stop_config.get("multiplier", 3.0), side="long",
+                        point_cap=stop_config.get("point_cap"))
+
+        elif _stype == 'signal_bar':
+            # Structural stop anchored to the SIGNAL bar's low, not to the entry
+            # price. `signal_date` is the bar that produced the signal — the bar
+            # before the fill under execution_time="open", the fill bar itself
+            # under "close". Either way the level is known at entry, so there is
+            # no look-ahead; unlike the 'atr' branch this reads the signal bar
+            # directly instead of assuming the open-fill offset.
+            #
+            # bars_back>0 walks the anchor further back: "stop beyond the bar
+            # BEFORE the trigger" is how a lot of setups are actually specified
+            # (the trigger bar is the reversal; the level to defend is the last
+            # bar of the move that preceded it).
+            _sb_date = _walk_back(prev_trading_dates[symbol], signal_date,
+                                  stop_config.get("bars_back", 0))
+            if pd.notna(_sb_date) and _sb_date in df.index:
+                _sb = df.loc[_sb_date]
+                _lvl = _inst.signal_bar_stop_level(
+                    _sb.get('High'), _sb.get('Low'),
+                    stop_config.get("buffer", 0.0), side="long")
+                # Protective-side guard: only arm the stop if it sits BELOW the
+                # actual long fill. Under execution_time="open" the fill is the
+                # next bar's open, which can gap DOWN through the signal-bar low;
+                # a structural level above entry is not a stop at all — left
+                # unguarded it fires next bar and fills at the phantom level
+                # (in the trade's FAVOR), booking a spurious "Stop Loss" profit
+                # and a 1%-proxy InitialRisk. Fall through to no stop instead.
+                if _lvl is not None and _lvl < entry_price:
+                    stop_loss_level = _lvl
+
+        elif _stype == 'trailing_atr':
+            # Sleeve A mechanic. Lock ATR at the breakout (signal) bar and keep it
+            # fixed for the whole trade — stop, target, and trail all use this one
+            # value (never recomputed live). Initial stop is a point-capped ATR stop;
+            # the arm target is a reward:risk ratio off that CAPPED stop so the cap
+            # propagates into the target:
+            #   eff_stop_dist = min(stop_mult*atr, point_cap)
+            #   target_dist   = eff_stop_dist * (t1_mult / stop_mult)
+            # Signal bar ("the breakout bar"), not prev(fill bar).
+            # A FIFTH instance of the #310 defect class -- this one
+            # was documented in CLAUDE.md as "assumes
+            # execution_time='open'", which is exactly what made it
+            # invisible: a known limitation nobody had ticketed.
+            # Under "close" it locked the ATR of the bar BEFORE the
+            # breakout, and that value is fixed for the whole trade
+            # (stop, target and trail all derive from it).
+            _dbe = signal_date
+            _atr_b = df.loc[_dbe].get('ATR_14') if (pd.notna(_dbe) and _dbe in df.index) else np.nan
+            if pd.notna(_atr_b):
+                _atr_locked = float(_atr_b)
+                _stop_mult = stop_config.get("stop_mult", 1.0)
+                _eff_stop_dist = _atr_locked * _stop_mult
+                _pc = stop_config.get("point_cap")
+                if _pc is not None and _pc > 0:
+                    _eff_stop_dist = min(_eff_stop_dist, _pc)
+                # Anchor to the RAW pre-slippage price for margined
+                # instruments (futures) and to the slipped fill for
+                # cash-full instruments (equities) — mirrors the
+                # percentage/points _stop_anchor gating pattern (#238).
+                _trail_anchor = (
+                    raw_entry_price if inst.margin_mode == _inst.INITIAL_MARGIN
+                    else entry_price)
+                stop_loss_level = _trail_anchor - _eff_stop_dist
+                _t1_mult = stop_config.get("t1_mult", 0.0)
+                if _stop_mult > 0 and _t1_mult > 0:
+                    _trail_target = _trail_anchor + _eff_stop_dist * (_t1_mult / _stop_mult)
+
+        return stop_loss_level, _trail_target, _atr_locked, _trail_anchor
+
     # --- SURVIVORSHIP BIAS: DELISTING LIQUIDATION (issue #431) ---
     # Held positions in a delisted symbol are liquidated INSIDE the daily loop, on
     # the first loop date on/after the delisting date, so cash is credited and the
@@ -1322,11 +1448,10 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                 # proxy (adversarial QA on #392: risk_parity 5% stop, 0.3% heat
                 # cap -> LONG rejected, SHORT admitted 80 shares).
                 #
-                # NOT used by the futures short, which keeps the real stop risk
-                # #331 chose on purpose. The futures LONG uses the proxy, so the
-                # two futures legs still differ under a binding heat cap -- the
-                # long is the wrong side, and fixing it moves long numbers:
-                # tracked separately (see the futures heat gate below).
+                # Futures shorts use their real stop risk (#331), and #467
+                # now applies real protective-stop risk to futures longs too.
+                # This equity-specific fraction does not control either
+                # futures gate.
                 _s_heat_frac = (
                     _s_ir / ep
                     if (_s_eq_sizing_method in ("risk_parity", "risk_pct_capped")
@@ -2076,6 +2201,13 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                 # sized against anyway). notional() applies $/point for futures.
                 _stop_dist = sizing_kwargs.get("stop_distance_pct") or CONFIG.get("target_risk_per_trade", 0.02)
                 new_position_risk = _inst.notional(inst, shares, entry_price) * _stop_dist
+                if inst.margin_mode == _inst.INITIAL_MARGIN:
+                    _heat_stop = _initial_long_stop(
+                        symbol, df, signal_date, raw_entry_price, entry_price)[0]
+                    if pd.notna(_heat_stop) and _heat_stop < entry_price:
+                        # Same stop resolver as the final position, not a third
+                        # prediction ladder. Include the actual entry fill.
+                        new_position_risk = shares * inst.point_value * (entry_price - _heat_stop)
                 max_heat = CONFIG.get("max_portfolio_heat", 1.0)
                 # Gate against BOTH open longs and open shorts. Before #312 an
                 # equity short carried no 'risk' key, so passing `positions`
@@ -2234,132 +2366,23 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                     # the trading session in which the stop is active.
                     # ---
                     # --- SET INITIAL STOP LOSS ONCE ENTRY PRICE IS KNOWN ---
-                    stop_loss_level = np.nan
-                    _trail_target = None   # arm price for trailing_atr (None otherwise)
-                    _atr_locked = None     # ATR frozen at the breakout bar for trailing_atr
-                    _trail_anchor = None   # stop/target/floor anchor price for trailing_atr
-                    _stype = stop_config.get("type")
-                    if _stype in ('percentage', 'points'):
-                        # Margined instruments (futures): anchor to the RAW pre-slippage
-                        # price, not the slipped fill. Slippage is a separate, symmetric
-                        # friction applied to the realized entry/exit fills; for futures it
-                        # must not also shift where the stop/target levels sit, or every
-                        # stop distance is silently shrunk (long side) by the entry-slippage
-                        # amount.
-                        #
-                        # Cash-full instruments (equities): keep the PRE-EXISTING behaviour
-                        # of anchoring to the slipped `entry_price`. The equity backtest path
-                        # is protected byte-for-byte by the golden-master suite
-                        # (tests/fixtures/engine_golden_master.json); changing this anchor
-                        # for equities would silently alter historical equity results, which
-                        # is out of scope for this futures-only fix.
-                        _stop_anchor = (
-                            raw_entry_price if inst.margin_mode == _inst.INITIAL_MARGIN
-                            else entry_price)
-                        stop_loss_level = _inst.stop_level(
-                            instruments[symbol], _stop_anchor, stop_config, side="long")
-
-                    elif _stype == 'atr':
-                        # Anchor to the SIGNAL bar. `signal_date` is already
-                        # execution-aware (:1147): the bar before the fill under
-                        # execution_time="open", the fill bar itself under "close".
-                        #
-                        # This previously read prev_trading_dates[entry_exec_date],
-                        # which is only the signal bar under "open" -- under
-                        # "close" entry_exec_date == signal_date, so it read one
-                        # bar too EARLY. Same defect class as #310, but this one
-                        # moves P&L rather than exported features: it sets the
-                        # exit level and InitialRisk, hence every R-multiple,
-                        # expectancy and SQN downstream. Measured 10x difference
-                        # in stop distance (97.00 vs 70.00) on identical inputs,
-                        # from the execution mode alone.
-                        day_before_entry = signal_date
-
-                        if pd.notna(day_before_entry) and day_before_entry in df.index:
-                            day_before_data = df.loc[day_before_entry]
-                            atr_before_entry = day_before_data.get('ATR_14')
-                            close_before_entry = day_before_data.get('Close')
-
-                            if pd.notna(atr_before_entry) and pd.notna(close_before_entry):
-                                # The initial stop is based on the previous day's data,
-                                # matching the "Next Day Activation" spec. point_cap (if set)
-                                # clips the ATR distance to a fixed point ceiling per trade.
-                                stop_loss_level = _inst.atr_stop_level(
-                                    close_before_entry, atr_before_entry,
-                                    stop_config.get("multiplier", 3.0), side="long",
-                                    point_cap=stop_config.get("point_cap"))
-
-                    elif _stype == 'signal_bar':
-                        # Structural stop anchored to the SIGNAL bar's low, not to the entry
-                        # price. `signal_date` is the bar that produced the signal — the bar
-                        # before the fill under execution_time="open", the fill bar itself
-                        # under "close". Either way the level is known at entry, so there is
-                        # no look-ahead; unlike the 'atr' branch this reads the signal bar
-                        # directly instead of assuming the open-fill offset.
-                        #
-                        # bars_back>0 walks the anchor further back: "stop beyond the bar
-                        # BEFORE the trigger" is how a lot of setups are actually specified
-                        # (the trigger bar is the reversal; the level to defend is the last
-                        # bar of the move that preceded it).
-                        _sb_date = _walk_back(prev_trading_dates[symbol], signal_date,
-                                              stop_config.get("bars_back", 0))
-                        if pd.notna(_sb_date) and _sb_date in df.index:
-                            _sb = df.loc[_sb_date]
-                            _lvl = _inst.signal_bar_stop_level(
-                                _sb.get('High'), _sb.get('Low'),
-                                stop_config.get("buffer", 0.0), side="long")
-                            # Protective-side guard: only arm the stop if it sits BELOW the
-                            # actual long fill. Under execution_time="open" the fill is the
-                            # next bar's open, which can gap DOWN through the signal-bar low;
-                            # a structural level above entry is not a stop at all — left
-                            # unguarded it fires next bar and fills at the phantom level
-                            # (in the trade's FAVOR), booking a spurious "Stop Loss" profit
-                            # and a 1%-proxy InitialRisk. Fall through to no stop instead.
-                            if _lvl is not None and _lvl < entry_price:
-                                stop_loss_level = _lvl
-
-                    elif _stype == 'trailing_atr':
-                        # Sleeve A mechanic. Lock ATR at the breakout (signal) bar and keep it
-                        # fixed for the whole trade — stop, target, and trail all use this one
-                        # value (never recomputed live). Initial stop is a point-capped ATR stop;
-                        # the arm target is a reward:risk ratio off that CAPPED stop so the cap
-                        # propagates into the target:
-                        #   eff_stop_dist = min(stop_mult*atr, point_cap)
-                        #   target_dist   = eff_stop_dist * (t1_mult / stop_mult)
-                        # Signal bar ("the breakout bar"), not prev(fill bar).
-                        # A FIFTH instance of the #310 defect class -- this one
-                        # was documented in CLAUDE.md as "assumes
-                        # execution_time='open'", which is exactly what made it
-                        # invisible: a known limitation nobody had ticketed.
-                        # Under "close" it locked the ATR of the bar BEFORE the
-                        # breakout, and that value is fixed for the whole trade
-                        # (stop, target and trail all derive from it).
-                        _dbe = signal_date
-                        _atr_b = df.loc[_dbe].get('ATR_14') if (pd.notna(_dbe) and _dbe in df.index) else np.nan
-                        if pd.notna(_atr_b):
-                            _atr_locked = float(_atr_b)
-                            _stop_mult = stop_config.get("stop_mult", 1.0)
-                            _eff_stop_dist = _atr_locked * _stop_mult
-                            _pc = stop_config.get("point_cap")
-                            if _pc is not None and _pc > 0:
-                                _eff_stop_dist = min(_eff_stop_dist, _pc)
-                            # Anchor to the RAW pre-slippage price for margined
-                            # instruments (futures) and to the slipped fill for
-                            # cash-full instruments (equities) — mirrors the
-                            # percentage/points _stop_anchor gating pattern (#238).
-                            _trail_anchor = (
-                                raw_entry_price if inst.margin_mode == _inst.INITIAL_MARGIN
-                                else entry_price)
-                            stop_loss_level = _trail_anchor - _eff_stop_dist
-                            _t1_mult = stop_config.get("t1_mult", 0.0)
-                            if _stop_mult > 0 and _t1_mult > 0:
-                                _trail_target = _trail_anchor + _eff_stop_dist * (_t1_mult / _stop_mult)
+                    stop_loss_level, _trail_target, _atr_locked, _trail_anchor = (
+                        _initial_long_stop(symbol, df, signal_date,
+                                           raw_entry_price, entry_price))
 
                     # Recompute risk from the FINAL post-clamp share count (#317):
                     # new_position_risk was computed pre-ADV-cap / pre-round_units /
                     # pre-affordability-clamp, so storing it overstated open risk and
                     # made check_portfolio_heat over-reject later entries.
                     _final_risk = _inst.notional(inst, shares, entry_price) * _stop_dist
+                    if (inst.margin_mode == _inst.INITIAL_MARGIN
+                            and pd.notna(stop_loss_level) and stop_loss_level < entry_price):
+                        _final_risk = shares * inst.point_value * (entry_price - stop_loss_level)
+                        # Impact changes the fill after the first heat check.
+                        # Recheck and register the final, post-clamp exposure.
+                        if not check_portfolio_heat({**positions, **short_positions},
+                                                    _final_risk, total_equity, max_heat):
+                            continue
                     positions[symbol] = {
                         'shares': shares, 'entry_price': entry_price,
                         'raw_entry_price': raw_entry_price,
