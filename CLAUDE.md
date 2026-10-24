@@ -944,3 +944,7 @@ In `helpers/summary.py::generate_per_portfolio_summary()`, Step 4b's `save_only_
 - Percentage stop labels retain fractional precision; ATR/trailing labels include point caps and trailing floors so sensitivity groups distinguish those configurations.
 - Cross-feature regressions: `tests/test_audit_460.py`.
 - `init_worker` accepts an optional runtime-config snapshot after intrabar data. The parent sends `dict(CONFIG)` once per worker; the initializer updates the shared dict in place so spawned workers and helper modules honor CLI overrides (including `--seed`, MC thresholds, execution settings and dates). Legacy calls without the snapshot still work; task tuples and the pool/global-DataFrame architecture are unchanged.
+
+### Kelly execution timing (#466)
+
+Opening Kelly entries use a completed-trade prefix captured before the fill bar's delistings, exits, and fill-bar stops. Same-open exits are conservatively excluded. Closing entries retain all outcomes already booked in the bar. Applies to equity/futures and both directions. Tests: `tests/test_kelly_execution_timing.py`.

@@ -203,7 +203,7 @@ def _walk_back(prev_dates, date, n):
     return date
 
 
-def _kelly_stats(trade_log):
+def _kelly_stats(trade_log, completed_count=None):
     """Rolling ``win_rate`` / ``avg_win`` / ``avg_loss`` for kelly sizing.
 
     Empty until 10 trades have completed and both a win and a loss exist, in
@@ -212,9 +212,12 @@ def _kelly_stats(trade_log):
     keys, so past ten trades a long sized off the strategy's record while a
     short on the same bar stayed pinned at the fallback (#386, @shardul0701).
 
-    Known gap, tracked as #466: under execution_time="open" the log already
-    holds trades that stopped out later in the bar being filled at its open.
+    Under open execution, completed_count freezes the available history before
+    this bar's exits (#466). This conservatively excludes even exits at the same
+    open; close orders may use all outcomes already booked during the bar.
     """
+    if completed_count is not None:
+        trade_log = trade_log[:completed_count]
     if len(trade_log) < 10:
         return {}
     wins = [t for t in trade_log if t.get("is_win") == 1 and t.get("ProfitPct") is not None]
@@ -873,6 +876,9 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                 del book[symbol]
 
     for date in portfolio_timeline.index:
+        # Freeze before delisting, ordinary exits, and fill-bar stops can append
+        # outcomes unavailable to an order at this bar's open.
+        kelly_completed_count = len(trade_log) if execution_time == "open" else None
         if _delist_on:
             _liquidate_delisted(date)
         # --- EQUITY CALCULATION ---
@@ -1438,7 +1444,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                 # so it degraded to fixed allocation on every short past ten
                 # trades -- dispatching a method is not the same as feeding it.
                 if _s_eq_sizing_method == "kelly":
-                    _s_sizing_kwargs_base.update(_kelly_stats(trade_log))
+                    _s_sizing_kwargs_base.update(_kelly_stats(trade_log, kelly_completed_count))
                 # EQUITY short portfolio-heat risk fraction, by the LONG path's
                 # rule so the gate admits the same position in either
                 # direction: the real stop fraction for the two methods whose
@@ -1990,7 +1996,7 @@ def run_portfolio_simulation(portfolio_data, signals, initial_capital, allocatio
                 # For kelly: compute rolling stats from completed trades so sizing
                 # actually adapts to the strategy's live performance.
                 if sizing_method == "kelly":
-                    sizing_kwargs.update(_kelly_stats(trade_log))
+                    sizing_kwargs.update(_kelly_stats(trade_log, kelly_completed_count))
 
                 # Slice to current date to prevent look-ahead bias: vol_parity and
                 # risk_parity use .iloc[-1] on the passed DataFrame, so passing the
