@@ -2,6 +2,53 @@
 
 ## [Unreleased]
 
+- Position sizing reports per-run stop-input, proxy, cap, cash/margin, ADV, and heat conditions for every entry leg, including zero-trade runs. Tiny equity shorts now honor the same minimum size as longs (#387/#394).
+
+- Futures short entries honor the ADV cap and adverse entry impact, report both impact legs, and recheck actual stop risk after impact; margin affordability uses the slipped/impacted fill (#468).
+
+- Opening Kelly orders use only trades completed before the fill bar; closing orders retain same-bar completed outcomes (#466).
+
+- Futures long heat uses its actual known stop risk, including a final market-impact check, rather than a sizing proxy (#467).
+
+## [1.16.0] — Backtest-integrity epic (#424)
+
+> **Results change.** Most fixes in this release remove optimistic biases, so headline numbers for
+> existing configs will move (usually down). Each behaviour change has a config switch that restores
+> the old behaviour, listed in brackets.
+
+### Fixed — engine (fill realism)
+- **Gap-through stops fill at the open**, not at the unreachable stop level (#425) [`stop_gap_fill: "level"`].
+- **Stops are checked on the fill bar** under `execution_time="open"` (#426) [`entry_bar_stop_check: False`].
+- **Equity curve recorded at end of bar**, so exits at the open show on the bar they happen (#438).
+- **ADV cap / market impact use prior-bar volume** under open execution, with no same-bar look-ahead (#436).
+- **Equity shorts reserve collateral** (Reg-T 50% by default), so gross short leverage is bounded (#430) [`short_margin_requirement: 0.0`].
+- **Delisted positions are liquidated inside the daily loop**, so later sizing no longer uses phantom equity (#431; subsumes #149).
+
+### Fixed — validation layer
+- **WFA measures IS/OOS on window equity** and annualises over the window length; compounding no longer inflates OOS (#427).
+- **Rolling WFA fold 0 / empty IS no longer auto-passes**; opt-in anchored fold layout (#428).
+- **MC Score v2**: a bootstrap mean-edge test replaces the near-tautological performance test, and DD realism compares closed-trade DD with closed-trade DD. The legacy score is kept as `mc_score_legacy` (#429).
+
+### Fixed — results & data
+- **Zero-trade and errored strategies are accounted for** ("Not shown: N with 0 trades, M errored"), not silently dropped (#432).
+- **Unique strategy names for every stop config**, plus `base_strategy` / `param_label` / `stop_label` metadata (#434).
+- **Sensitivity report: one verdict per portfolio × strategy × stop config** (#435).
+- **Short-lived names are kept in survivorship-aware universes**, and `pit_warmup_days` is now wired, so indicators warm up before `start_date` (#433) [`pit_warmup_days: 0`].
+- **Polygon retries 429/5xx**, never caches partial pagination, and writes `fetch_failures.csv` (#437) [`polygon_max_retries`].
+- **Optional `random_seed` / `--seed`** for reproducible MC, bootstrap and noise (#439).
+- **`verbose_output` config is honoured**; new `--no-verbose` flag (#440).
+- **Yahoo includes the `end_date` bar** (#441).
+
+### RC audit follow-ups (#460)
+- Keep seed-label component boundaries unambiguous, defer delisting prices from the current Close until after open entries, and preserve position-size metadata on delisting trades.
+- Integrate configurable short sizing with collateral/commission budgets, and apply floating-point affordability corrections against free buying power.
+- Fix UTC delisting liquidation, re-entry after delisting, future delistings leaking into earlier runs, and missing safety-net exit commissions.
+- Refine fill-bar stops with intraday data and include entry commissions in short collateral sizing.
+- Preserve warm-up signals, structural stop history and ADV through the first execution bar; warm strategy dependencies while keeping benchmark/WFA periods inside the selected window.
+- Include the final day's trades and intraday equity in WFA; exclude N/A folds and infer anchored IS history correctly.
+- Apply block sampling to the MC edge test when selected; distinguish fractional percentage stops, ATR caps and trailing floors in sensitivity labels.
+- Pass resolved runtime settings to spawned workers so CLI overrides, including `--seed`, apply consistently on macOS and Windows.
+
 ### Fixed
 - **`pit:` rosters: an unquoted `ON` parsed as a boolean (all data providers).** PyYAML reads an
   unquoted `- ON` as `True`, so in the NQ100 2023–2025 rosters ON Semiconductor became the ticker
